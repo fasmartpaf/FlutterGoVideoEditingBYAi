@@ -1,0 +1,43 @@
+[
+	{
+		"op": "annotation",
+		"startSec": 0.6,
+		"endSec": 3.0,
+		"text": "Coach Pulse",
+		"x": 50,
+		"y": 10,
+		"width": 70,
+		"height": 14,
+		"textAnimation": "pop",
+		"fontSize": 36,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	},
+	{
+		"op": "annotation",
+		"startSec": 5.3,
+		"endSec": 7.2,
+		"text": "Try Now",
+		"x": 50,
+		"y": 84,
+		"width": 42,
+		"height": 12,
+		"backgroundColor": "#34B27B",
+		"color": "#ffffff",
+		"fontSize": 28,
+		"fontWeight": "bold",
+		"textAnimation": "pop"
+	},
+	{
+		"op": "annotation",
+		"type": "blur",
+		"startSec": 1.5,
+		"endSec": 3.8,
+		"x": 84,
+		"y": 12,
+		"width": 14,
+		"height": 10,
+		"blurKind": "mosaic",
+		"blurShape": "rectangle"
+	}
+]

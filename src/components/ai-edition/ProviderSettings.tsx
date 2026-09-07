@@ -29,6 +29,7 @@ import {
 	PROVIDER_DEFINITIONS,
 	type ProviderDefinition,
 } from "../../../electron/ai-edition/provider-registry";
+import { LocalAgentPermissionPicker } from "./LocalCliPopover";
 import { ModalShell } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 
@@ -113,6 +114,7 @@ function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
 				baseUrl: existing?.baseUrl ?? def.baseUrl,
 				reasoningEffort: existing?.reasoningEffort,
 				allowAgentEdits: existing?.allowAgentEdits,
+				localAgentPermission: existing?.localAgentPermission,
 			};
 		});
 		setMode("form");
@@ -528,6 +530,24 @@ function ProviderForm({
 					{te("providerSettings.allowAgentEdits")}
 				</label>
 			</Field>
+
+			{def.authKind === "local-cli" ? (
+				<Field
+					label={te("chat.localCli.permissionLabel")}
+					hint={te("chat.localCli.permissionHint")}
+				>
+					<LocalAgentPermissionPicker
+						value={config?.localAgentPermission ?? "ask"}
+						disabled={busy}
+						onChange={(localAgentPermission) =>
+							setConfig({
+								...(config ?? { provider: def.id, model: def.defaultModel }),
+								localAgentPermission,
+							})
+						}
+					/>
+				</Field>
+			) : null}
 
 			{error ? (
 				<p className={styles.errorRow}>

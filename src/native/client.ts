@@ -198,11 +198,27 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "llm.getSnapshot",
 			}),
+		llmRescanLocalAgents: () =>
+			requireNativeBridgeData<AiEditionLlmSnapshot>({
+				domain: "aiEdition",
+				action: "llm.rescanLocalAgents",
+			}),
+		llmLoginLocalAgent: (agentId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.loginLocalAgent",
+				payload: { agentId },
+			}),
 		llmSetConfig: (config: AiEditionLlmConfig) =>
 			requireNativeBridgeData<AiEditionDocumentResult>({
 				domain: "aiEdition",
 				action: "llm.setConfig",
 				payload: { config },
+			}),
+		llmGrantWatchSession: () =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.grantWatchSession",
 			}),
 		llmSetApiKey: (providerId: string, apiKey: string) =>
 			requireNativeBridgeData<AiEditionDocumentResult>({

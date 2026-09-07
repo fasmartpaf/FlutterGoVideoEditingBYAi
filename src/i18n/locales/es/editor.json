@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "¿Eliminar \"{{title}}\"?",
 		"emptyState": "Aún no hay mensajes. Pide al agente que corte silencios, ajuste pausas o añada subtítulos.",
 		"welcome": {
-			"title": "Trae tu propia IA",
-			"subtitle": "El chat edita tu vídeo hablando con un modelo de lenguaje. Elige el proveedor que prefieras y conecta una clave de API para empezar.",
+			"title": "Habla con un agente local",
+			"subtitle": "El chat usa un agente ya instalado en este equipo — Claude Code, Codex, Cursor, Gemini u Ollama. Sin clave API en Ajustes.",
 			"feature1": "Corta silencios, aprieta pausas, elimina muletillas",
 			"feature2": "Añade subtítulos, hace zoom a la cámara, genera un título",
 			"feature3": "Reescribe una sección, reformula o divide un clip bajo pedido",
-			"cta": "Configurar un proveedor",
-			"disclaimer": "La transcripción de tu vídeo se enviará al proveedor que elijas. No se comparte nada hasta que conectes uno."
+			"cta": "Buscar agentes locales",
+			"disclaimer": "Tu mensaje y la instantánea del proyecto se quedan en ese CLI local. Nada se envía a un proveedor en la nube hasta que elijas uno."
 		},
 		"authorUser": "Tú",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "Cambia o crea sesiones",
 			"empty": "Aún no hay conversaciones.",
 			"msgsCount": "{{count}} mensajes · {{date}}"
+		},
+		"localCli": {
+			"title": "CLI local",
+			"subtitle": "Agentes instalados en este equipo",
+			"useLocalCli": "Usar CLI local",
+			"active": "activo",
+			"selected": "seleccionado",
+			"agentsHeading": "Agentes locales",
+			"rescanPath": "Volver a escanear PATH",
+			"scanning": "Escaneando…",
+			"noneFound": "No hay agentes locales en PATH. Instala Claude Code, Codex, Cursor Agent, Gemini CLI u Ollama y vuelve a escanear.",
+			"openSettings": "Abrir ajustes de ejecución",
+			"composerDisabled": "Elige un agente local para empezar a chatear.",
+			"needsLogin": "Inicio de sesión necesario",
+			"login": "Iniciar sesión",
+			"loginHint": "Termina el inicio de sesión en Terminal y vuelve a escanear PATH.",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

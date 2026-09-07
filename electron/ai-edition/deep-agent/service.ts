@@ -29,32 +29,42 @@ import {
 	addAnnotationArgs,
 	addAudioArgs,
 	addCameraFullscreenArgs,
+	addClipArgs,
 	addSpeedArgs,
 	addTrimArgs,
 	addTrimsArgs,
 	addZoomArgs,
 	addZoomsArgs,
 	type CursorTelemetryLoad,
+	documentSnapshotForModel,
 	executeAgentTool,
+	exportProjectArgs,
+	generateCaptionsArgs,
 	getCursorTrackArgs,
 	getTranscriptArgs,
 	getTranscriptWordsArgs,
 	isMutatingTool,
+	listSourcesArgs,
 	moveClipArgs,
+	recordScreenArgs,
 	removeClipArgs,
 	removeModifierArgs,
 	removeTrimArgs,
 	replaceTimelineArgs,
 	resolveCursorAssetId,
 	setAnnotationArgs,
+	setAspectRatioArgs,
 	setAudioArgs,
+	setBackgroundArgs,
 	setCameraFullscreenArgs,
+	setClipCropArgs,
 	setClipRangeArgs,
 	setSpeedArgs,
 	setTrimArgs,
 	setWordTextArgs,
 	setZoomArgs,
 } from "../agent-tools";
+import { mediaDirsFromDocument, shouldGrantLocalWatch } from "../local-agents";
 import {
 	createOpenScreenChatModel,
 	messageContentToText,
@@ -93,7 +103,7 @@ const CONSENT_PROMPT_BLOCK = [
 	"",
 	"PROJECT EDITS ARE CURRENTLY DISABLED by the user, who asked to be consulted before the timeline changes.",
 	"- Read freely: getCurrentDocument and getTranscript work as usual.",
-	"- Do NOT call any tool that writes (addTrim, setTrim, setClipRange, moveClip, replaceTimeline, add*/set* effects, remove*). Every one of them will be refused, so calling them wastes the turn and tells the user nothing.",
+	"- Do NOT call any tool that writes (addTrim, setTrim, setClipRange, addClip, setClipCrop, moveClip, replaceTimeline, add*/set* effects, remove*, recordScreen, generateCaptions, setAspectRatio, setBackground). Every one of them will be refused, so calling them wastes the turn and tells the user nothing.",
 	"- Instead: say precisely what you would change — which tool, which times, which ids — and ask the user to confirm. Be specific enough that they can say yes to it.",
 	"- Never state or imply that an edit was applied. If the user confirms and you are still refused, tell them the 'Project edits' setting in Settings → AI has to be re-enabled first.",
 ].join("\n");
@@ -102,8 +112,9 @@ const CONSENT_PROMPT_BLOCK = [
 // string and NOTHING else — the deepagents regression was invisible precisely
 // because the middlewares appended their prompts downstream of this constant.
 const BASE_SYSTEM_PROMPT = [
-	"You are an AI video editor working inside OpenScreen. The user is editing a recording.",
-	"Help them cut silences, tighten pacing, add captions, and rewrite titles.",
+	"You are OpenScreen's in-app agent. The user talks to you inside the app — not Cursor, not a terminal.",
+	"You are connected to the local OpenScreen CLI engine. You can list capture sources, record a window or screen, transcribe captions, edit the timeline, and export.",
+	"Help them record, cut silences, tighten pacing, add captions, reframe, and export.",
 	"Be concise, action-oriented, and reference the timeline or transcript by time when relevant.",
 	"You can call the tools below against the live document snapshot; the runtime executes each edit and feeds the result back into the loop.",
 	"The AxcutDocument is the single source of truth. The timeline, the transcript editor, and the chat panel are all direct editors of the same document — when the user places a clip on the timeline, the document updates immediately, and when the timeline is empty, the document has no clips. Your edits operate on the live document, so preserve the user's placed clips.",
@@ -117,24 +128,42 @@ const BASE_SYSTEM_PROMPT = [
 	// other than English. Say what the tool does; let the model do the matching.
 	"How the tools map to intent — pick the most specific one, and prefer the smallest edit that satisfies the request:",
 	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
-	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim.",
-	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
-	"- addAudio lays an imported voiceover or music file over a span. It plays an asset the project already has (kind 'audio'); importing or recording one is the editor's job, not a tool you have — so when the project has none, say so rather than naming an id that does not exist.",
+	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim. addClip places an unused recording already in this project onto the timeline (projectQueue.unusedAssets lists them; beforeClipId works like moveClip). setClipCrop sets a clip's cropRegion in 0–1 frame fractions; pass crop: null to clear it.",
+	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen and can set textAnimation (fade, rise, pop, slide-left, typewriter, pulse) — that is the official text enter animation, not a clip-to-clip video transition. This document has no clip-transition field; say so if asked. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
+	"- addAudio lays an imported voiceover or music file over a span. It plays an asset the project already has (kind 'audio'); importing or recording one is the editor's job, not a tool you have — so when the project has none, say so rather than naming an id that does not exist. gainDb and fadeInSec/fadeOutSec are the official level and fades. There is no multi-band EQ field; say so if asked.",
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
 	"- Deleting is a first-class action, not a workaround: removeTrim, removeModifier, removeClip. Never fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
+	"- listSources lists screens, windows and microphones the user can record. recordScreen starts a headless capture through the local CLI (pass window title or display index, and durationSec). generateCaptions runs on-device Whisper. exportProject renders MP4/GIF. setAspectRatio and setBackground change the output frame (e.g. 9:16) and wallpaper.",
+	"- addAnnotation type 'text' is titles, labels and CTAs (Try Now, Visit …, Subscribe) — visual graphics in the export, not clickable links. type 'figure' is an arrow callout. type 'blur' mosaics or blurs a region (sensitive UI). Style with color, backgroundColor, fontSize and textAnimation.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
+	"",
+	"One-pass finish (promo, tutorial, demo, social post): watch visibleMedia if granted; read projectQueue and getTranscript when speech exists; state a short plan; apply the smallest tools; re-read getCurrentDocument and report only what landed. Dead air → addTrims. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or zoom that keeps faces, logos and screen edges in frame. Captions → generateCaptions, then setWordText for fixes. Opening hook → zoom + text on the first seconds. Ending CTA → a text annotation on the last seconds. Unused take → addClip from projectQueue.unusedAssets. Music → addAudio only when an audio asset exists; duck with gainDb over speech spans. Do not invent clip-to-clip transitions, saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document.",
 	"",
 	"Cursor telemetry: while the screen was captured, OpenScreen recorded where the pointer went. assets[].hasCursorTelemetry in getCurrentDocument says which assets carry it, and getCursorTrack returns the recorded track for one of them — positions over time, and the pointer shape at each moment. What it means is yours to read.",
 	"Blindness is not evidence. When a tool reports it could not read something (reason 'unavailable'), that is a limit of your runtime, not a fact about the project. Only an explicit negative — reason 'no-sidecar', or a false flag — supports telling the user the data is not there.",
 	"",
-	"Honesty rules: if a request has NO matching tool (e.g. deleting an asset/recording, exporting), say so plainly — do not substitute a different edit and report it as the requested one. After your edits, if you are at all unsure the document ended up as intended, call getCurrentDocument and reconcile what you claim with the real state; each tool result already tells you exactly what it did, so never report a change the results don't support.",
+	"Honesty rules: if a request has NO matching tool (e.g. deleting an asset/recording), say so plainly — do not substitute a different edit and report it as the requested one. After your edits, if you are at all unsure the document ended up as intended, call getCurrentDocument and reconcile what you claim with the real state; each tool result already tells you exactly what it did, so never report a change the results don't support.",
+	"",
+	"The open project's snapshot is attached to this turn. That is the timeline the user is looking at. Do not ask whether they have already added footage. When they ask to improve, tighten, caption, reframe, or export, use the tools on THIS document.",
+	"visibleMedia lists every recording in the open project. Watch those before you describe what is on screen or suggest edits — ffmpeg stills, then Read the images. The snapshot is metadata, not the picture. Never say you cannot see the project when visibleMedia is non-empty. A transcript is optional — not required to understand the video or to plan edits.",
 ].join("\n");
 
-/** The system prompt for a turn, which depends on ONE thing: whether the user
- *  currently allows the agent to write. Exported so the consent wording can be
- *  tested without a provider. */
-export function buildSystemPrompt(options: { editsAllowed: boolean }): string {
-	return options.editsAllowed ? BASE_SYSTEM_PROMPT : BASE_SYSTEM_PROMPT + CONSENT_PROMPT_BLOCK;
+const OPEN_PROJECT_PROMPT_BLOCK = [
+	"",
+	"OPEN PROJECT (live editor document — work on this, do not ask if it exists):",
+].join("\n");
+
+/** The system prompt for a turn. The open-project snapshot is optional so
+ *  surface tests can still pin the static wording without a live document. */
+export function buildSystemPrompt(options: {
+	editsAllowed: boolean;
+	openProject?: Record<string, unknown>;
+}): string {
+	const base = options.editsAllowed
+		? BASE_SYSTEM_PROMPT
+		: BASE_SYSTEM_PROMPT + CONSENT_PROMPT_BLOCK;
+	if (!options.openProject) return base;
+	return `${base}${OPEN_PROJECT_PROMPT_BLOCK}\n${JSON.stringify(options.openProject)}`;
 }
 
 /** The prompt of a normal (edits-allowed) turn — the overwhelmingly common
@@ -143,7 +172,7 @@ export const SYSTEM_PROMPT = buildSystemPrompt({ editsAllowed: true });
 
 export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	getCurrentDocument:
-		"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
+		"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), projectQueue (open clips with full file vs placed vs edited duration, plus unusedAssets not on the timeline), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
 	getTranscript:
 		"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
 	getCursorTrack:
@@ -160,6 +189,10 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Move or resize an existing trim range by id. Times are source-time seconds. The cut follows to whichever clip the new range lands in, when that clip is unambiguous.",
 	setClipRange:
 		"Set a clip's in/out points (source-time seconds) to shorten its head or tail — distinct from a trim (which cuts a span inside the clip). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically. Use this ONLY when the user explicitly asks to shorten or extend a user-placed clip. Do NOT use this for 'remove silences' or 'cut pauses' — for those, use addTrim.",
+	addClip:
+		"Place an unused recording already in this project onto the timeline as a new clip. assetId must name a video asset from getCurrentDocument — projectQueue.unusedAssets lists the ones not yet placed. beforeClipId works like moveClip (omit or null to put it last). Optional sourceStartSec/sourceEndSec crop the file's in/out; omit them to place the full file. This cannot import a file from disk. Audio assets belong on addAudio, not here.",
+	setClipCrop:
+		"Set a clip's cropRegion in 0–1 fractions of the source frame (x, y, width, height). Pass crop: null to restore the full frame. This is a per-clip crop, not a zoom — use addZoom when the picture should magnify over a span.",
 	moveClip:
 		"Reorder a placed clip: move `clipId` so it plays just before `beforeClipId` (pass null, or omit it, to move it last). Ids come from getCurrentDocument, where each clip carries its `index` and its label in `reason`. This preserves every clip id, every source range, every trim, and the zooms / speed regions / annotations anchored to each clip. This is the tool for 'swap these clips', 'put X first' and 'change the clip order' — replaceTimeline cannot reorder anything.",
 	replaceTimeline:
@@ -172,23 +205,35 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setSpeed:
 		"Move, resize, or change the multiplier of an existing speed region by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addAnnotation:
-		"Add a text annotation over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Use for callouts and labels.",
+		"Add an on-screen graphic over a span of the edited timeline (virtual seconds). type is text (titles, labels, CTAs such as Try Now), figure (arrow callout) or blur (mosaic/blur a region). x/y/width/height are frame percentages (0–100). color, backgroundColor, fontSize, fontWeight and textAlign style a text/CTA. textAnimation is the official enter animation: none, fade, rise, pop, slide-left, typewriter, or pulse — not a clip-to-clip video transition. CTAs in the export are visual only; they are not clickable links.",
 	setAnnotation:
-		"Move, resize, or edit the text of an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed.",
+		"Move, resize, restyle, or edit an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed. Style and textAnimation apply to text/CTA; arrowDirection to a figure; blurKind/blurShape to a blur.",
 	addCameraFullscreen:
 		"Add a camera-fullscreen region over a span of the edited timeline (virtual seconds): the webcam fills the frame for that span. This only does something when the footage under that span comes from an asset with a linked webcam — check assets[].hasCameraTrack (or hasAnyCamera) in getCurrentDocument first. On footage with no camera the call is refused rather than storing a region that would render nothing; say so instead of retrying.",
 	setCameraFullscreen:
 		"Move or resize an existing camera-fullscreen region by id (virtual-timeline seconds). Only the fields you pass are changed. Refused if the new span lands on footage with no linked webcam.",
 	addAudio:
-		"Lay an ALREADY-IMPORTED audio file over the recording across a span of the edited timeline (virtual seconds): a voiceover, or a music bed. assetId must name an asset whose kind is 'audio' — getCurrentDocument lists them; nothing here can import a file from disk or record one, so if there is none, say so instead of guessing an id. Omit endSec to play the whole file from offsetSec. kind picks the lane ('voiceover' or 'music'). offsetSec is where in the FILE playback starts, gainDb its level (0 unchanged, negative ducks it). A voiceover-lane track is also what gets transcribed, so the lane is not only cosmetic.",
+		"Lay an ALREADY-IMPORTED audio file over the recording across a span of the edited timeline (virtual seconds): a voiceover, or a music bed. assetId must name an asset whose kind is 'audio' — getCurrentDocument lists them; nothing here can import a file from disk or record one, so if there is none, say so instead of guessing an id. Omit endSec to play the whole file from offsetSec. kind picks the lane ('voiceover' or 'music'). offsetSec is where in the FILE playback starts, gainDb its level (0 unchanged, negative ducks it), fadeInSec/fadeOutSec its official fades. There is no multi-band EQ. A voiceover-lane track is also what gets transcribed, so the lane is not only cosmetic.",
 	setAudio:
-		"Move, resize, re-level, re-lane, mute, loop or re-point an existing audio track by id (virtual-timeline seconds). Only the fields you pass are changed. Use it to duck a bed under narration (gainDb), to shift what part of the file plays (offsetSec), or to move it between the voiceover and music lanes (kind). The whole track is edited, not one fragment of it, so a track split across a cut stays one thing.",
+		"Move, resize, re-level, fade, re-lane, mute, loop or re-point an existing audio track by id (virtual-timeline seconds). Only the fields you pass are changed. Use it to duck a bed under narration (gainDb), to fade in/out (fadeInSec/fadeOutSec), to shift what part of the file plays (offsetSec), or to move it between the voiceover and music lanes (kind). This is level and fade, not parametric EQ. The whole track is edited, not one fragment of it, so a track split across a cut stays one thing.",
 	removeTrim:
 		"Delete a trim range by id — the cut is undone and that span plays/exports again. This is how you 'remove a trim'; never re-add a trim to undo one.",
 	removeModifier:
 		"Delete a modifier (zoom / speed / annotation / camera-fullscreen / audio) by id; the kind is resolved from the id. This is how you 'remove'/'delete' one — never neutralise it (span 0, speed 1×), which leaves it in the document. For a trim use removeTrim; for a clip use removeClip.",
 	removeClip:
 		"Delete a placed clip by id; remaining clips close the gap and effects anchored to it are dropped. Use only when the user asks to remove a clip — to shorten one, use setClipRange.",
+	setAspectRatio:
+		"Set the project's output aspect ratio to a W:H token such as 9:16, 16:9, or 1:1. Preview and export both use this.",
+	setBackground:
+		"Set the wallpaper behind the recording: a bundled wallpaper index 1–18, a /wallpapers/wallpaperN.jpg path, a CSS color, or a CSS gradient.",
+	listSources:
+		"List capturable displays, windows and microphones on this computer via the local OpenScreen CLI. Use this before recordScreen so the user can pick a source.",
+	recordScreen:
+		"Record a window or display through the local OpenScreen CLI and replace the live project with that take. Pass window (title substring) or display (index from listSources). durationSec defaults to 15. Optional mic and systemAudio. This is how you start recording when the user asks — do not tell them you cannot record.",
+	generateCaptions:
+		"Transcribe the current project's audio on-device with Whisper and write caption annotations into the project. Re-running replaces earlier auto-captions.",
+	exportProject:
+		"Export the current project to MP4 or GIF through the local OpenScreen CLI (GPU compositor). Omit out to write under the app exports folder. quality is medium|good|source.",
 };
 
 // ponytail: mutable document holder so a write-tool that updates the snapshot
@@ -218,10 +263,33 @@ export interface CursorTelemetryReader {
 	probe?(input: { assetId: string; originalPath: string | null }): Promise<boolean>;
 }
 
+export interface CliEngineResult {
+	ok: boolean;
+	resultJson: string;
+	document?: AxcutDocument;
+	summary?: string;
+}
+
+export interface CliEngine {
+	run(
+		name: "listSources" | "recordScreen" | "generateCaptions" | "exportProject",
+		args: unknown,
+		document: AxcutDocument,
+	): Promise<CliEngineResult>;
+}
+
 interface ToolRuntime {
 	cursor?: CursorTelemetryReader;
 	availableByAssetId?: Record<string, boolean>;
+	cli?: CliEngine;
 }
+
+const CLI_PROCESS_TOOLS: ReadonlySet<string> = new Set([
+	"listSources",
+	"recordScreen",
+	"generateCaptions",
+	"exportProject",
+]);
 
 /**
  * The tools whose RESULT depends on the recorded pointer track, so the async
@@ -268,6 +336,23 @@ function documentTool<S extends z.ZodType>(
 	return tool(
 		async (args: z.infer<S>) => {
 			sink.toolStart(name, args);
+			if (CLI_PROCESS_TOOLS.has(name) && runtime.cli) {
+				if (editsAllowed === false && isMutatingTool(name)) {
+					const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
+						editsAllowed: false,
+					});
+					sink.toolEnd(name, execution.ok, execution.summary);
+					return execution.resultJson;
+				}
+				const execution = await runtime.cli.run(
+					name as "listSources" | "recordScreen" | "generateCaptions" | "exportProject",
+					args,
+					holder.current,
+				);
+				if (execution.document) holder.current = execution.document;
+				sink.toolEnd(name, execution.ok, execution.summary);
+				return execution.resultJson;
+			}
 			// ponytail: the ONE async step the pure executor cannot take. Reading a
 			// sidecar is IO; `executeAgentTool` is synchronous by design (it is the
 			// gate every mutation passes through, and it has to stay testable
@@ -343,6 +428,8 @@ export function buildTools(
 		build("addTrims", addTrimsArgs),
 		build("setTrim", setTrimArgs),
 		build("setClipRange", setClipRangeArgs),
+		build("addClip", addClipArgs),
+		build("setClipCrop", setClipCropArgs),
 		build("moveClip", moveClipArgs),
 		build("replaceTimeline", replaceTimelineArgs),
 		build("addZoom", addZoomArgs),
@@ -359,6 +446,12 @@ export function buildTools(
 		build("removeTrim", removeTrimArgs),
 		build("removeModifier", removeModifierArgs),
 		build("removeClip", removeClipArgs),
+		build("setAspectRatio", setAspectRatioArgs),
+		build("setBackground", setBackgroundArgs),
+		build("listSources", listSourcesArgs),
+		build("recordScreen", recordScreenArgs),
+		build("generateCaptions", generateCaptionsArgs),
+		build("exportProject", exportProjectArgs),
 	];
 }
 
@@ -397,6 +490,8 @@ export interface InvokeArgs {
 	/** Injected by `chat-service` from the Electron layer. Absent in tests and in
 	 *  the workbench unless one is supplied on purpose. */
 	cursor?: CursorTelemetryReader;
+	/** Local OpenScreen CLI engine. Wired in the running app; absent in unit tests. */
+	cli?: CliEngine;
 }
 
 /** One cheap probe per asset, run before the tools are built so the very first
@@ -466,16 +561,25 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	// runtime side-effects (langgraph thread) are tied to the agent instance —
 	// checkpoint-based stateful threads can land later by passing a
 	// `checkpointer`; for v1 each turn is single-shot.
-	const chatModel = await createOpenScreenChatModel(model);
+	const chatModel = await createOpenScreenChatModel({
+		...model,
+		mediaDirs: shouldGrantLocalWatch(model.localAgentPermission, Boolean(model.watchGranted))
+			? mediaDirsFromDocument(document)
+			: [],
+	});
 	const availableByAssetId = await probeCursorTelemetry(document, args.cursor);
 	const tools = buildTools(holder, sink, editsAllowed, {
 		cursor: args.cursor,
 		availableByAssetId,
+		cli: args.cli,
 	});
 	const agent = createAgent({
 		model: chatModel,
 		tools,
-		systemPrompt: buildSystemPrompt({ editsAllowed }),
+		systemPrompt: buildSystemPrompt({
+			editsAllowed,
+			openProject: documentSnapshotForModel(document, { availableByAssetId }),
+		}),
 		middleware: anthropicCachingMiddleware(chatModel),
 	}).withConfig({
 		// ponytail: NOT optional. LangGraph's default is 25 steps, and an
@@ -528,6 +632,15 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					sink.text(delta);
 					finalText += delta;
 				}
+			} else if (eventType === "on_chat_model_end") {
+				// Local CLI (and any `_generate`-only model) finishes with one
+				// end event and never streams. Take that text only when no
+				// stream chunks arrived, so cloud providers are not doubled.
+				const endText = textFromChatModelEnd(data);
+				if (endText && !finalText.trim()) {
+					sink.text(endText);
+					finalText += endText;
+				}
 			} else if (eventType === "on_tool_error") {
 				// Kept as a safety net rather than as a live path. `executeAgentTool`
 				// never throws, and LangChain's ToolNode catches what does (an unknown
@@ -567,6 +680,19 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		}
 		return { text: finalText.trim(), document: holder.current, mutated };
 	} catch (err) {
+		// Local CLI failures (not logged in, binary missing) are already a
+		// sentence the user can act on. Do not wrap them in the diagnostic dump
+		// meant for mute/broken cloud providers.
+		if (model.provider === "local-cli") {
+			const message = err instanceof Error ? err.message : String(err);
+			sink.error(message);
+			return {
+				text: "",
+				document: holder.current,
+				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+				reason: message,
+			};
+		}
 		// ponytail: surface the LangChain/HTTP error (with name + truncated
 		// stack) so we can tell whether the stream threw (e.g. MiniMax
 		// returning a non-Anthropic JSON envelope that the SDK rejects) or
@@ -591,6 +717,14 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			reason,
 		};
 	}
+}
+
+/** Full assistant text from `on_chat_model_end`. Local CLI uses this path. */
+export function textFromChatModelEnd(data: Record<string, unknown> | undefined): string {
+	if (!data) return "";
+	const output = data.output;
+	if (!output || typeof output !== "object") return "";
+	return messageContentToText((output as { content?: unknown }).content);
 }
 
 function extractError(data: Record<string, unknown> | undefined): string | undefined {

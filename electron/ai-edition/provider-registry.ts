@@ -10,10 +10,8 @@ export interface ProviderDefinition {
 	id: string;
 	label: string;
 	defaultModel: string;
-	/** Only API-key providers ship today — see the removal note in
-	 * PROVIDER_DEFINITIONS. Widen this again when the Copilot SDK / Codex
-	 * app-server providers land. */
-	authKind: "api-key";
+	/** API-key cloud providers, or a local agent already installed on PATH. */
+	authKind: "api-key" | "local-cli";
 	supportsReasoningEffort: boolean;
 	/** True when this provider always requires the user to enter a base URL
 	 * (e.g. openai-compatible). False when the default is implicit. */
@@ -133,6 +131,16 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		supportsReasoningEffort: false,
 		envKeys: ["OPENAI_COMPATIBLE_API_KEY"],
 		setupHint: "Use a custom OpenAI-compatible base URL.",
+	},
+	{
+		id: "local-cli",
+		label: "Local CLI",
+		defaultModel: "",
+		authKind: "local-cli",
+		supportsReasoningEffort: false,
+		envKeys: [],
+		setupHint:
+			"Uses an agent already installed on this computer — Claude Code, Codex, Cursor Agent, Gemini CLI, or Ollama. Rescan PATH from the chat.",
 	},
 ];
 

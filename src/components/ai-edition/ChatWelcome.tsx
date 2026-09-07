@@ -12,11 +12,11 @@ import styles from "./NewEditorShell.module.css";
 const FEATURE_KEYS = ["feature1", "feature2", "feature3"] as const;
 
 interface ChatWelcomeProps {
-	/** Open the provider settings modal so the user can pick + connect one. */
-	onOpenProviderSettings: () => void;
+	/** Open the Local CLI picker so the user can use an installed agent. */
+	onOpenLocalCli: () => void;
 }
 
-export function ChatWelcome({ onOpenProviderSettings }: ChatWelcomeProps) {
+export function ChatWelcome({ onOpenLocalCli }: ChatWelcomeProps) {
 	const t = useScopedT("editor");
 
 	return (
@@ -33,7 +33,7 @@ export function ChatWelcome({ onOpenProviderSettings }: ChatWelcomeProps) {
 				))}
 			</ul>
 
-			<button type="button" className={styles.chatWelcomeCta} onClick={onOpenProviderSettings}>
+			<button type="button" className={styles.chatWelcomeCta} onClick={onOpenLocalCli}>
 				{t("chat.welcome.cta")}
 				<ArrowRight size={14} />
 			</button>

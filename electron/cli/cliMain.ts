@@ -343,6 +343,7 @@ export function runCli(command: CliCommand): void {
 				"camera",
 				"screen",
 				"display-capture",
+				"clipboard-sanitized-write",
 			];
 			session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
 				allowed.includes(permission),

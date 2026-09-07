@@ -10,6 +10,7 @@
 	   child (e.g. a long clip's timeline) would stretch the grid past the window
 	   and push the top bar's right-side buttons off-screen. minmax(0,1fr) caps it. */
 	grid-template-columns: minmax(0, 1fr);
+	position: relative;
 	height: 100vh;
 	width: 100%;
 	min-width: 0;
@@ -20,6 +21,15 @@
 	line-height: 1.5;
 	overflow: hidden;
 	-webkit-font-smoothing: antialiased;
+}
+.appChatOpen .topbar,
+.appChatOpen .body,
+.appChatOpen .timelineDock {
+	grid-column: 2;
+}
+.appChatOpen .agent {
+	grid-column: 1;
+	grid-row: 1 / -1;
 }
 /* rows set inline per mode (topbar / body / timeline) */
 
@@ -609,9 +619,13 @@
 	flex-direction: column;
 	min-height: 0;
 	min-width: 0;
+	height: 100%;
 	background: var(--surface);
 	border-right: 1px solid var(--border);
 	overflow: hidden;
+}
+.timelineDock {
+	min-width: 0;
 }
 .stage {
 	position: relative;

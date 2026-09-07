@@ -30,6 +30,7 @@ import {
 	listOpenRouterModels,
 	probeMiniMaxModels,
 } from "../../ai-edition/llm-provider-auth";
+import { listLocalAgents, openLocalAgentLogin } from "../../ai-edition/local-agents";
 import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 
 export interface AiEditionServiceOptions {
@@ -172,11 +173,15 @@ export class AiEditionService {
 
 	async llmGetSnapshot(): Promise<AiEditionLlmSnapshot> {
 		const config = this.llmConfig.getConfig();
+		const localAgents = await listLocalAgents();
 		const credentialSummary: AiEditionLlmSnapshot["credentialSummary"] = [];
 		const connectedProviders: string[] = [];
 		for (const def of PROVIDER_DEFINITIONS) {
 			const resolved = this.llmConfig.getCredential(def.id, def.envKeys);
-			const connected = Boolean(resolved);
+			const connected =
+				def.authKind === "local-cli"
+					? Boolean(config?.provider === "local-cli" && config.model)
+					: Boolean(resolved);
 			if (connected) connectedProviders.push(def.id);
 			credentialSummary.push({
 				providerId: def.id,
@@ -194,7 +199,27 @@ export class AiEditionService {
 				authKind: d.authKind,
 			})),
 			credentialSummary,
+			localAgents,
 		};
+	}
+
+	async llmRescanLocalAgents(): Promise<AiEditionLlmSnapshot> {
+		await listLocalAgents(true);
+		return this.llmGetSnapshot();
+	}
+
+	async llmLoginLocalAgent(agentId: string): Promise<AiEditionDocumentResult> {
+		try {
+			openLocalAgentLogin(agentId);
+			return { success: true };
+		} catch (error) {
+			return { success: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	async llmGrantWatchSession(): Promise<AiEditionDocumentResult> {
+		this.llmConfig.grantWatchSession();
+		return { success: true };
 	}
 
 	async llmSetConfig(config: AiEditionLlmConfig): Promise<AiEditionDocumentResult> {
@@ -241,6 +266,14 @@ export class AiEditionService {
 		try {
 			const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
 			if (!def) return { models: [], error: `Unknown provider ${providerId}` };
+			if (providerId === "local-cli") {
+				const agents = await listLocalAgents();
+				return {
+					models: agents.flatMap((agent) =>
+						agent.models && agent.models.length > 0 ? agent.models : [agent.id],
+					),
+				};
+			}
 			const cred = this.llmConfig.getCredential(providerId, def.envKeys);
 			if (!cred) return { models: [], error: "Not connected" };
 			const config = this.llmConfig.getConfig();

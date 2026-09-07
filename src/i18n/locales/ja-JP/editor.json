@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "「{{title}}」を削除しますか？",
 		"emptyState": "まだメッセージはありません。エージェントに無音のカット、間の調整、字幕の追加を依頼してみましょう。",
 		"welcome": {
-			"title": "自分のAIを持ち込もう",
-			"subtitle": "チャットは言語モデルと会話しながら動画を編集します。信頼できるプロバイダーを選んで API キーを接続すれば始められます。",
+			"title": "ローカルエージェントと話す",
+			"subtitle": "チャットは、このパソコンに入っているエージェント（Claude Code、Codex、Cursor、Gemini、Ollama）を使います。設定に API キーは不要です。",
 			"feature1": "無音部分をカットし、間を詰め、つなぎ言葉を削除",
 			"feature2": "字幕を追加し、カメラをズームし、タイトルを生成",
 			"feature3": "セクションを言い換えたり、書き直したり、クリップを分割",
-			"cta": "プロバイダーを設定",
-			"disclaimer": "動画の文字起こしは、選択したプロバイダーに送信されます。接続するまでは何も共有されません。"
+			"cta": "ローカルエージェントを探す",
+			"disclaimer": "プロンプトとプロジェクトのスナップショットはそのローカル CLI に留まります。クラウドには、選ぶまで何も送りません。"
 		},
 		"authorUser": "あなた",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "セッションを切り替えるか新規作成",
 			"empty": "まだ会話はありません。",
 			"msgsCount": "{{count}} 件のメッセージ · {{date}}"
+		},
+		"localCli": {
+			"title": "ローカル CLI",
+			"subtitle": "このパソコンに入っているエージェント",
+			"useLocalCli": "ローカル CLI を使う",
+			"active": "有効",
+			"selected": "選択中",
+			"agentsHeading": "ローカルエージェント",
+			"rescanPath": "PATH を再スキャン",
+			"scanning": "スキャン中…",
+			"noneFound": "PATH にローカルエージェントがありません。Claude Code、Codex、Cursor Agent、Gemini CLI、Ollama を入れてから再スキャンしてください。",
+			"openSettings": "実行設定を開く",
+			"composerDisabled": "チャットするにはローカルエージェントを選んでください。",
+			"needsLogin": "ログインが必要",
+			"login": "ログイン",
+			"loginHint": "ターミナルでログインを終えてから PATH を再スキャンしてください。",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

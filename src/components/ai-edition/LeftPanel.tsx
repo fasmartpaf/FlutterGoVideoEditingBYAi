@@ -1,19 +1,22 @@
-import { ArrowLeft, Check, Loader2, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
+import { openTimelineMedia } from "@/lib/ai-edition/document/timeline";
 import {
 	applyAgentDocumentIfCurrent,
 	runAgentTurn,
 } from "@/lib/ai-edition/store/agentDocumentApply";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
+import { writeClipboardText } from "@/lib/clipboardText";
 import { nativeBridgeClient } from "@/native/client";
 import type {
 	AiEditionChatEvent,
 	AiEditionLlmConfig,
+	AiEditionLocalAgent,
 	AiEditionToolCallSummary,
 } from "@/native/contracts";
 import {
@@ -24,6 +27,7 @@ import {
 } from "../../../electron/ai-edition/provider-registry";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
+import { LocalCliPopover } from "./LocalCliPopover";
 import { ChatHistoryModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { useChatBudget } from "./useChatBudget";
@@ -49,7 +53,7 @@ interface ChatDisplayMessage {
 // the full AI-settings modal). "Provider settings…" in the providers screen
 // is the escape hatch into that full modal (same one the header gear opens),
 // matching axcut's `openProviderSettings` from its popover's providers screen.
-function ModelQuickPopover({
+export function ModelQuickPopover({
 	anchorRect,
 	llmConfig,
 	connectedProviders,
@@ -449,6 +453,11 @@ export function ChatStripPanel() {
 	// see the prompt-bus effect below.
 	const tTimeline = useScopedT("timeline");
 	const projectId = useProjectStore((s) => s.projectId);
+	const document = useProjectStore((s) => s.document);
+	// Derive after the selector: a new object from `openTimelineMedia` inside
+	// the selector makes Zustand think every snapshot changed and React loops
+	// until the editor goes black.
+	const openMedia = openTimelineMedia(document);
 	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
 	const [input, setInput] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -493,6 +502,7 @@ export function ChatStripPanel() {
 	const [reasoningBusy, setReasoningBusy] = useState(false);
 	// null until the first llmGetSnapshot() lands: "unknown", not "none".
 	const [connectedProviders, setConnectedProviders] = useState<string[] | null>(null);
+	const [localAgents, setLocalAgents] = useState<AiEditionLocalAgent[]>([]);
 	// unknown ≠ none; see chatAvailability.ts.
 	const canChat = canSendChat(llmConfig, connectedProviders);
 	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
@@ -502,12 +512,39 @@ export function ChatStripPanel() {
 		bottom: number;
 		maxHeight: number;
 	} | null>(null);
+	const [watchPromptText, setWatchPromptText] = useState<string | null>(null);
+	const watchSessionGrantedRef = useRef(false);
+	const skipWatchPromptRef = useRef(false);
+	const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
+	const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const copyMessage = useCallback(
+		async (key: string, text: string) => {
+			try {
+				await writeClipboardText(text);
+				if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+				setCopiedMessageKey(key);
+				copiedResetRef.current = setTimeout(() => setCopiedMessageKey(null), 1500);
+				toast.success(t("chat.copiedToClipboard"));
+			} catch {
+				toast.error(t("chat.copyFailed"));
+			}
+		},
+		[t],
+	);
+
+	useEffect(() => {
+		return () => {
+			if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+		};
+	}, []);
 
 	const refreshLlm = useCallback(async () => {
 		try {
 			const snap = await nativeBridgeClient.aiEdition.llmGetSnapshot();
 			setLlmConfig(snap.config);
 			setConnectedProviders(snap.connectedProviders);
+			setLocalAgents(snap.localAgents ?? []);
 		} catch {
 			// ponytail: silent
 		}
@@ -605,10 +642,21 @@ export function ChatStripPanel() {
 		// firing a doomed request. The composer is disabled in this state too,
 		// but Auto-enhance calls send() directly and Enter can slip through.
 		if (!canChat) {
-			toast.error(t("chat.composerDisabledNoProvider"));
+			toast.error(t("chat.localCli.composerDisabled"));
 			openProviderSettings();
 			return;
 		}
+		const permission = llmConfig?.localAgentPermission ?? "ask";
+		if (
+			llmConfig?.provider === "local-cli" &&
+			permission === "ask" &&
+			!watchSessionGrantedRef.current &&
+			!skipWatchPromptRef.current
+		) {
+			setWatchPromptText(text);
+			return;
+		}
+		skipWatchPromptRef.current = false;
 		setInput("");
 		setBusy(true);
 		// ponytail: prepare the live reasoning-trace accumulator. Late events
@@ -726,6 +774,23 @@ export function ChatStripPanel() {
 		}
 	};
 
+	const finishWatchPrompt = async (choice: "session" | "always" | "now") => {
+		const text = watchPromptText;
+		setWatchPromptText(null);
+		if (!text) return;
+		if (choice === "always" && llmConfig) {
+			const next = { ...llmConfig, localAgentPermission: "always" as const };
+			await nativeBridgeClient.aiEdition.llmSetConfig(next);
+			setLlmConfig(next);
+		} else if (choice === "session") {
+			watchSessionGrantedRef.current = true;
+			await nativeBridgeClient.aiEdition.llmGrantWatchSession();
+		} else {
+			skipWatchPromptRef.current = true;
+		}
+		await send(text);
+	};
+
 	// Auto-send a prompt handed over by another part of the UI (e.g. the
 	// timeline's Auto-enhance → "Smart zooms + cuts with AI"). Routes through
 	// the normal send() so sessions/checkpoints/rewind all keep working; the
@@ -812,7 +877,14 @@ export function ChatStripPanel() {
 		};
 	}, [rewindFor]);
 
-	const modelLabel = llmConfig ? llmConfig.model : t("chat.configureModel");
+	const modelLabel =
+		llmConfig?.provider === "local-cli" && llmConfig.model
+			? (localAgents.find(
+					(agent) => agent.id === llmConfig.model || agent.models?.includes(llmConfig.model),
+				)?.name ?? llmConfig.model)
+			: llmConfig?.model
+				? llmConfig.model
+				: t("chat.localCli.title");
 	const providerSupportsReasoning = Boolean(
 		llmConfig &&
 			PROVIDER_DEFINITIONS.find((d) => d.id === llmConfig.provider)?.supportsReasoningEffort,
@@ -1257,7 +1329,20 @@ export function ChatStripPanel() {
 
 			<div className={styles.panelBody} ref={scrollRef}>
 				{!canChat && messages.length === 0 ? (
-					<ChatWelcome onOpenProviderSettings={openProviderSettings} />
+					<ChatWelcome
+						onOpenLocalCli={() => {
+							const button = modelButtonRef.current;
+							if (button) {
+								const rect = button.getBoundingClientRect();
+								setModelPopoverRect({
+									left: Math.max(12, rect.left),
+									bottom: window.innerHeight - rect.top + 8,
+									maxHeight: Math.max(240, rect.top - 24),
+								});
+							}
+							setModelPopoverOpen(true);
+						}}
+					/>
 				) : messages.length === 0 ? (
 					<p
 						style={{
@@ -1307,18 +1392,11 @@ export function ChatStripPanel() {
 									/>
 								) : null}
 								<div className={styles.msgBubble}>{m.content}</div>
-								<div
-									style={{
-										display: "flex",
-										alignItems: "center",
-										gap: 4,
-										marginTop: 4,
-										justifyContent: "flex-end",
-									}}
-								>
+								<div className={styles.msgActions}>
 									{m.role === "user" && m.checkpointId ? (
 										<button
 											type="button"
+											className={styles.msgAction}
 											data-rewind-trigger="true"
 											title={t("chat.rewindToMessage")}
 											aria-label={t("chat.rewindToMessage")}
@@ -1333,28 +1411,17 @@ export function ChatStripPanel() {
 													},
 												});
 											}}
-											style={{
-												width: 22,
-												height: 22,
-												display: "inline-flex",
-												alignItems: "center",
-												justifyContent: "center",
-												background: "transparent",
-												border: "1px solid var(--border-soft)",
-												borderRadius: "var(--r-sm)",
-												color: "var(--fg-2)",
-												cursor: "pointer",
-											}}
 										>
 											<svg
-												width={12}
-												height={12}
+												width={14}
+												height={14}
 												viewBox="0 0 24 24"
 												fill="none"
 												stroke="currentColor"
-												strokeWidth="2"
+												strokeWidth="1.75"
 												strokeLinecap="round"
 												strokeLinejoin="round"
+												aria-hidden="true"
 											>
 												<path d="M3 7v6h6" />
 												<path d="M21 17a9 9 0 0 0-15-6.7L3 13" />
@@ -1363,40 +1430,20 @@ export function ChatStripPanel() {
 									) : null}
 									<button
 										type="button"
-										title={t("chat.copyMessage")}
+										className={styles.msgAction}
+										title={
+											copiedMessageKey === (m.id ?? String(i))
+												? t("chat.copiedToClipboard")
+												: t("chat.copyMessage")
+										}
 										aria-label={t("chat.copyMessage")}
-										onClick={() => {
-											void navigator.clipboard.writeText(m.content).then(
-												() => toast.success(t("chat.copiedToClipboard")),
-												() => toast.error(t("chat.copyFailed")),
-											);
-										}}
-										style={{
-											width: 22,
-											height: 22,
-											display: "inline-flex",
-											alignItems: "center",
-											justifyContent: "center",
-											background: "transparent",
-											border: "1px solid var(--border-soft)",
-											borderRadius: "var(--r-sm)",
-											color: "var(--fg-2)",
-											cursor: "pointer",
-										}}
+										onClick={() => void copyMessage(m.id ?? String(i), m.content)}
 									>
-										<svg
-											width={12}
-											height={12}
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="2"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-										>
-											<rect x="9" y="9" width="13" height="13" rx="2" />
-											<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-										</svg>
+										{copiedMessageKey === (m.id ?? String(i)) ? (
+											<Check size={14} strokeWidth={1.75} aria-hidden="true" />
+										) : (
+											<Copy size={14} strokeWidth={1.75} aria-hidden="true" />
+										)}
 									</button>
 								</div>
 								{m.toolCalls?.length ? (
@@ -1467,9 +1514,24 @@ export function ChatStripPanel() {
 			</div>
 
 			<div className={styles.chatInput}>
+				{openMedia ? (
+					<div
+						title={openMedia.label}
+						style={{
+							margin: "0 0 8px",
+							font: "500 11px/1.3 var(--font-body)",
+							color: "var(--muted)",
+							overflow: "hidden",
+							textOverflow: "ellipsis",
+							whiteSpace: "nowrap",
+						}}
+					>
+						{openMedia.label}
+					</div>
+				) : null}
 				<textarea
 					placeholder={
-						canChat ? t("chat.composerPlaceholder") : t("chat.composerDisabledNoProvider")
+						canChat ? t("chat.composerPlaceholder") : t("chat.localCli.composerDisabled")
 					}
 					value={input}
 					disabled={!canChat}
@@ -1568,23 +1630,24 @@ export function ChatStripPanel() {
 										</button>
 									))}
 								</div>,
-								document.body,
+								globalThis.document.body,
 							)
 						: null}
-					{modelPopoverOpen && modelPopoverRect && llmConfig ? (
-						<ModelQuickPopover
+					{modelPopoverOpen && modelPopoverRect ? (
+						<LocalCliPopover
 							anchorRect={modelPopoverRect}
 							llmConfig={llmConfig}
-							connectedProviders={connectedProviders ?? []}
+							agents={localAgents}
 							onClose={() => setModelPopoverOpen(false)}
 							onConfigChange={() => void refreshLlm()}
 							onOpenFullSettings={openProviderSettings}
+							onAgentsChange={setLocalAgents}
 						/>
 					) : null}
 					<button
 						type="button"
 						className={styles.sendBtn}
-						title={canChat ? t("chat.sendTitle") : t("chat.composerDisabledNoProvider")}
+						title={canChat ? t("chat.sendTitle") : t("chat.localCli.composerDisabled")}
 						aria-label={t("chat.send")}
 						onClick={() => void send()}
 						disabled={busy || !input.trim() || !canChat}
@@ -1605,6 +1668,91 @@ export function ChatStripPanel() {
 					</button>
 				</div>
 			</div>
+			{watchPromptText
+				? createPortal(
+						<div
+							style={{
+								position: "fixed",
+								left: "50%",
+								bottom: 96,
+								transform: "translateX(-50%)",
+								width: 360,
+								maxWidth: "calc(100vw - 24px)",
+								background: "var(--surface)",
+								border: "1px solid var(--border)",
+								borderRadius: "var(--r-md)",
+								boxShadow: "var(--elev-pop)",
+								padding: 14,
+								zIndex: 1100,
+							}}
+							role="dialog"
+							aria-labelledby="local-watch-prompt-title"
+						>
+							<strong id="local-watch-prompt-title" style={{ display: "block", marginBottom: 6 }}>
+								{t("chat.localCli.watchPromptTitle")}
+							</strong>
+							<p
+								style={{
+									font: "400 12px/1.45 var(--font-body)",
+									color: "var(--muted)",
+									margin: "0 0 12px",
+								}}
+							>
+								{t("chat.localCli.watchPromptBody")}
+							</p>
+							<div
+								style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 }}
+							>
+								<button
+									type="button"
+									onClick={() => void finishWatchPrompt("now")}
+									style={{
+										padding: "4px 10px",
+										background: "transparent",
+										border: "1px solid var(--border-soft)",
+										borderRadius: "var(--r-sm)",
+										color: "var(--fg-2)",
+										font: "500 12px var(--font-body)",
+										cursor: "pointer",
+									}}
+								>
+									{t("chat.localCli.watchNotNow")}
+								</button>
+								<button
+									type="button"
+									onClick={() => void finishWatchPrompt("always")}
+									style={{
+										padding: "4px 10px",
+										background: "transparent",
+										border: "1px solid var(--border-soft)",
+										borderRadius: "var(--r-sm)",
+										color: "var(--fg-2)",
+										font: "500 12px var(--font-body)",
+										cursor: "pointer",
+									}}
+								>
+									{t("chat.localCli.watchAllowAlways")}
+								</button>
+								<button
+									type="button"
+									onClick={() => void finishWatchPrompt("session")}
+									style={{
+										padding: "4px 10px",
+										background: "var(--accent)",
+										border: "1px solid var(--accent)",
+										borderRadius: "var(--r-sm)",
+										color: "var(--accent-on)",
+										font: "500 12px var(--font-body)",
+										cursor: "pointer",
+									}}
+								>
+									{t("chat.localCli.watchAllowSession")}
+								</button>
+							</div>
+						</div>,
+						globalThis.document.body,
+					)
+				: null}
 			<ChatHistoryModal
 				open={chatsOpen}
 				onClose={() => setChatsOpen(false)}
@@ -1677,7 +1825,7 @@ export function ChatStripPanel() {
 								</button>
 							</div>
 						</div>,
-						document.body,
+						globalThis.document.body,
 					)
 				: null}
 		</aside>

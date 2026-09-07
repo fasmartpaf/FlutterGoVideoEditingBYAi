@@ -253,6 +253,8 @@ export interface AiEditionLlmConfig {
 	/** P2.5 — when false, the agent must ask before running write tools.
 	 * Undefined means enabled (edits allowed, protected by checkpoints). */
 	allowAgentEdits?: boolean;
+	/** Local CLI watch access: ask the user (default), always, or never. */
+	localAgentPermission?: "ask" | "always" | "never";
 }
 
 export type AiEditionLlmCredentialKind = "api-key" | "codex" | "github-device" | "github-pat";
@@ -268,6 +270,20 @@ export interface AiEditionLlmSnapshot {
 		authKind: string;
 		credentialKind: AiEditionLlmCredentialKind | null;
 	}>;
+	/** Agents found on PATH / local HTTP ports. Empty until the first scan. */
+	localAgents?: AiEditionLocalAgent[];
+}
+
+export interface AiEditionLocalAgent {
+	id: string;
+	name: string;
+	kind: "cli" | "http";
+	path?: string;
+	baseUrl?: string;
+	version?: string;
+	models?: string[];
+	ready: boolean;
+	statusNote?: string;
 }
 
 export interface AiEditionLlmDisconnectResult {
@@ -550,8 +566,26 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
+			action: "llm.rescanLocalAgents";
+			payload?: EmptyPayload;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.loginLocalAgent";
+			payload: { agentId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
 			action: "llm.setConfig";
 			payload: { config: AiEditionLlmConfig };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.grantWatchSession";
+			payload?: EmptyPayload;
 			requestId?: string;
 	  }
 	| {

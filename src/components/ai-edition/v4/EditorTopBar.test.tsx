@@ -7,17 +7,29 @@ import { describe, expect, it, vi } from "vitest";
 // the public topbar instead. The translator echoes keys; assertions read better
 // against keys than against prose that drifts with copy edits.
 vi.mock("@/contexts/I18nContext", () => ({
-	useI18n: () => ({ locale: "en", setLocale: () => {} }),
+	useI18n: () => ({
+		locale: "en",
+		setLocale: () => {
+			/* noop */
+		},
+	}),
 	useScopedT: () => (key: string) => key,
 }));
 
 vi.mock("@/hooks/useTheme", () => ({
-	useTheme: () => ({ theme: "dark", toggle: () => {} }),
+	useTheme: () => ({
+		theme: "dark",
+		toggle: () => {
+			/* noop */
+		},
+	}),
 }));
 
 import { EditorTopBar } from "./EditorTopBar";
 
-const noop = () => {};
+const noop = () => {
+	/* noop */
+};
 
 function renderTopBar(projectTitle: string | null) {
 	const onRename = vi.fn();
@@ -244,6 +256,34 @@ describe("EditorTopBar responsive affordances and tooltips", () => {
 		const exportBtn = screen.getByRole("button", { name: "topbar.export" });
 		expect(exportBtn).toBeInTheDocument();
 		expect(exportBtn).toHaveAttribute("title", "topbar.export");
+	});
+
+	it("keeps the agent toggle in Media so it can open Edit", () => {
+		const toggleChat = vi.fn();
+		render(
+			<EditorTopBar
+				mode="media"
+				onModeChange={noop}
+				projectTitle="Demo Project"
+				dirty={false}
+				canExport={false}
+				chatOpen={false}
+				actions={{
+					openProject: noop,
+					newProject: noop,
+					save: noop,
+					export: noop,
+					openSettings: noop,
+					renameProject: noop,
+					toggleChat,
+					openProviderSettings: noop,
+					showAbout: noop,
+					checkForUpdates: noop,
+				}}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "topbar.toggleChatPanel" }));
+		expect(toggleChat).toHaveBeenCalled();
 	});
 
 	it("provides title tooltips for mode switch tabs", () => {

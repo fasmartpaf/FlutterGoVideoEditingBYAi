@@ -37,9 +37,11 @@ import {
 	anthropicCachingMiddleware,
 	buildSystemPrompt,
 	buildTools,
+	type CliEngine,
 	type OpenScreenAgentSink,
 	SYSTEM_PROMPT,
 	TOOL_DESCRIPTIONS,
+	textFromChatModelEnd,
 } from "./service";
 
 // Both rosters used to be re-typed here, and a third time in the workbench. This
@@ -64,6 +66,8 @@ const ARGS: Record<string, unknown> = {
 	addTrims: { ranges: [{ startSec: 1, endSec: 2 }] },
 	setTrim: { trimRangeId: "trim_1", startSec: 1, endSec: 2 },
 	setClipRange: { clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 10 },
+	addClip: { assetId: "asset_1" },
+	setClipCrop: { clipId: "clip_1", crop: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 } },
 	moveClip: { clipId: "clip_1", beforeClipId: null },
 	replaceTimeline: { intervals: [{ startSec: 0, endSec: 10 }] },
 	addZoom: { startSec: 1, endSec: 2 },
@@ -82,6 +86,12 @@ const ARGS: Record<string, unknown> = {
 	removeTrim: { trimRangeId: "trim_1" },
 	removeModifier: { id: "nope" },
 	removeClip: { clipId: "clip_1" },
+	setAspectRatio: { value: "9:16" },
+	setBackground: { wallpaper: "1" },
+	listSources: {},
+	recordScreen: { durationSec: 8 },
+	generateCaptions: {},
+	exportProject: {},
 };
 
 /** ponytail: the fixture starts from a FIXED instant. `createEmptyDocument` reads
@@ -183,10 +193,10 @@ function recordingSink(): { sink: OpenScreenAgentSink; events: SinkEvent[] } {
  * the interface. */
 type BuiltTool = StructuredToolInterface;
 
-function toolsFor(document: AxcutDocument) {
+function toolsFor(document: AxcutDocument, runtime?: { cli?: CliEngine }) {
 	const { sink, events } = recordingSink();
 	const holder = { current: document };
-	const tools: BuiltTool[] = buildTools(holder, sink);
+	const tools: BuiltTool[] = buildTools(holder, sink, true, runtime);
 	return { tools, events, holder };
 }
 
@@ -221,6 +231,21 @@ describe("the tool surface handed to the model", () => {
 		// tools were.
 		expect(SYSTEM_PROMPT).not.toMatch(/file ?system|file path|write_todos|sub-?agent/i);
 	});
+
+	it("tells the model to watch the open recording; a transcript is optional", () => {
+		expect(SYSTEM_PROMPT).toMatch(/visibleMedia/i);
+		expect(SYSTEM_PROMPT).toMatch(/transcript is optional/i);
+		expect(SYSTEM_PROMPT).toMatch(/ffmpeg/i);
+		expect(SYSTEM_PROMPT).toMatch(/Never say you cannot see the project/i);
+	});
+
+	it("teaches a one-pass finish and refuses invented schema fields", () => {
+		expect(SYSTEM_PROMPT).toMatch(/One-pass finish/);
+		expect(SYSTEM_PROMPT).toMatch(/CTAs/);
+		expect(SYSTEM_PROMPT).toMatch(/type 'blur'/);
+		expect(SYSTEM_PROMPT).toMatch(/not fields on this document/);
+		expect(SYSTEM_PROMPT).toMatch(/clip-to-clip transitions/);
+	});
 });
 
 describe("prompt caching on the Anthropic-wire providers", () => {
@@ -245,6 +270,20 @@ describe("prompt caching on the Anthropic-wire providers", () => {
 	it("is absent everywhere else", () => {
 		const model = new ChatOpenAI({ apiKey: "test-not-a-real-key", model: "gpt-4o" });
 		expect(anthropicCachingMiddleware(model)).toEqual([]);
+	});
+});
+
+describe("textFromChatModelEnd", () => {
+	it("reads the full reply a generate-only local CLI leaves on the end event", () => {
+		expect(
+			textFromChatModelEnd({
+				output: { content: "Hello — I can trim silences and export." },
+			}),
+		).toBe("Hello — I can trim silences and export.");
+	});
+
+	it("is empty when the model only emitted tool calls", () => {
+		expect(textFromChatModelEnd({ output: { content: "", tool_calls: [{}] } })).toBe("");
 	});
 });
 
@@ -368,6 +407,8 @@ describe("one description of the tools, not two", () => {
 			"getTranscript",
 			"getTranscriptWords",
 			"getCursorTrack",
+			"listSources",
+			"exportProject",
 		]);
 	});
 });
@@ -414,6 +455,18 @@ describe("the prompt when the user has turned project edits off", () => {
 		expect(SYSTEM_PROMPT).not.toMatch(/PROJECT EDITS ARE CURRENTLY DISABLED/);
 	});
 
+	it("pins the live open project onto the turn so the model does not ask if footage exists", () => {
+		const prompt = buildSystemPrompt({
+			editsAllowed: true,
+			openProject: { project: { title: "Recording 9/7/2026" }, clips: [{ id: "clip_1" }] },
+		});
+		expect(prompt.startsWith(SYSTEM_PROMPT)).toBe(true);
+		expect(prompt).toMatch(/OPEN PROJECT/);
+		expect(prompt).toContain("Recording 9/7/2026");
+		expect(prompt).toContain("clip_1");
+		expect(SYSTEM_PROMPT).toMatch(/Do not ask whether they have already added footage/);
+	});
+
 	it("keeps the normal prompt as a prefix, so the editing rules still apply", () => {
 		// The consent block CONSTRAINS the turn; it does not replace the tool
 		// selection rules the model needs to describe the edit it is proposing.
@@ -456,6 +509,59 @@ describe("the tools when the user has turned project edits off", () => {
 		const read = tools.find((t) => t.name === "getCurrentDocument");
 		if (!read) throw new Error("getCurrentDocument is not built");
 		expect(JSON.parse(String(await read.invoke({}))).primaryAssetId).toBe("asset_1");
+	});
+});
+
+describe("the injected CLI engine", () => {
+	it("routes process tools and advances the holder on a recording", async () => {
+		const recorded = fixtureDocument();
+		const recordedNext = {
+			...recorded,
+			project: { ...recorded.project, title: "Recorded take" },
+		};
+		const { tools, holder } = toolsFor(fixtureDocument(), {
+			cli: {
+				async run(name) {
+					if (name === "listSources") {
+						return {
+							ok: true,
+							resultJson: JSON.stringify({ sources: { displays: [{ id: 0 }] } }),
+							summary: "listed capture sources",
+						};
+					}
+					return {
+						ok: true,
+						document: recordedNext,
+						resultJson: JSON.stringify({ recorded: true }),
+						summary: "recorded display 0 (8s)",
+					};
+				},
+			},
+		});
+
+		const listed = JSON.parse(
+			String(await tools.find((t) => t.name === "listSources")?.invoke({})),
+		);
+		expect(listed.sources.displays[0].id).toBe(0);
+		expect(holder.current.project.title).toBe("Test");
+
+		await tools.find((t) => t.name === "recordScreen")?.invoke({ durationSec: 8 });
+		expect(holder.current.project.title).toBe("Recorded take");
+	});
+
+	it("still refuses a mutating CLI tool when project edits are off", async () => {
+		const holder = { current: fixtureDocument() };
+		const { sink } = recordingSink();
+		const tools: BuiltTool[] = buildTools(holder, sink, false, {
+			cli: {
+				async run() {
+					throw new Error("CLI must not run when edits are off");
+				},
+			},
+		});
+		const result = await tools.find((t) => t.name === "recordScreen")?.invoke({ durationSec: 8 });
+		expect(JSON.parse(String(result)).code).toBe("consent_required");
+		expect(holder.current.project.title).toBe("Test");
 	});
 });
 

@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "删除 \"{{title}}\"？",
 		"emptyState": "暂无消息。可以让代理剪掉静音、收紧停顿或添加字幕。",
 		"welcome": {
-			"title": "自带你的 AI",
-			"subtitle": "聊天通过与语言模型对话来编辑你的视频。选择你信任的提供方并连接一个 API 密钥即可开始。",
+			"title": "与本地智能体对话",
+			"subtitle": "聊天使用本机已安装的智能体——Claude Code、Codex、Cursor、Gemini 或 Ollama。设置里不需要 API 密钥。",
 			"feature1": "剪掉静音、收紧停顿、去除口头禅",
 			"feature2": "添加字幕、为镜头变焦、生成标题",
 			"feature3": "按需重写章节、换种说法或拆分片段",
-			"cta": "设置提供方",
-			"disclaimer": "你视频的转录文本将发送到你选择的提供方。在你连接之前不会共享任何内容。"
+			"cta": "扫描本地智能体",
+			"disclaimer": "提示词和项目快照会留在该本地 CLI。在你选择云服务商之前，不会上传任何内容。"
 		},
 		"authorUser": "你",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "切换或新建会话",
 			"empty": "暂无对话。",
 			"msgsCount": "{{count}} 条消息 · {{date}}"
+		},
+		"localCli": {
+			"title": "本地 CLI",
+			"subtitle": "本机已安装的智能体",
+			"useLocalCli": "使用本地 CLI",
+			"active": "已启用",
+			"selected": "已选择",
+			"agentsHeading": "本地智能体",
+			"rescanPath": "重新扫描 PATH",
+			"scanning": "正在扫描…",
+			"noneFound": "PATH 上没有本地智能体。请安装 Claude Code、Codex、Cursor Agent、Gemini CLI 或 Ollama，然后重新扫描。",
+			"openSettings": "打开执行设置",
+			"composerDisabled": "请选择一个本地智能体后再聊天。",
+			"needsLogin": "需要登录",
+			"login": "登录",
+			"loginHint": "在终端完成登录，然后重新扫描 PATH。",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

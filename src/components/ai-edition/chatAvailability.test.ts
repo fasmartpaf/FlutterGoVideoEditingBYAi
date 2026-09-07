@@ -43,4 +43,9 @@ describe("canSendChat", () => {
 		expect(canSendChat(cfg("minimax"), ["minimax"])).toBe(true);
 		expect(canSendChat(cfg("openai"), ["openai", "anthropic"])).toBe(true);
 	});
+
+	it("treats a selected local CLI agent as ready without an API key", () => {
+		expect(canSendChat(cfg("local-cli", "claude"), [])).toBe(true);
+		expect(canSendChat(cfg("local-cli", ""), [])).toBe(false);
+	});
 });

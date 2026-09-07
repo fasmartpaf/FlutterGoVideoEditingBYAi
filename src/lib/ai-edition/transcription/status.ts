@@ -122,7 +122,16 @@ export type PersistableFailureKind = Exclude<TranscriptionFailureKind, "error">;
  */
 export function classifyTranscriptionError(error: unknown): TranscriptionFailure {
 	const message = error instanceof Error ? error.message : String(error);
-	if (/no audio track/i.test(message) || /zero audio frames/i.test(message)) {
+	// Native extraction throws `NoAudioTrackError: No decodable audio in …`
+	// (plus ffmpeg's stderr). Electron then wraps the throw as
+	// `Error invoking remote method 'stt:transcribe': …`. The renderer used
+	// to treat that as a transient engine failure and toast the dump.
+	if (
+		/no audio track/i.test(message) ||
+		/zero audio frames/i.test(message) ||
+		/no decodable audio/i.test(message) ||
+		/NoAudioTrackError/i.test(message)
+	) {
 		return { kind: "no-audio", message };
 	}
 	if (/audio codec not supported/i.test(message)) {

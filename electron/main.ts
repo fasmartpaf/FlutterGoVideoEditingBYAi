@@ -1122,6 +1122,7 @@ appReady?.then(async () => {
 			"camera",
 			"screen",
 			"display-capture",
+			"clipboard-sanitized-write",
 		];
 		return allowed.includes(permission);
 	});
@@ -1135,6 +1136,7 @@ appReady?.then(async () => {
 			"camera",
 			"screen",
 			"display-capture",
+			"clipboard-sanitized-write",
 		];
 		callback(allowed.includes(permission));
 	});

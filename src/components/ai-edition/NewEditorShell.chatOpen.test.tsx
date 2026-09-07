@@ -23,7 +23,9 @@ vi.mock("@/contexts/ShortcutsContext", async () => {
 vi.mock("@/contexts/I18nContext", () => ({
 	useI18n: () => ({
 		locale: "en",
-		setLocale: () => {},
+		setLocale: () => {
+			/* noop */
+		},
 	}),
 	useScopedT: (scope: string) => (key: string) => `${scope}.${key}`,
 }));
@@ -58,16 +60,30 @@ describe("NewEditorShell chatOpen behavior with useChatPromptBus", () => {
 	beforeEach(() => {
 		useChatPromptBus.setState({ pending: null });
 		(window as unknown as { electronAPI?: unknown }).electronAPI = {
-			onAiEditionChatEvent: () => () => {},
-			setTitleBarOverlay: () => {},
-			setHasUnsavedChanges: () => {},
-			onRequestCloseConfirm: () => () => {},
-			onRequestSaveBeforeClose: () => () => {},
-			sendCloseConfirmResponse: () => {},
+			onAiEditionChatEvent: () => () => {
+				/* noop */
+			},
+			setTitleBarOverlay: () => {
+				/* noop */
+			},
+			setHasUnsavedChanges: () => {
+				/* noop */
+			},
+			onRequestCloseConfirm: () => () => {
+				/* noop */
+			},
+			onRequestSaveBeforeClose: () => () => {
+				/* noop */
+			},
+			sendCloseConfirmResponse: () => {
+				/* noop */
+			},
 			findRecordingCamera: () => Promise.resolve(null),
 			preparePreviewAudioTrack: () => Promise.resolve(null),
 		};
-		Element.prototype.scrollTo = () => {};
+		Element.prototype.scrollTo = () => {
+			/* noop */
+		};
 		(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = class {
 			observe() {
 				// noop
@@ -87,22 +103,19 @@ describe("NewEditorShell chatOpen behavior with useChatPromptBus", () => {
 		(window as unknown as { electronAPI?: unknown }).electronAPI = undefined;
 	});
 
-	it("initially starts with chat closed, and opens when useChatPromptBus receives a prompt", () => {
+	it("starts with the agent column open, and stays open when a prompt arrives", () => {
 		renderShell();
 
-		// Initially closed
 		expect(
-			screen.queryByRole("complementary", { name: "editor.shell.aiEditor" }),
-		).not.toBeInTheDocument();
+			screen.getByRole("complementary", { name: "editor.shell.aiEditor" }),
+		).toBeInTheDocument();
 		const toggleBtn = screen.getByRole("button", { name: "editor.topbar.toggleChatPanel" });
-		expect(toggleBtn).toHaveAttribute("aria-pressed", "false");
+		expect(toggleBtn).toHaveAttribute("aria-pressed", "true");
 
-		// Submit a prompt via the bus
 		act(() => {
 			useChatPromptBus.getState().submit("smart cut prompt");
 		});
 
-		// Now open
 		expect(
 			screen.getByRole("complementary", { name: "editor.shell.aiEditor" }),
 		).toBeInTheDocument();
@@ -148,5 +161,25 @@ describe("NewEditorShell chatOpen behavior with useChatPromptBus", () => {
 			screen.getByRole("complementary", { name: "editor.shell.aiEditor" }),
 		).toBeInTheDocument();
 		expect(toggleBtn).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("opens Edit and the agent from Media instead of leaving the user on a blank panel", () => {
+		renderShell();
+		act(() => {
+			fireEvent.click(screen.getByRole("tab", { name: "editor.topbar.modes.media" }));
+		});
+		expect(
+			screen.queryByRole("complementary", { name: "editor.shell.aiEditor" }),
+		).not.toBeInTheDocument();
+		act(() => {
+			fireEvent.click(screen.getByRole("button", { name: "editor.topbar.toggleChatPanel" }));
+		});
+		expect(
+			screen.getByRole("complementary", { name: "editor.shell.aiEditor" }),
+		).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "editor.topbar.modes.edit" })).toHaveAttribute(
+			"aria-selected",
+			"true",
+		);
 	});
 });

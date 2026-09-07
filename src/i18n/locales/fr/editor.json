@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "Supprimer « {{title}} » ?",
 		"emptyState": "Aucun message pour l'instant. Demandez à l'agent de couper les silences, resserrer les pauses ou ajouter des sous-titres.",
 		"welcome": {
-			"title": "Apportez votre IA",
-			"subtitle": "Le chat édite votre vidéo en discutant avec un modèle de langage. Choisissez le fournisseur auquel vous faites confiance et connectez une clé API pour commencer.",
+			"title": "Parlez à un agent local",
+			"subtitle": "Le chat utilise un agent déjà installé sur cet ordinateur — Claude Code, Codex, Cursor, Gemini ou Ollama. Pas de clé API dans Réglages.",
 			"feature1": "Couper les silences, resserrer les pauses, supprimer les tics de langage",
 			"feature2": "Ajouter des sous-titres, zoomer sur la caméra, générer un titre",
 			"feature3": "Réécrire une section, reformuler ou découper un clip à la demande",
-			"cta": "Configurer un fournisseur",
-			"disclaimer": "La transcription de votre vidéo sera envoyée au fournisseur que vous choisissez. Rien n'est partagé tant que vous n'en connectez pas un."
+			"cta": "Rechercher les agents locaux",
+			"disclaimer": "Votre message et l'instantané du projet restent sur ce CLI local. Rien n'est envoyé à un fournisseur cloud tant que vous n'en choisissez pas un."
 		},
 		"authorUser": "Vous",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "Changer ou créer des sessions",
 			"empty": "Aucune conversation pour l'instant.",
 			"msgsCount": "{{count}} messages · {{date}}"
+		},
+		"localCli": {
+			"title": "CLI local",
+			"subtitle": "Agents installés sur cet ordinateur",
+			"useLocalCli": "Utiliser le CLI local",
+			"active": "actif",
+			"selected": "sélectionné",
+			"agentsHeading": "Agents locaux",
+			"rescanPath": "Rescanner PATH",
+			"scanning": "Analyse…",
+			"noneFound": "Aucun agent local sur PATH. Installez Claude Code, Codex, Cursor Agent, Gemini CLI ou Ollama, puis rescanner.",
+			"openSettings": "Ouvrir les réglages d'exécution",
+			"composerDisabled": "Choisissez un agent local pour commencer.",
+			"needsLogin": "Connexion requise",
+			"login": "Se connecter",
+			"loginHint": "Terminez la connexion dans Terminal, puis rescanner PATH.",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

@@ -44,9 +44,15 @@ export class FfmpegUnavailableError extends Error {
 
 /** A media with no decodable audio track. Permanent for that file. */
 export class NoAudioTrackError extends Error {
+	readonly filePath: string;
+	readonly detail: string;
 	constructor(filePath: string, detail: string) {
-		super(`No decodable audio in ${filePath}${detail ? `: ${detail}` : ""}`);
+		// Keep the message short: Electron serializes a thrown IPC error
+		// verbatim into the renderer toast if classification misses it.
+		super(`No decodable audio in ${filePath}`);
 		this.name = "NoAudioTrackError";
+		this.filePath = filePath;
+		this.detail = detail;
 	}
 }
 

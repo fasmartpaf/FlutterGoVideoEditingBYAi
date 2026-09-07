@@ -30,6 +30,8 @@ export interface LlmConfig {
 	 * the model to say (see technical-documentation/architecture/ai-agent.md).
 	 */
 	allowAgentEdits?: boolean;
+	/** Local CLI: ask (default), always watch, or never watch recordings. */
+	localAgentPermission?: "ask" | "always" | "never";
 }
 
 // Only `api-key` remains: the OAuth kinds ("codex", "github-device",
@@ -54,6 +56,7 @@ export class LlmConfigStore {
 	private readonly credentialsPath: string;
 	private config: LlmConfig | null = null;
 	private credentials: LlmCredentials = {};
+	private watchGrantedThisSession = false;
 
 	constructor(userDataPath: string) {
 		this.configPath = path.join(userDataPath, "llm-config.json");
@@ -85,6 +88,14 @@ export class LlmConfigStore {
 
 	getConfig(): LlmConfig | null {
 		return this.config;
+	}
+
+	grantWatchSession(): void {
+		this.watchGrantedThisSession = true;
+	}
+
+	isSessionWatchGranted(): boolean {
+		return this.watchGrantedThisSession;
 	}
 
 	async setConfig(config: LlmConfig): Promise<void> {

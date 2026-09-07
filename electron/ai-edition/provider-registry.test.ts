@@ -17,9 +17,9 @@ const FIRST_PARTY_ONLY_HOSTS = [
 ];
 
 describe("PROVIDER_DEFINITIONS", () => {
-	it("ships only API-key providers", () => {
+	it("ships API-key providers plus the local CLI scanner", () => {
 		const others = PROVIDER_DEFINITIONS.filter((def) => def.authKind !== "api-key");
-		expect(others.map((d) => d.id)).toEqual([]);
+		expect(others.map((d) => d.id)).toEqual(["local-cli"]);
 	});
 
 	it("points at no endpoint reserved for a vendor's own clients", () => {

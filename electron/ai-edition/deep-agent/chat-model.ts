@@ -16,11 +16,13 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatMistralAI } from "@langchain/mistralai";
 import { ChatOpenAI } from "@langchain/openai";
+import { cliPathFromBaseUrl, isHttpLocalCli } from "../local-agents";
 import {
 	getProviderDefinition,
 	normalizeProviderId,
 	type ProviderDefinition,
 } from "../provider-registry";
+import { LocalCliChatModel } from "./local-cli-chat-model";
 
 // --- per-provider reasoning-effort capability table -----------------------
 
@@ -283,6 +285,10 @@ export interface OpenScreenChatModelConfig {
 	apiKey?: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
+	/** Folders of open recordings the local CLI may Read / watch. */
+	mediaDirs?: string[];
+	localAgentPermission?: "ask" | "always" | "never";
+	watchGranted?: boolean;
 }
 
 // ponytail: placeholder API key for self-hosted OpenAI-compatible endpoints
@@ -318,7 +324,9 @@ function isKnownClaudeSlug(model: string): boolean {
 
 export function resolveOpenAIChatApiKey(provider: string, apiKey?: string): string | undefined {
 	if (apiKey) return apiKey;
-	return provider === "openai-compatible" ? OPENAI_COMPATIBLE_NO_AUTH_API_KEY : undefined;
+	return provider === "openai-compatible" || provider === "local-cli"
+		? OPENAI_COMPATIBLE_NO_AUTH_API_KEY
+		: undefined;
 }
 
 /** Flattens LangChain MessageContent (a string, or an array of text and
@@ -382,6 +390,27 @@ export async function createOpenScreenChatModel(
 
 	// ponytail: MiniMax rides a non-default SDK path — its wire format is
 	// Anthropic's, not OpenAI's, despite the OpenAI-looking model names.
+	if (config.provider === "local-cli") {
+		if (isHttpLocalCli(config.baseUrl)) {
+			return new ChatOpenAI({
+				apiKey: OPENAI_COMPATIBLE_NO_AUTH_API_KEY,
+				model: config.model,
+				configuration: { baseURL: config.baseUrl },
+			});
+		}
+		const binPath = cliPathFromBaseUrl(config.baseUrl);
+		if (!binPath) {
+			throw new Error(
+				"Local CLI agent has no executable path. Rescan PATH and pick the agent again.",
+			);
+		}
+		return new LocalCliChatModel({
+			agentId: config.model,
+			binPath,
+			mediaDirs: config.mediaDirs,
+		});
+	}
+
 	if (config.provider === "minimax" || config.provider === "minimax-token-plan") {
 		return createLocalProviderChatModel(config, reasoningOptions);
 	}

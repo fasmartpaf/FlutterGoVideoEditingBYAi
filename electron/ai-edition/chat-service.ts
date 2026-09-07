@@ -30,7 +30,7 @@ import {
 	compactionSplitIndex,
 	DEFAULT_BUDGET_TOKENS,
 } from "./chat-compaction";
-import type { CursorTelemetryReader } from "./deep-agent/service";
+import type { CliEngine, CursorTelemetryReader } from "./deep-agent/service";
 import type { DocumentService } from "./document-service";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
@@ -270,6 +270,7 @@ export interface ChatRunEnv {
 	/** Reads recorded cursor telemetry for an asset. Built in `electron/ipc/
 	 *  handlers.ts`, where the path allow-list lives. */
 	cursor?: CursorTelemetryReader;
+	cli?: CliEngine;
 }
 
 // ponytail: zero-config noop for sink callbacks that the caller did not provide.
@@ -316,8 +317,30 @@ export async function runChat(
 	if (!apiKey && def.authKind === "api-key") {
 		return {
 			success: false,
-			error: `No API key for ${def.label}. Add one in Settings → AI.`,
+			error: `No API key for ${def.label}. Add one in Settings → AI, or pick a local agent from the chat.`,
 		};
+	}
+	if (def.authKind === "local-cli" && !config.model) {
+		return {
+			success: false,
+			error: "No local agent selected. Open the Local CLI menu in the chat and pick one.",
+		};
+	}
+	if (def.authKind === "local-cli") {
+		const { formatLocalCliError, listLocalAgents } = await import("./local-agents");
+		const agents = await listLocalAgents();
+		const selected = agents.find(
+			(agent) =>
+				agent.id === config.model ||
+				agent.models?.includes(config.model) ||
+				(agent.path && config.baseUrl === `cli:${agent.path}`),
+		);
+		if (selected && !selected.ready) {
+			return {
+				success: false,
+				error: formatLocalCliError(selected.statusNote ?? "not logged in"),
+			};
+		}
 	}
 
 	const sessions = getProjectSessions(projectId);
@@ -405,12 +428,15 @@ export async function runChat(
 			apiKey: apiKey ?? undefined,
 			baseUrl: config.baseUrl,
 			reasoningEffort: config.reasoningEffort,
+			localAgentPermission: config.localAgentPermission,
+			watchGranted: config.localAgentPermission === "always" || llmConfig.isSessionWatchGranted(),
 		},
 		history,
 		userMessage: message,
 		sink: agentSink,
 		editsAllowed,
 		cursor: env.cursor,
+		cli: env.cli,
 	});
 
 	if (!result.text) {

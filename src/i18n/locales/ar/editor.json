@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "حذف \"{{title}}\"؟",
 		"emptyState": "لا توجد رسائل بعد. اطلب من الوكيل قص الصمت أو تقليص الوقفات أو إضافة ترجمات.",
 		"welcome": {
-			"title": "أحضر ذكاءك الاصطناعي الخاص",
-			"subtitle": "تعمل المحادثة على تعديل الفيديو عبر التحدث إلى نموذج لغوي. اختر المزوّد الذي تثق به واربط مفتاح API للبدء.",
+			"title": "تحدث إلى وكيل محلي",
+			"subtitle": "يستخدم الدردشة وكيلاً مثبتاً على هذا الجهاز — Claude Code أو Codex أو Cursor أو Gemini أو Ollama. لا مفتاح API في الإعدادات.",
 			"feature1": "اقطع الصمت، اضغط الوقفات، أزل الكلمات الحشوية",
 			"feature2": "أضف ترجمات، كبّر الكاميرا، أنشئ عنواناً",
 			"feature3": "أعد كتابة قسم، أو أعِد صياغته، أو قسّم مقطعاً عند الطلب",
-			"cta": "إعداد مزوّد",
-			"disclaimer": "سيُرسَل نصّ فيديوك إلى المزوّد الذي تختاره. لا يُشارَك شيء قبل أن تربط مزوّداً."
+			"cta": "ابحث عن الوكلاء المحليين",
+			"disclaimer": "تبقى المطالبة ولقطة المشروع مع واجهة الأوامر المحلية. لا يُرسل شيء إلى مزود سحابي حتى تختار واحداً."
 		},
 		"authorUser": "أنت",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "التبديل بين الجلسات أو إنشاء جلسة جديدة",
 			"empty": "لا توجد محادثات بعد.",
 			"msgsCount": "{{count}} رسالة · {{date}}"
+		},
+		"localCli": {
+			"title": "واجهة أوامر محلية",
+			"subtitle": "الوكلاء المثبتون على هذا الجهاز",
+			"useLocalCli": "استخدام الواجهة المحلية",
+			"active": "نشط",
+			"selected": "محدد",
+			"agentsHeading": "وكلاء محليون",
+			"rescanPath": "إعادة فحص PATH",
+			"scanning": "جارٍ الفحص…",
+			"noneFound": "لا يوجد وكلاء محليون في PATH. ثبّت Claude Code أو Codex أو Cursor Agent أو Gemini CLI أو Ollama ثم أعد الفحص.",
+			"openSettings": "فتح إعدادات التنفيذ",
+			"composerDisabled": "اختر وكيلاً محلياً لبدء الدردشة.",
+			"needsLogin": "يلزم تسجيل الدخول",
+			"login": "تسجيل الدخول",
+			"loginHint": "أكمل تسجيل الدخول في Terminal ثم أعد فحص PATH.",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

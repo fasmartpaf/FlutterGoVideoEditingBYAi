@@ -32,6 +32,11 @@ export default defineConfig({
 					return startup(["."], { env });
 				},
 				vite: {
+					resolve: {
+						alias: {
+							"@": path.resolve(__dirname, "src"),
+						},
+					},
 					build: {},
 				},
 			},

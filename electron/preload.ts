@@ -380,6 +380,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setTitleBarOverlay: (color: string, symbolColor: string) => {
 		ipcRenderer.send("set-titlebar-overlay", color, symbolColor);
 	},
+	writeClipboardText: (text: string) =>
+		ipcRenderer.invoke("clipboard:writeText", text) as Promise<void>,
 	getPlatform: () => PLATFORM,
 	/** App identity for the HUD's settings panel: the running version, and whether this copy
 	 *  may offer an update check at all — a Store/Flathub/Snap/Nix install may not, see

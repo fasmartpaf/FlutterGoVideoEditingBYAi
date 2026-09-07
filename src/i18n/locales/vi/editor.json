@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "Xóa \"{{title}}\"?",
 		"emptyState": "Chưa có tin nhắn nào. Yêu cầu tác nhân cắt khoảng lặng, rút ngắn khoảng dừng hoặc thêm phụ đề.",
 		"welcome": {
-			"title": "Mang theo AI của bạn",
-			"subtitle": "Chat chỉnh sửa video của bạn bằng cách trò chuyện với một mô hình ngôn ngữ. Hãy chọn nhà cung cấp bạn tin tưởng và kết nối khóa API để bắt đầu.",
+			"title": "Nói chuyện với agent local",
+			"subtitle": "Chat dùng agent đã cài trên máy này — Claude Code, Codex, Cursor, Gemini hoặc Ollama. Không cần khóa API trong Cài đặt.",
 			"feature1": "Cắt khoảng lặng, rút ngắn nhịp nghỉ, loại bỏ từ đệm",
 			"feature2": "Thêm phụ đề, zoom vào camera, tạo tiêu đề",
 			"feature3": "Viết lại một đoạn, diễn đạt khác hoặc tách clip theo yêu cầu",
-			"cta": "Thiết lập nhà cung cấp",
-			"disclaimer": "Bản chép lời video sẽ được gửi đến nhà cung cấp bạn chọn. Không có gì được chia sẻ cho đến khi bạn kết nối một nhà cung cấp."
+			"cta": "Quét agent local",
+			"disclaimer": "Lời nhắc và ảnh chụp dự án ở lại CLI local đó. Không gửi gì lên nhà cung cấp đám mây cho đến khi bạn chọn một nhà."
 		},
 		"authorUser": "Bạn",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "Chuyển đổi hoặc tạo phiên",
 			"empty": "Chưa có cuộc trò chuyện nào.",
 			"msgsCount": "{{count}} tin nhắn · {{date}}"
+		},
+		"localCli": {
+			"title": "CLI local",
+			"subtitle": "Agent đã cài trên máy này",
+			"useLocalCli": "Dùng CLI local",
+			"active": "đang bật",
+			"selected": "đã chọn",
+			"agentsHeading": "Agent local",
+			"rescanPath": "Quét lại PATH",
+			"scanning": "Đang quét…",
+			"noneFound": "Không có agent local trên PATH. Cài Claude Code, Codex, Cursor Agent, Gemini CLI hoặc Ollama rồi quét lại.",
+			"openSettings": "Mở cài đặt thực thi",
+			"composerDisabled": "Chọn một agent local để bắt đầu chat.",
+			"needsLogin": "Cần đăng nhập",
+			"login": "Đăng nhập",
+			"loginHint": "Hoàn tất đăng nhập trong Terminal, rồi quét lại PATH.",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

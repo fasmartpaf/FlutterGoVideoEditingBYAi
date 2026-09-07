@@ -502,10 +502,25 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							);
 						case "llm.getSnapshot":
 							return createSuccessResponse(requestId, await aiEditionService.llmGetSnapshot());
+						case "llm.rescanLocalAgents":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmRescanLocalAgents(),
+							);
+						case "llm.loginLocalAgent":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmLoginLocalAgent(request.payload.agentId),
+							);
 						case "llm.setConfig":
 							return createSuccessResponse(
 								requestId,
 								await aiEditionService.llmSetConfig(request.payload.config),
+							);
+						case "llm.grantWatchSession":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmGrantWatchSession(),
 							);
 						case "llm.setApiKey":
 							return createSuccessResponse(

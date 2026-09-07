@@ -64,6 +64,16 @@ describe("classifyTranscriptionError", () => {
 		).toBe("no-audio");
 	});
 
+	it("recognises the native ffmpeg / Electron IPC wrap", () => {
+		const failure = classifyTranscriptionError(
+			new Error(
+				"Error invoking remote method 'stt:transcribe': NoAudioTrackError: No decodable audio in /tmp/rec.mp4: Output file does not contain any stream",
+			),
+		);
+		expect(failure.kind).toBe("no-audio");
+		expect(isPermanentFailure(failure.kind)).toBe(true);
+	});
+
 	it("recognises an audio codec the caption path cannot read", () => {
 		const failure = classifyTranscriptionError(
 			new Error("Audio codec not supported for captions: ac-3"),

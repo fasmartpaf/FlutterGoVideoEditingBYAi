@@ -47,6 +47,7 @@ import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { resolveCaptionLane } from "@/lib/ai-edition/captions/settings";
 import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
+import { openTimelineMedia } from "@/lib/ai-edition/document/timeline";
 import type { InsertSide } from "@/lib/ai-edition/document/transcript";
 import type {
 	AxcutAsset,
@@ -2350,6 +2351,7 @@ export function VideoEffectsPane() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
+	const openMedia = openTimelineMedia(document);
 
 	// Same source the ratio picker reads, so "fill frame" and the ORIGINAL section of that menu
 	// can never disagree about what shape the footage is. Already sorted by clip count then by
@@ -2388,6 +2390,22 @@ export function VideoEffectsPane() {
 			// fragment of the other, so joining them survives translation and RTL alike.
 			helpText={`${ts("background.help")} ${ts("effects.help")}`}
 		>
+			{openMedia ? (
+				<p
+					title={openMedia.label}
+					style={{
+						margin: "-2px 0 10px",
+						fontSize: 12,
+						lineHeight: 1.35,
+						color: "var(--muted)",
+						overflow: "hidden",
+						textOverflow: "ellipsis",
+						whiteSpace: "nowrap",
+					}}
+				>
+					{openMedia.label}
+				</p>
+			) : null}
 			<BackgroundSection />
 			<div className={styles.sectionHead}>
 				<span className={styles.sectionLabel}>{ts("effects.frame")}</span>

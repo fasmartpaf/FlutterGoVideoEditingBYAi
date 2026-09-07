@@ -63,30 +63,21 @@ export function EditorTopBar({
 	const { theme, toggle: toggleTheme } = useTheme();
 	const t = useScopedT("editor");
 
-	// ponytail: the left side panel only renders in "edit" mode (see
-	// NewEditorShell body), so its toggle is meaningless in Media/Rec —
-	// hide the button (and its separator) there to keep the topbar honest.
-	const showChatToggle = mode === "edit";
 	return (
 		<header className={styles.topbar}>
-			{/* Fixed-width slot: the toggle is Edit-only, and .topbarLead holds its
-			    space in the other modes so nothing to the right moves. */}
+			{/* Agent toggle stays visible in Media/Rec so it can jump to Edit + chat. */}
 			<span className={styles.topbarLead}>
-				{showChatToggle ? (
-					<>
-						<button
-							type="button"
-							className={`${styles.iconBtn}${chatOpen ? ` ${styles.on}` : ""}`}
-							title={t("topbar.toggleChatPanel")}
-							aria-label={t("topbar.toggleChatPanel")}
-							aria-pressed={chatOpen}
-							onClick={actions.toggleChat}
-						>
-							<PanelLeft size={17} />
-						</button>
-						<span className={styles.sep} aria-hidden />
-					</>
-				) : null}
+				<button
+					type="button"
+					className={`${styles.iconBtn}${chatOpen && mode === "edit" ? ` ${styles.on}` : ""}`}
+					title={t("topbar.toggleChatPanel")}
+					aria-label={t("topbar.toggleChatPanel")}
+					aria-pressed={chatOpen && mode === "edit"}
+					onClick={actions.toggleChat}
+				>
+					<PanelLeft size={17} />
+				</button>
+				<span className={styles.sep} aria-hidden />
 			</span>
 			<AppMenu actions={actions} />
 			<span className={styles.sep} aria-hidden />

@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "Удалить «{{title}}»?",
 		"emptyState": "Пока нет сообщений. Попросите агента вырезать паузы, уплотнить их или добавить субтитры.",
 		"welcome": {
-			"title": "Подключите свой ИИ",
-			"subtitle": "Чат редактирует видео через языковую модель. Выберите провайдера, которому доверяете, и подключите API-ключ, чтобы начать.",
+			"title": "Общайтесь с локальным агентом",
+			"subtitle": "Чат использует агента, уже установленного на этом компьютере — Claude Code, Codex, Cursor, Gemini или Ollama. Без ключа API в настройках.",
 			"feature1": "Вырезает тишину, сокращает паузы, убирает слова-паразиты",
 			"feature2": "Добавляет субтитры, зум на камеру, генерирует заголовок",
 			"feature3": "Переписывает раздел, перефразирует или разрезает клип по запросу",
-			"cta": "Настроить провайдера",
-			"disclaimer": "Транскрипция вашего видео будет отправлена выбранному провайдеру. Пока вы не подключите провайдера, ничего не отправляется."
+			"cta": "Найти локальные агенты",
+			"disclaimer": "Запрос и снимок проекта остаются у этого локального CLI. Ничего не отправляется в облако, пока вы не выберете провайдера."
 		},
 		"authorUser": "Вы",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "Переключить или создать сессию",
 			"empty": "Пока нет бесед.",
 			"msgsCount": "{{count}} сообщ. · {{date}}"
+		},
+		"localCli": {
+			"title": "Локальный CLI",
+			"subtitle": "Агенты, установленные на этом компьютере",
+			"useLocalCli": "Использовать локальный CLI",
+			"active": "активно",
+			"selected": "выбрано",
+			"agentsHeading": "Локальные агенты",
+			"rescanPath": "Пересканировать PATH",
+			"scanning": "Сканирование…",
+			"noneFound": "В PATH нет локальных агентов. Установите Claude Code, Codex, Cursor Agent, Gemini CLI или Ollama и пересканируйте.",
+			"openSettings": "Открыть настройки выполнения",
+			"composerDisabled": "Выберите локальный агент, чтобы начать чат.",
+			"needsLogin": "Нужен вход",
+			"login": "Войти",
+			"loginHint": "Завершите вход в Terminal, затем пересканируйте PATH.",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

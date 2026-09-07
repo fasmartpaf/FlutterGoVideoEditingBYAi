@@ -15,5 +15,6 @@ export function canSendChat(
 	if (llmConfig === null) return false;
 	// llmDisconnect resets the active config to provider: "".
 	if (llmConfig.provider === "") return false;
+	if (llmConfig.provider === "local-cli") return Boolean(llmConfig.model);
 	return connectedProviders.includes(llmConfig.provider);
 }

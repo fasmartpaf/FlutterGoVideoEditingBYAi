@@ -831,6 +831,21 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 });
 
 describe("useTimeline selection", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+		});
+	});
+
+	it("selects the open clip when a project first loads", () => {
+		const { result } = renderTimeline();
+		expect(result.current.clipSelection).toBe("clip_a");
+	});
+
 	// A pill and a clip are one selection, not two. While both could be set at
 	// once, copy/paste keyed off "is a clip selected?" and so acted on the clip
 	// whatever the user had actually clicked.

@@ -1,0 +1,8 @@
+[
+	{
+		"op": "trim",
+		"startSec": 0,
+		"endSec": 0.35,
+		"reason": "cut recording preroll"
+	}
+]

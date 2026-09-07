@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "刪除「{{title}}」？",
 		"emptyState": "尚無訊息。可以請代理剪掉靜音、收緊停頓或加入字幕。",
 		"welcome": {
-			"title": "自帶你的 AI",
-			"subtitle": "聊天透過與語言模型對話來編輯你的影片。選擇你信任的提供者並連接一個 API 金鑰即可開始。",
+			"title": "與本機代理程式對話",
+			"subtitle": "聊天會使用這台電腦已安裝的代理程式——Claude Code、Codex、Cursor、Gemini 或 Ollama。設定中不需要 API 金鑰。",
 			"feature1": "剪輯靜音、收緊停頓、去除口頭禪",
 			"feature2": "新增字幕、為鏡頭變焦、產生標題",
 			"feature3": "依需求重寫段落、換種說法或分割片段",
-			"cta": "設定提供者",
-			"disclaimer": "你影片的轉錄文字會送到你選擇的提供者。在你連接之前不會分享任何內容。"
+			"cta": "掃描本機代理程式",
+			"disclaimer": "提示與專案快照會留在該本機 CLI。在你選擇雲端供應商之前，不會傳送任何內容。"
 		},
 		"authorUser": "你",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "切換或新增工作階段",
 			"empty": "尚無對話。",
 			"msgsCount": "{{count}} 則訊息 · {{date}}"
+		},
+		"localCli": {
+			"title": "本機 CLI",
+			"subtitle": "這台電腦已安裝的代理程式",
+			"useLocalCli": "使用本機 CLI",
+			"active": "使用中",
+			"selected": "已選取",
+			"agentsHeading": "本機代理程式",
+			"rescanPath": "重新掃描 PATH",
+			"scanning": "掃描中…",
+			"noneFound": "PATH 上沒有本機代理程式。請安裝 Claude Code、Codex、Cursor Agent、Gemini CLI 或 Ollama，然後再掃描。",
+			"openSettings": "開啟執行設定",
+			"composerDisabled": "請先選擇本機代理程式再開始聊天。",
+			"needsLogin": "需要登入",
+			"login": "登入",
+			"loginHint": "請在終端機完成登入，然後重新掃描 PATH。",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

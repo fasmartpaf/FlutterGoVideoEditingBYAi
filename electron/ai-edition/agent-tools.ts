@@ -24,16 +24,20 @@ import {
 } from "../../src/lib/ai-edition/document/audioTracks";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import {
+	insertClip,
 	moveClip,
+	openTimelineMedia,
 	planTimelineReplacement,
 	type RegionKind,
 	removeClip,
 	removeRegion,
 	replaceTimeline,
+	resolvePlaybackSegments,
+	setClipCropRegion,
 	setClipSourceRange,
 } from "../../src/lib/ai-edition/document/timeline";
 import { setDocumentWordText } from "../../src/lib/ai-edition/document/transcript";
-import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import { type AxcutDocument, clipCropRegionSchema } from "../../src/lib/ai-edition/schema";
 import { hasAnyClipWithCamera } from "../../src/lib/ai-edition/timeline/camera";
 import { isGeneratedAssetId } from "../../src/lib/ai-edition/timeline/clip-parts";
 import {
@@ -425,6 +429,31 @@ export const moveClipArgs = z.object({
 	beforeClipId: z.string().min(1).nullish(),
 });
 
+export const addClipArgs = z.object({
+	assetId: z.string().min(1),
+	beforeClipId: z.string().min(1).nullish(),
+	sourceStartSec: secondsSchema.optional(),
+	sourceEndSec: secondsSchema.optional(),
+	reason: z.string().optional(),
+});
+
+export const setClipCropArgs = z.object({
+	clipId: z.string().min(1),
+	crop: clipCropRegionSchema.nullable(),
+});
+
+const textAnimationSchema = z.enum([
+	"none",
+	"fade",
+	"rise",
+	"pop",
+	"slide-left",
+	"typewriter",
+	"pulse",
+]);
+
+const fadeSecSchema = z.number().nonnegative().max(60);
+
 export const getTranscriptArgs = z.object({
 	assetId: z.string().min(1).optional(),
 });
@@ -477,12 +506,29 @@ export const setSpeedArgs = z.object({
 	speed: z.number().positive().optional(),
 });
 
+const annotationColorSchema = z.string().min(1).max(64);
+const annotationTypeSchema = z.enum(["text", "figure", "blur"]);
+
 export const addAnnotationArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	text: z.string().default(""),
 	x: z.number().min(0).max(100).default(50),
 	y: z.number().min(0).max(100).default(50),
+	width: z.number().positive().max(100).default(30),
+	height: z.number().positive().max(100).default(20),
+	type: annotationTypeSchema.default("text"),
+	textAnimation: textAnimationSchema.default("none"),
+	color: annotationColorSchema.default("#ffffff"),
+	backgroundColor: annotationColorSchema.default("transparent"),
+	fontSize: z.number().positive().max(200).default(32),
+	fontWeight: z.enum(["normal", "bold"]).default("bold"),
+	textAlign: z.enum(["left", "center", "right"]).default("center"),
+	arrowDirection: z
+		.enum(["up", "down", "left", "right", "up-right", "up-left", "down-right", "down-left"])
+		.default("right"),
+	blurKind: z.enum(["blur", "mosaic"]).default("mosaic"),
+	blurShape: z.enum(["rectangle", "oval"]).default("rectangle"),
 });
 
 export const setAnnotationArgs = z.object({
@@ -490,6 +536,21 @@ export const setAnnotationArgs = z.object({
 	startSec: secondsSchema.optional(),
 	endSec: secondsSchema.optional(),
 	text: z.string().optional(),
+	x: z.number().min(0).max(100).optional(),
+	y: z.number().min(0).max(100).optional(),
+	width: z.number().positive().max(100).optional(),
+	height: z.number().positive().max(100).optional(),
+	textAnimation: textAnimationSchema.optional(),
+	color: annotationColorSchema.optional(),
+	backgroundColor: annotationColorSchema.optional(),
+	fontSize: z.number().positive().max(200).optional(),
+	fontWeight: z.enum(["normal", "bold"]).optional(),
+	textAlign: z.enum(["left", "center", "right"]).optional(),
+	arrowDirection: z
+		.enum(["up", "down", "left", "right", "up-right", "up-left", "down-right", "down-left"])
+		.optional(),
+	blurKind: z.enum(["blur", "mosaic"]).optional(),
+	blurShape: z.enum(["rectangle", "oval"]).optional(),
 });
 
 export const addAudioArgs = z.object({
@@ -499,6 +560,8 @@ export const addAudioArgs = z.object({
 	kind: z.enum(["voiceover", "music"]).default("music"),
 	offsetSec: secondsSchema.default(0),
 	gainDb: z.number().min(-60).max(12).default(0),
+	fadeInSec: fadeSecSchema.default(0),
+	fadeOutSec: fadeSecSchema.default(0),
 });
 
 export const setAudioArgs = z.object({
@@ -508,6 +571,8 @@ export const setAudioArgs = z.object({
 	kind: z.enum(["voiceover", "music"]).optional(),
 	offsetSec: secondsSchema.optional(),
 	gainDb: z.number().min(-60).max(12).optional(),
+	fadeInSec: fadeSecSchema.optional(),
+	fadeOutSec: fadeSecSchema.optional(),
 	muted: z.boolean().optional(),
 	loop: z.boolean().optional(),
 });
@@ -541,6 +606,36 @@ export const removeTrimArgs = z.object({
 
 export const removeModifierArgs = z.object({
 	id: z.string().min(1),
+});
+
+export const setAspectRatioArgs = z.object({
+	value: z.string().min(1),
+});
+
+export const setBackgroundArgs = z.object({
+	wallpaper: z.string().min(1),
+});
+
+export const listSourcesArgs = z.object({});
+
+export const recordScreenArgs = z.object({
+	window: z.string().min(1).optional(),
+	display: z.number().int().nonnegative().optional(),
+	durationSec: z.number().positive().max(600).default(15),
+	mic: z.boolean().optional(),
+	systemAudio: z.boolean().optional(),
+});
+
+export const generateCaptionsArgs = z.object({
+	minWords: z.number().int().positive().optional(),
+	maxWords: z.number().int().positive().optional(),
+});
+
+export const exportProjectArgs = z.object({
+	out: z.string().min(1).optional(),
+	quality: z.enum(["medium", "good", "source"]).optional(),
+	format: z.enum(["mp4", "gif"]).optional(),
+	autoZoom: z.boolean().optional(),
 });
 
 export const removeClipArgs = z.object({
@@ -577,6 +672,8 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"addTrims",
 	"setTrim",
 	"setClipRange",
+	"addClip",
+	"setClipCrop",
 	"moveClip",
 	"replaceTimeline",
 	"addZoom",
@@ -593,6 +690,12 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"removeTrim",
 	"removeModifier",
 	"removeClip",
+	"setAspectRatio",
+	"setBackground",
+	"listSources",
+	"recordScreen",
+	"generateCaptions",
+	"exportProject",
 ] as const;
 
 /**
@@ -649,6 +752,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addZooms",
 	"setTrim",
 	"setClipRange",
+	"addClip",
+	"setClipCrop",
 	"moveClip",
 	"replaceTimeline",
 	"addZoom",
@@ -664,14 +769,116 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"removeTrim",
 	"removeModifier",
 	"removeClip",
+	"setAspectRatio",
+	"setBackground",
+	"recordScreen",
+	"generateCaptions",
 ]);
 
 export function isMutatingTool(name: string): boolean {
 	return MUTATING_TOOL_NAMES.has(name);
 }
 
+function isAspectRatioToken(value: string): boolean {
+	return value === "native" || /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(value.trim());
+}
+
+function resolveWallpaperInput(input: string): string {
+	const trimmed = input.trim();
+	if (/^\d+$/.test(trimmed)) {
+		const index = Number(trimmed);
+		if (index < 1 || index > 18) {
+			throw new Error("Wallpaper index must be 1–18");
+		}
+		return `/wallpapers/wallpaper${index}.jpg`;
+	}
+	if (/^wallpaper\d+$/i.test(trimmed)) {
+		return `/wallpapers/${trimmed.toLowerCase()}.jpg`;
+	}
+	if (/^\/wallpapers\/wallpaper\d+\.jpg$/.test(trimmed)) return trimmed;
+	if (
+		trimmed.startsWith("#") ||
+		/^(rgb|rgba|hsl|hsla)\(/i.test(trimmed) ||
+		/(linear|radial|conic)-gradient\(/i.test(trimmed)
+	) {
+		return trimmed;
+	}
+	throw new Error(
+		"wallpaper must be a bundled /wallpapers/wallpaperN.jpg path, index 1–18, a CSS color, or a CSS gradient",
+	);
+}
+
+function patchLegacyEditor(document: AxcutDocument, patch: Record<string, unknown>): AxcutDocument {
+	const current =
+		document.legacyEditor && typeof document.legacyEditor === "object"
+			? { ...(document.legacyEditor as Record<string, unknown>) }
+			: {};
+	return { ...document, legacyEditor: { ...current, ...patch } };
+}
+
 function roundSec(ms: number): number {
 	return Math.round(ms) / 1000;
+}
+
+function projectQueueForModel(document: AxcutDocument): Record<string, unknown> {
+	const placedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
+	const placedAudioIds = new Set(document.audioTracks.map((t) => t.assetId));
+	const playback = resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges);
+	const editedDurationSec =
+		playback.length === 0 ? 0 : playback[playback.length - 1].timelineEndSec;
+	const unusedAssets = document.assets
+		.filter((a) => a.kind !== "audio" && !placedAssetIds.has(a.id))
+		.map((a) => ({
+			id: a.id,
+			label: a.label,
+			kind: a.kind,
+			durationSec: a.durationSec ?? null,
+			originalPath: a.originalPath,
+		}));
+	const unusedAudio = document.assets
+		.filter((a) => a.kind === "audio" && !placedAudioIds.has(a.id))
+		.map((a) => ({
+			id: a.id,
+			label: a.label,
+			durationSec: a.durationSec ?? null,
+		}));
+	const clips = document.timeline.clips.map((c, index) => {
+		const asset = document.assets.find((a) => a.id === c.assetId);
+		const sourceDurationSec = asset?.durationSec ?? null;
+		const placedEnd = c.sourceEndSec ?? sourceDurationSec ?? c.sourceStartSec;
+		const placedDurationSec = Math.max(0, placedEnd - c.sourceStartSec);
+		return {
+			index,
+			clipId: c.id,
+			assetId: c.assetId,
+			label: asset?.label ?? c.reason,
+			reason: c.reason,
+			sourceDurationSec,
+			placedSourceSec: { start: c.sourceStartSec, end: c.sourceEndSec ?? null },
+			placedDurationSec,
+			timelineSec: { start: c.timelineStartSec, end: c.timelineEndSec },
+			unusedHeadSec: c.sourceStartSec,
+			unusedTailSec:
+				sourceDurationSec != null && c.sourceEndSec != null
+					? Math.max(0, sourceDurationSec - c.sourceEndSec)
+					: null,
+			cropRegion: c.cropRegion ?? null,
+		};
+	});
+	return {
+		note:
+			"unusedAssets are recordings in this project that are not on the timeline — addClip places one. " +
+			"editedDurationSec is the playback length after trims. sourceDurationSec on each clip is the full file. " +
+			"Clip-to-clip video transitions and multi-band EQ are not fields on this document; do not invent them. " +
+			"Annotation textAnimation is the official text enter animation. Audio gainDb + fadeInSec/fadeOutSec is the official level/fade.",
+		editedDurationSec,
+		clipCount: clips.length,
+		unusedAssetCount: unusedAssets.length,
+		unusedAudioCount: unusedAudio.length,
+		clips,
+		unusedAssets,
+		unusedAudio,
+	};
 }
 
 // Compact projection of the document for the model: everything it needs to
@@ -728,6 +935,18 @@ export function documentSnapshotForModel(
 			"a setZoom that only changes depth on such a zoom clears customScale so the depth takes effect.",
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
+		openMedia: openTimelineMedia(document),
+		openMediaNote:
+			"visibleMedia lists every recording in this project. Watch those (ffmpeg stills, then Read) before you describe what is on screen or suggest edits. The JSON snapshot is metadata, not the picture. A transcript is optional; do not wait for captions.",
+		visibleMedia: document.assets
+			.filter((a) => a.kind !== "audio" && Boolean(a.originalPath?.trim()))
+			.filter((a) => !/^https?:\/\//i.test(a.originalPath))
+			.map((a) => ({
+				id: a.id,
+				label: a.label,
+				kind: a.kind,
+				originalPath: a.originalPath,
+			})),
 		autoFocusAll,
 		hasAnyCamera: hasAnyClipWithCamera(document.assets, document.timeline.clips),
 		cursorNote:
@@ -743,6 +962,7 @@ export function documentSnapshotForModel(
 			// played by an audio track. Without this the model sees an asset it cannot
 			// explain and tries to place it on the timeline as footage.
 			kind: a.kind,
+			originalPath: a.originalPath,
 			durationSec: a.durationSec ?? null,
 			hasCameraTrack: a.cameraTrack != null,
 			cameraVisible: a.cameraTrack?.visible ?? false,
@@ -771,7 +991,9 @@ export function documentSnapshotForModel(
 			sourceEndSec: c.sourceEndSec ?? null,
 			timelineStartSec: c.timelineStartSec,
 			timelineEndSec: c.timelineEndSec,
+			...(c.cropRegion ? { cropRegion: c.cropRegion } : {}),
 		})),
+		projectQueue: projectQueueForModel(document),
 		trimRanges: document.timeline.trimRanges.map((s) => ({
 			id: s.id,
 			assetId: s.assetId,
@@ -809,6 +1031,16 @@ export function documentSnapshotForModel(
 			endSec: roundSec(a.endMs),
 			type: a.type,
 			text: a.textContent ?? a.content ?? "",
+			x: a.position?.x ?? 50,
+			y: a.position?.y ?? 50,
+			width: a.size?.width ?? 30,
+			height: a.size?.height ?? 20,
+			textAnimation: a.style?.textAnimation ?? "none",
+			color: a.style?.color ?? "#ffffff",
+			backgroundColor: a.style?.backgroundColor ?? "transparent",
+			fontSize: a.style?.fontSize ?? 32,
+			...(a.figureData ? { arrowDirection: a.figureData.arrowDirection } : {}),
+			...(a.blurData ? { blurKind: a.blurData.type, blurShape: a.blurData.shape } : {}),
 		})),
 		cameraFullscreenRegions: coalesceForAgent(cameraFullscreenRegions).map((c) => ({
 			id: c.id,
@@ -828,10 +1060,14 @@ export function documentSnapshotForModel(
 			// Where in the FILE the track starts playing, in that file's own seconds.
 			offsetSec: roundSec(t.offsetMs),
 			gainDb: t.gainDb,
+			fadeInSec: roundSec(t.fadeInMs),
+			fadeOutSec: roundSec(t.fadeOutMs),
 			muted: t.muted,
 			loop: t.loop,
 		})),
 		hasTranscript: document.transcripts.length > 0 || document.transcript !== null,
+		aspectRatio: typeof legacy?.aspectRatio === "string" ? legacy.aspectRatio : "native",
+		wallpaper: typeof legacy?.wallpaper === "string" ? legacy.wallpaper : null,
 	};
 }
 
@@ -1518,6 +1754,97 @@ export function executeAgentTool(
 			};
 		}
 
+		case "addClip": {
+			const parsed = addClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { assetId } = parsed.data;
+			const asset = document.assets.find((a) => a.id === assetId);
+			if (!asset) {
+				const unused = document.assets.filter(
+					(a) => a.kind !== "audio" && !document.timeline.clips.some((c) => c.assetId === a.id),
+				);
+				return failure(
+					`Unknown asset: ${assetId}.` +
+						(unused.length
+							? ` Unused footage in this project: ${unused.map((a) => `${a.id} (${a.label})`).join(", ")}.`
+							: " This project has no unused footage — every video asset is already on the timeline, or there is none to place."),
+				);
+			}
+			if (asset.kind === "audio") {
+				return failure(
+					`Asset ${assetId} is audio, not footage. addClip places a recording; to play imported audio use addAudio.`,
+				);
+			}
+			const beforeClipId = parsed.data.beforeClipId ?? null;
+			let insertIndex = document.timeline.clips.length;
+			if (beforeClipId !== null) {
+				insertIndex = document.timeline.clips.findIndex((c) => c.id === beforeClipId);
+				if (insertIndex < 0) {
+					return failure(`Unknown clip: ${beforeClipId}. ${clipRoster(document)}`);
+				}
+			}
+			let next: AxcutDocument;
+			try {
+				next = insertClip(
+					document,
+					assetId,
+					insertIndex,
+					"agent",
+					parsed.data.reason ?? "",
+					parsed.data.sourceStartSec ?? 0,
+					parsed.data.sourceEndSec,
+				);
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			const previousIds = new Set(document.timeline.clips.map((c) => c.id));
+			const placed = next.timeline.clips.find((c) => !previousIds.has(c.id));
+			const order = next.timeline.clips.map((c) => c.id);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					clipId: placed?.id ?? next.timeline.clips[Math.min(insertIndex, order.length - 1)]?.id,
+					assetId,
+					clipOrder: order,
+					sourceStartSec: placed?.sourceStartSec,
+					sourceEndSec: placed?.sourceEndSec ?? null,
+					timelineStartSec: placed?.timelineStartSec,
+					timelineEndSec: placed?.timelineEndSec,
+					joined: placed == null,
+				}),
+				summary: `placed ${asset.label} ${beforeClipId ? `before ${beforeClipId}` : "at the end"}`,
+			};
+		}
+
+		case "setClipCrop": {
+			const parsed = setClipCropArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { clipId, crop } = parsed.data;
+			if (!document.timeline.clips.some((c) => c.id === clipId)) {
+				return failure(`Unknown clip: ${clipId}. ${clipRoster(document)}`);
+			}
+			let next: AxcutDocument;
+			try {
+				next = setClipCropRegion(document, clipId, crop);
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			const after = next.timeline.clips.find((c) => c.id === clipId);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					clipId,
+					cropRegion: after?.cropRegion ?? null,
+				}),
+				summary:
+					after?.cropRegion != null
+						? `cropped ${clipId} to ${after.cropRegion.width}×${after.cropRegion.height} at (${after.cropRegion.x}, ${after.cropRegion.y})`
+						: `cleared crop on ${clipId}`,
+			};
+		}
+
 		case "moveClip": {
 			const parsed = moveClipArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
@@ -1857,22 +2184,43 @@ export function executeAgentTool(
 				id: createId("ann"),
 				startMs,
 				endMs,
-				type: "text" as const,
+				type: parsed.data.type,
 				content: parsed.data.text,
 				textContent: parsed.data.text,
 				position: { x: parsed.data.x, y: parsed.data.y },
-				size: { width: 30, height: 20 },
+				size: { width: parsed.data.width, height: parsed.data.height },
 				style: {
-					color: "#ffffff",
-					backgroundColor: "transparent",
-					fontSize: 32,
+					color: parsed.data.color,
+					backgroundColor: parsed.data.backgroundColor,
+					fontSize: parsed.data.fontSize,
 					fontFamily: "Inter",
-					fontWeight: "bold" as const,
+					fontWeight: parsed.data.fontWeight,
 					fontStyle: "normal" as const,
 					textDecoration: "none" as const,
-					textAlign: "center" as const,
+					textAlign: parsed.data.textAlign,
+					textAnimation: parsed.data.textAnimation,
 				},
 				zIndex: document.annotations.length + 1,
+				...(parsed.data.type === "figure"
+					? {
+							figureData: {
+								arrowDirection: parsed.data.arrowDirection,
+								color: parsed.data.color,
+								strokeWidth: 4,
+							},
+						}
+					: {}),
+				...(parsed.data.type === "blur"
+					? {
+							blurData: {
+								type: parsed.data.blurKind,
+								shape: parsed.data.blurShape,
+								color: "white" as const,
+								intensity: 12,
+								blockSize: 12,
+							},
+						}
+					: {}),
 			};
 			const placed = anchorForAgent(ann, document, "ann");
 			const landing = landingOf(placed, document);
@@ -1891,7 +2239,9 @@ export function executeAgentTool(
 					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
 				summary:
-					`added annotation "${parsed.data.text.slice(0, 24)}" ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					`added ${parsed.data.type} ${
+						parsed.data.text ? `"${parsed.data.text.slice(0, 24)}" ` : ""
+					}${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
 					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
@@ -1911,6 +2261,73 @@ export function executeAgentTool(
 								...a,
 								...(parsed.data.text !== undefined
 									? { content: parsed.data.text, textContent: parsed.data.text }
+									: {}),
+								...(parsed.data.x !== undefined || parsed.data.y !== undefined
+									? {
+											position: {
+												x: parsed.data.x ?? a.position.x,
+												y: parsed.data.y ?? a.position.y,
+											},
+										}
+									: {}),
+								...(parsed.data.width !== undefined || parsed.data.height !== undefined
+									? {
+											size: {
+												width: parsed.data.width ?? a.size.width,
+												height: parsed.data.height ?? a.size.height,
+											},
+										}
+									: {}),
+								...(parsed.data.textAnimation !== undefined ||
+								parsed.data.color !== undefined ||
+								parsed.data.backgroundColor !== undefined ||
+								parsed.data.fontSize !== undefined ||
+								parsed.data.fontWeight !== undefined ||
+								parsed.data.textAlign !== undefined
+									? {
+											style: {
+												...a.style,
+												...(parsed.data.textAnimation !== undefined
+													? { textAnimation: parsed.data.textAnimation }
+													: {}),
+												...(parsed.data.color !== undefined ? { color: parsed.data.color } : {}),
+												...(parsed.data.backgroundColor !== undefined
+													? { backgroundColor: parsed.data.backgroundColor }
+													: {}),
+												...(parsed.data.fontSize !== undefined
+													? { fontSize: parsed.data.fontSize }
+													: {}),
+												...(parsed.data.fontWeight !== undefined
+													? { fontWeight: parsed.data.fontWeight }
+													: {}),
+												...(parsed.data.textAlign !== undefined
+													? { textAlign: parsed.data.textAlign }
+													: {}),
+											},
+										}
+									: {}),
+								...(parsed.data.arrowDirection !== undefined && a.figureData
+									? {
+											figureData: {
+												...a.figureData,
+												arrowDirection: parsed.data.arrowDirection,
+												...(parsed.data.color !== undefined ? { color: parsed.data.color } : {}),
+											},
+										}
+									: {}),
+								...(a.blurData &&
+								(parsed.data.blurKind !== undefined || parsed.data.blurShape !== undefined)
+									? {
+											blurData: {
+												...a.blurData,
+												...(parsed.data.blurKind !== undefined
+													? { type: parsed.data.blurKind }
+													: {}),
+												...(parsed.data.blurShape !== undefined
+													? { shape: parsed.data.blurShape }
+													: {}),
+											},
+										}
 									: {}),
 							}
 						: a,
@@ -2023,7 +2440,7 @@ export function executeAgentTool(
 		case "addAudio": {
 			const parsed = addAudioArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
-			const { assetId, kind, offsetSec, gainDb } = parsed.data;
+			const { assetId, kind, offsetSec, gainDb, fadeInSec, fadeOutSec } = parsed.data;
 			const asset = document.assets.find((a) => a.id === assetId);
 			// Two distinct refusals, because they need two different corrections: an
 			// unknown id is a hallucinated asset, a video id is the model reaching for
@@ -2074,8 +2491,8 @@ export function executeAgentTool(
 					offsetMs: toMs(offsetSec),
 					gainDb,
 					loop: false,
-					fadeInMs: 0,
-					fadeOutMs: 0,
+					fadeInMs: toMs(fadeInSec),
+					fadeOutMs: toMs(fadeOutSec),
 					muted: false,
 					label: asset.label,
 					origin: "agent",
@@ -2129,6 +2546,10 @@ export function executeAgentTool(
 				...(parsed.data.muted !== undefined ? { muted: parsed.data.muted } : {}),
 				...(parsed.data.loop !== undefined ? { loop: parsed.data.loop } : {}),
 				...(parsed.data.offsetSec !== undefined ? { offsetMs: toMs(parsed.data.offsetSec) } : {}),
+				...(parsed.data.fadeInSec !== undefined ? { fadeInMs: toMs(parsed.data.fadeInSec) } : {}),
+				...(parsed.data.fadeOutSec !== undefined
+					? { fadeOutMs: toMs(parsed.data.fadeOutSec) }
+					: {}),
 			});
 
 			// A span or lane change re-anchors: drop the group and lay it down again, so
@@ -2249,6 +2670,46 @@ export function executeAgentTool(
 						: ""),
 			};
 		}
+
+		case "setAspectRatio": {
+			const parsed = setAspectRatioArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			if (!isAspectRatioToken(parsed.data.value)) {
+				return failure(`aspectRatio "${parsed.data.value}" is not a valid W:H token`);
+			}
+			const next = patchLegacyEditor(document, { aspectRatio: parsed.data.value });
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ aspectRatio: parsed.data.value }),
+				summary: `aspectRatio → ${parsed.data.value}`,
+			};
+		}
+
+		case "setBackground": {
+			const parsed = setBackgroundArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			try {
+				const wallpaper = resolveWallpaperInput(parsed.data.wallpaper);
+				const next = patchLegacyEditor(document, { wallpaper });
+				return {
+					ok: true,
+					document: next,
+					resultJson: JSON.stringify({ wallpaper }),
+					summary: `background → ${wallpaper}`,
+				};
+			} catch (error) {
+				return failure(error instanceof Error ? error.message : String(error));
+			}
+		}
+
+		case "listSources":
+		case "recordScreen":
+		case "generateCaptions":
+		case "exportProject":
+			return failure(
+				"CLI engine is not available in this runtime. These tools run only inside the OpenScreen app agent.",
+			);
 
 		default:
 			return failure(`Unknown tool: ${name}`);

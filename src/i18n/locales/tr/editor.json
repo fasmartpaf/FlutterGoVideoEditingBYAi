@@ -251,13 +251,13 @@
 		"confirmDeleteConversation": "\"{{title}}\" silinsin mi?",
 		"emptyState": "Henüz mesaj yok. Aracıdan sessizlikleri kesmesini, duraklamaları sıkılaştırmasını veya altyazı eklemesini isteyin.",
 		"welcome": {
-			"title": "Kendi yapay zekanızı getirin",
-			"subtitle": "Sohbet, videonuzu bir dil modeliyle konuşarak düzenler. Güvendiğiniz sağlayıcıyı seçin ve başlamak için bir API anahtarı bağlayın.",
+			"title": "Yerel bir ajanla konuş",
+			"subtitle": "Sohbet, bu bilgisayarda yüklü bir ajanı kullanır — Claude Code, Codex, Cursor, Gemini veya Ollama. Ayarlarda API anahtarı yok.",
 			"feature1": "Sessizlikleri keser, duraklamaları sıkılaştırır, dolgu kelimeleri kaldırır",
 			"feature2": "Altyazı ekler, kameraya yakınlaştırır, başlık üretir",
 			"feature3": "Bir bölümü yeniden yazar, ifadeyi değiştirir veya klibi isteğe göre böler",
-			"cta": "Sağlayıcı kur",
-			"disclaimer": "Videonuzun transkripsiyonu seçtiğiniz sağlayıcıya gönderilecek. Bir sağlayıcı bağlamadan hiçbir şey paylaşılmaz."
+			"cta": "Yerel ajanları tara",
+			"disclaimer": "İstem ve proje anlık görüntüsü o yerel CLI'da kalır. Birini seçene kadar bulut sağlayıcısına hiçbir şey gönderilmez."
 		},
 		"authorUser": "Siz",
 		"authorAssistant": "OpenScreen",
@@ -282,6 +282,35 @@
 			"subtitle": "Oturum değiştir veya oluştur",
 			"empty": "Henüz konuşma yok.",
 			"msgsCount": "{{count}} mesaj · {{date}}"
+		},
+		"localCli": {
+			"title": "Yerel CLI",
+			"subtitle": "Bu bilgisayarda yüklü ajanlar",
+			"useLocalCli": "Yerel CLI kullan",
+			"active": "etkin",
+			"selected": "seçili",
+			"agentsHeading": "Yerel ajanlar",
+			"rescanPath": "PATH'i yeniden tara",
+			"scanning": "Taranıyor…",
+			"noneFound": "PATH'te yerel ajan yok. Claude Code, Codex, Cursor Agent, Gemini CLI veya Ollama kurun, sonra yeniden tarayın.",
+			"openSettings": "Yürütme ayarlarını aç",
+			"composerDisabled": "Sohbete başlamak için bir yerel ajan seçin.",
+			"needsLogin": "Oturum açın",
+			"login": "Oturum aç",
+			"loginHint": "Terminal'de oturumu bitirin, sonra PATH'i yeniden tarayın.",
+			"permissionLabel": "Agent permissions",
+			"permissionHint": "OpenScreen asks before the local agent can watch this project's recordings.",
+			"permissionAsk": "Ask me",
+			"permissionAskHint": "Prompt before watching a recording.",
+			"permissionAlways": "Always allow watching",
+			"permissionAlwaysHint": "The agent may use ffmpeg on this project's videos.",
+			"permissionNever": "Never watch",
+			"permissionNeverHint": "The agent only sees timeline metadata, not the picture.",
+			"watchPromptTitle": "Allow the agent to watch recordings?",
+			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
+			"watchAllowSession": "Allow this session",
+			"watchAllowAlways": "Always allow",
+			"watchNotNow": "Not now"
 		}
 	},
 	"newProjectDialog": {

@@ -330,6 +330,10 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 		...(region.source ? { source: region.source } : {}),
 	}));
 	editor.zoomRegions = reverseZoomRegions;
+	// Object.assign(legacy) above copies the v2 envelope, including an empty
+	// trimRegions from CLI record. Trims live on the Axcut timeline, so they
+	// must be written back after the assign — same as zoom/annotation.
+	editor.trimRegions = trimRegions;
 
 	const reverseAnnotationRegions: AnnotationRegion[] = (document.annotations ?? []).map(
 		(region) => ({

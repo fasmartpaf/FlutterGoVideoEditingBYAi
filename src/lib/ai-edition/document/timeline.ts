@@ -3,7 +3,13 @@
 // (store, exporter, agent) feeds an AxcutDocument and gets back intervals
 // or a new document with updated clips.
 
-import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
+import type {
+	AxcutClip,
+	AxcutClipCropRegion,
+	AxcutDocument,
+	AxcutTranscript,
+	AxcutTrimRange,
+} from "../schema";
 
 /**
  * What `resolvePlaybackSegments` returns: a clip-shaped slice of playable film.
@@ -70,6 +76,32 @@ export function normalizeIntervals(durationSec: number, intervals: Interval[]): 
 		last.endSec = Math.max(last.endSec, item.endSec);
 	}
 	return merged;
+}
+
+/** The footage the editor is showing: primary asset if it is on the timeline,
+ *  otherwise the first clip. Null only when the timeline has no video. */
+export function openTimelineMedia(document: AxcutDocument | null): {
+	clipId: string;
+	assetId: string;
+	label: string;
+	durationSec: number | null;
+	originalPath: string | null;
+} | null {
+	if (!document) return null;
+	const preferredAssetId = document.project.primaryAssetId;
+	const clip =
+		document.timeline.clips.find((row) => row.assetId === preferredAssetId) ??
+		document.timeline.clips[0];
+	if (!clip) return null;
+	const asset = document.assets.find((row) => row.id === clip.assetId);
+	const pathLabel = asset?.originalPath?.split(/[\\/]/).pop();
+	return {
+		clipId: clip.id,
+		assetId: clip.assetId,
+		label: asset?.label || pathLabel || clip.assetId,
+		durationSec: asset?.durationSec ?? null,
+		originalPath: asset?.originalPath ?? null,
+	};
 }
 
 export function primaryAssetDuration(document: AxcutDocument): number {
@@ -893,6 +925,76 @@ export function moveClip(
 	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
 	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
 	return withClipsChanged(document, reordered);
+}
+
+/**
+ * Place an existing project asset as a new clip. Same recipe as the media-panel
+ * drop (`insertClipAt` in the store): known duration or the 60s placeholder,
+ * then `withClipsChanged` so join / resequence / re-anchor stay one path.
+ *
+ * `insertIndex` is the position in the array AFTER the new clip is spliced in
+ * (0 = first, `clips.length` = last). The agent façade maps `beforeClipId`
+ * onto that, the same way `moveClip` does.
+ */
+export function insertClip(
+	document: AxcutDocument,
+	assetId: string,
+	insertIndex: number,
+	origin: "system" | "agent" | "user" = "agent",
+	reason = "",
+	sourceStartSec = 0,
+	sourceEndSec?: number,
+): AxcutDocument {
+	const asset = document.assets.find((a) => a.id === assetId);
+	if (!asset) {
+		throw new Error(`Unknown asset ${assetId}.`);
+	}
+	if (asset.kind === "audio") {
+		throw new Error(`Asset ${assetId} is audio, not footage.`);
+	}
+	const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
+	const start = Math.max(0, sourceStartSec);
+	const end = Math.min(duration, sourceEndSec ?? duration);
+	if (end <= start) {
+		throw new Error(`source range ${start}–${end} is empty.`);
+	}
+	const clip: AxcutClip = {
+		id: createId("clip"),
+		assetId,
+		sourceStartSec: start,
+		sourceEndSec: end,
+		timelineStartSec: 0,
+		timelineEndSec: end - start,
+		wordRefs: [],
+		origin,
+		reason: reason || `Placed ${asset.label}`,
+	};
+	const bounded = Math.max(0, Math.min(insertIndex, document.timeline.clips.length));
+	const next = [
+		...document.timeline.clips.slice(0, bounded),
+		clip,
+		...document.timeline.clips.slice(bounded),
+	];
+	return withClipsChanged(document, next);
+}
+
+/** Set or clear a clip's crop. Identity `{0,0,1,1}` and `null` both store as
+ *  unset — the schema comment: do not persist the identity region. */
+export function setClipCropRegion(
+	document: AxcutDocument,
+	clipId: string,
+	cropRegion: AxcutClipCropRegion | null,
+): AxcutDocument {
+	if (!document.timeline.clips.some((c) => c.id === clipId)) {
+		throw new Error(`Unknown clip ${clipId}.`);
+	}
+	const identity =
+		cropRegion == null ||
+		(cropRegion.x === 0 && cropRegion.y === 0 && cropRegion.width === 1 && cropRegion.height === 1);
+	const clips = document.timeline.clips.map((c) =>
+		c.id === clipId ? { ...c, cropRegion: identity ? undefined : cropRegion } : c,
+	);
+	return withClipsChanged(document, clips);
 }
 
 // ponytail: duplicate a clip (preserves the original). Used for "split this

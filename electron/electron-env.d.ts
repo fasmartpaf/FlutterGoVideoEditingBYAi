@@ -408,6 +408,7 @@ interface Window {
 		onMenuRedo: (callback: () => void) => () => void;
 		quitApp: () => void;
 		setTitleBarOverlay: (color: string, symbolColor: string) => void;
+		writeClipboardText?: (text: string) => Promise<void>;
 		getPlatform: () => string;
 		getAppInfo: () => Promise<{ version: string; canCheckForUpdates: boolean }>;
 		checkForUpdates: () => Promise<void>;

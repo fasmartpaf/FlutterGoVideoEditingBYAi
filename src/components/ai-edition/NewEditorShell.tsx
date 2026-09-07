@@ -137,7 +137,7 @@ export function NewEditorShell() {
 	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
 	// column, and a floating facet inspector over the stage.
 	const [mode, setMode] = useState<EditorMode>("edit");
-	const [chatOpen, setChatOpen] = useState(false);
+	const [chatOpen, setChatOpen] = useState(true);
 	const pendingChatPrompt = useChatPromptBus((s) => s.pending);
 	useEffect(() => {
 		if (pendingChatPrompt && !chatOpen) {
@@ -515,7 +515,9 @@ export function NewEditorShell() {
 					return tl.addAudioTrack(assetId).then(() => undefined);
 				}
 				const at = doc?.timeline.clips.length ?? 0;
-				return tl.insertClipAt(assetId, at);
+				return tl.insertClipAt(assetId, at).then(() => {
+					setMode("edit");
+				});
 			}).catch((error) => {
 				toast.error(te("mediaStage.couldNotAddAsset"), {
 					description: error instanceof Error ? error.message : String(error),
@@ -1400,11 +1402,11 @@ export function NewEditorShell() {
 		isMac,
 		togglePlay,
 		handleSeek,
+		openVoiceoverFlow,
 	]);
 
 	const showTimeline = mode !== "rec";
 	const timelineRow = mode === "media" ? "188px" : `${timelineHeightPx}px`;
-	const bodyColumns = mode === "edit" && chatOpen ? `${chatWidthPx}px 1fr` : "1fr";
 
 	// Drag the chat/stage divider (col-resize) or the timeline's top edge
 	// (row-resize) to resize. Pointer-driven like V4Timeline's pill/nav/clip
@@ -1484,12 +1486,32 @@ export function NewEditorShell() {
 				: undefined,
 	};
 
+	const chatColumnOpen = mode === "edit" && chatOpen;
+
 	return (
 		<div
-			className={v4.app}
-			style={{ gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}` }}
+			className={`${v4.app}${chatColumnOpen ? ` ${v4.appChatOpen}` : ""}`}
+			style={{
+				gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}`,
+				gridTemplateColumns: chatColumnOpen ? `${chatWidthPx}px minmax(0, 1fr)` : "minmax(0, 1fr)",
+			}}
 		>
 			<NativePlaybackSync visibleClips={visibleClips} clips={clips} />
+			{chatColumnOpen ? (
+				<>
+					<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
+						<ChatStripPanel />
+					</aside>
+					<div
+						className={v4.chatResizeHandle}
+						style={{ left: chatWidthPx }}
+						role="separator"
+						aria-orientation="vertical"
+						aria-label={te("shell.resizeChatPanel")}
+						onPointerDown={startChatResize}
+					/>
+				</>
+			) : null}
 			<EditorTopBar
 				mode={mode}
 				onModeChange={setMode}
@@ -1504,30 +1526,21 @@ export function NewEditorShell() {
 					export: handleExport,
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
-					toggleChat: () => setChatOpen((v) => !v),
+					toggleChat: () => {
+						if (mode !== "edit") {
+							setMode("edit");
+							setChatOpen(true);
+							return;
+						}
+						setChatOpen((v) => !v);
+					},
 					openProviderSettings: () => openDialog("providers"),
 					showAbout: handleShowAbout,
 					checkForUpdates: handleCheckForUpdates,
 				}}
 			/>
 
-			<div className={v4.body} style={{ gridTemplateColumns: bodyColumns }}>
-				{mode === "edit" && chatOpen ? (
-					<>
-						<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
-							<ChatStripPanel />
-						</aside>
-						<div
-							className={v4.chatResizeHandle}
-							style={{ left: chatWidthPx }}
-							role="separator"
-							aria-orientation="vertical"
-							aria-label={te("shell.resizeChatPanel")}
-							onPointerDown={startChatResize}
-						/>
-					</>
-				) : null}
-
+			<div className={v4.body}>
 				<section className={v4.stage} aria-label={te("shell.previewStage")}>
 					{mode === "edit" ? (
 						<>
@@ -1631,6 +1644,7 @@ export function NewEditorShell() {
 			{/* Timeline footer (hidden in Rec mode) — rebuilt from the v4 design. */}
 			{showTimeline ? (
 				<div
+					className={v4.timelineDock}
 					style={{
 						position: "relative",
 						gridRow: 3,

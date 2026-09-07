@@ -1,0 +1,31 @@
+[
+	{
+		"op": "trim",
+		"startSec": 0,
+		"endSec": 0.35,
+		"reason": "cut recording preroll"
+	},
+	{
+		"op": "zoom",
+		"startSec": 1.2,
+		"endSec": 3.8,
+		"depth": 3,
+		"focus": { "cx": 0.5, "cy": 0.42 }
+	},
+	{
+		"op": "speed",
+		"startSec": 6.2,
+		"endSec": 8.0,
+		"speed": 1.35
+	},
+	{
+		"op": "annotation",
+		"startSec": 0.6,
+		"endSec": 3.2,
+		"text": "FlutterGo.AI",
+		"x": 50,
+		"y": 12
+	},
+	{ "op": "aspectRatio", "value": "9:16" },
+	{ "op": "background", "wallpaper": "3" }
+]

@@ -157,6 +157,17 @@ export function useTimeline() {
 		}
 	}, [document, selectedAudioTrackId, setSelectedAudioTrackId]);
 
+	// One clip selection per project load so Edit / Composition is aimed at the
+	// footage the user just opened. Later clicks (and clearSelection) stay.
+	const autoSelectedProjectRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!projectId || !document) return;
+		if (autoSelectedProjectRef.current === projectId) return;
+		autoSelectedProjectRef.current = projectId;
+		const first = document.timeline.clips[0];
+		setClipSelection(first?.id ?? null);
+	}, [projectId, document]);
+
 	// Backfill missing source dimensions for any USED asset whose `video` was never probed.
 	// `probeAndCorrectClip` only populates dims on INSERT, gated on a null duration, so an asset
 	// saved with a duration but no dims (e.g. a project migrated from before dims were probed

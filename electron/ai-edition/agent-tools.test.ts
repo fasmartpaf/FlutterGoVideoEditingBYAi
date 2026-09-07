@@ -188,10 +188,16 @@ describe("the mutating-tool table", () => {
 				"setAudio",
 				"setCameraFullscreen",
 				"setClipRange",
+				"addClip",
+				"setClipCrop",
 				"setSpeed",
 				"setTrim",
 				"setWordText",
 				"setZoom",
+				"setAspectRatio",
+				"setBackground",
+				"recordScreen",
+				"generateCaptions",
 			].sort(),
 		);
 		expect(isMutatingTool("getCurrentDocument")).toBe(false);
@@ -202,6 +208,10 @@ describe("the mutating-tool table", () => {
 		expect(isMutatingTool("removeTrim")).toBe(true);
 		expect(isMutatingTool("removeModifier")).toBe(true);
 		expect(isMutatingTool("removeClip")).toBe(true);
+		expect(isMutatingTool("setAspectRatio")).toBe(true);
+		expect(isMutatingTool("recordScreen")).toBe(true);
+		expect(isMutatingTool("listSources")).toBe(false);
+		expect(isMutatingTool("exportProject")).toBe(false);
 		expect(isMutatingTool("nope")).toBe(false);
 	});
 });
@@ -215,7 +225,33 @@ describe("executeAgentTool", () => {
 		expect(snapshot.clips.map((c: { id: string }) => c.id)).toEqual(["clip_1", "clip_2"]);
 		expect(snapshot.trimRanges[0].id).toBe("trim_1");
 		expect(snapshot.hasTranscript).toBe(true);
+		expect(snapshot.aspectRatio).toBe("native");
 		expect(result.document).toBeUndefined();
+	});
+
+	it("setAspectRatio and setBackground write the output frame", () => {
+		const aspect = executeAgentTool(
+			fixtureDocument(),
+			"setAspectRatio",
+			JSON.stringify({ value: "9:16" }),
+		);
+		expect(aspect.ok).toBe(true);
+		expect((aspect.document?.legacyEditor as { aspectRatio?: string }).aspectRatio).toBe("9:16");
+		const background = executeAgentTool(
+			aspect.document ?? fixtureDocument(),
+			"setBackground",
+			JSON.stringify({ wallpaper: "3" }),
+		);
+		expect(background.ok).toBe(true);
+		expect((background.document?.legacyEditor as { wallpaper?: string }).wallpaper).toBe(
+			"/wallpapers/wallpaper3.jpg",
+		);
+	});
+
+	it("process tools refuse honestly when no CLI engine is injected", () => {
+		const result = executeAgentTool(fixtureDocument(), "listSources", "{}");
+		expect(result.ok).toBe(false);
+		expect(JSON.parse(result.resultJson).error).toMatch(/CLI engine is not available/);
 	});
 
 	it("getTranscript returns segments for the primary asset by default", () => {
@@ -664,7 +700,14 @@ describe("executeAgentTool", () => {
 		const result = executeAgentTool(
 			fixtureDocument(),
 			"addAnnotation",
-			JSON.stringify({ startSec: 1, endSec: 3, text: "Look here", x: 20, y: 80 }),
+			JSON.stringify({
+				startSec: 1,
+				endSec: 3,
+				text: "Look here",
+				x: 20,
+				y: 80,
+				textAnimation: "pop",
+			}),
 		);
 		expect(result.ok).toBe(true);
 		const ann = result.document?.annotations.at(-1);
@@ -674,8 +717,81 @@ describe("executeAgentTool", () => {
 			type: "text",
 			textContent: "Look here",
 			position: { x: 20, y: 80 },
+			style: { textAnimation: "pop" },
 		});
 		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("addAnnotation can place a styled CTA and a blur region", () => {
+		const cta = executeAgentTool(
+			fixtureDocument(),
+			"addAnnotation",
+			JSON.stringify({
+				startSec: 55,
+				endSec: 60,
+				text: "Try Now",
+				x: 50,
+				y: 82,
+				width: 40,
+				height: 12,
+				backgroundColor: "#34B27B",
+				fontSize: 28,
+				textAnimation: "pop",
+			}),
+		);
+		expect(cta.ok).toBe(true);
+		expect(cta.document?.annotations.at(-1)).toMatchObject({
+			type: "text",
+			textContent: "Try Now",
+			style: { backgroundColor: "#34B27B", textAnimation: "pop", fontSize: 28 },
+		});
+		const blur = executeAgentTool(
+			cta.document as AxcutDocument,
+			"addAnnotation",
+			JSON.stringify({
+				startSec: 2,
+				endSec: 6,
+				type: "blur",
+				x: 80,
+				y: 15,
+				width: 18,
+				height: 10,
+				blurKind: "mosaic",
+			}),
+		);
+		expect(blur.ok).toBe(true);
+		expect(blur.document?.annotations.at(-1)).toMatchObject({
+			type: "blur",
+			blurData: { type: "mosaic", shape: "rectangle" },
+		});
+		expect(() => documentSchema.parse(blur.document)).not.toThrow();
+	});
+
+	it("snapshot exposes the project queue, unused assets, and edited duration", () => {
+		const unused = documentSchema.parse({
+			...fixtureDocument(),
+			assets: [
+				...fixtureDocument().assets,
+				{
+					id: "asset_2",
+					kind: "video",
+					label: "Second take",
+					originalPath: "C:/videos/take2.mp4",
+					durationSec: 40,
+				},
+			],
+		});
+		const snapshot = JSON.parse(executeAgentTool(unused, "getCurrentDocument", "").resultJson);
+		expect(snapshot.projectQueue.unusedAssets).toEqual([
+			expect.objectContaining({ id: "asset_2", label: "Second take", durationSec: 40 }),
+		]);
+		expect(snapshot.projectQueue.editedDurationSec).toBe(58);
+		expect(snapshot.projectQueue.clips[0]).toMatchObject({
+			clipId: "clip_1",
+			sourceDurationSec: 60,
+			placedDurationSec: 30,
+			unusedTailSec: 30,
+		});
 	});
 
 	it("snapshot exposes clips/trims/effects as virtual-time groups with a time-base note", () => {
@@ -991,6 +1107,31 @@ describe("documentSnapshotForModel", () => {
 		expect(snapshot.zoomRanges[0].focusMode).toBe("auto");
 		expect(snapshotOf(base).autoFocusAll).toBe(false);
 		expect(snapshotOf(base).zoomRanges[0].focusMode).toBe("manual");
+	});
+
+	it("names the footage that is open in the editor", () => {
+		const snapshot = snapshotOf(fixtureDocument()) as Snapshot & {
+			openMedia: { clipId: string; label: string; originalPath: string | null } | null;
+			openMediaNote: string;
+			visibleMedia: Array<{ originalPath: string }>;
+			assets: Array<{ originalPath?: string }>;
+		};
+		expect(snapshot.openMedia).toMatchObject({
+			clipId: fixtureDocument().timeline.clips[0].id,
+			label: fixtureDocument().assets[0].label,
+			originalPath: fixtureDocument().assets[0].originalPath,
+		});
+		expect(snapshot.visibleMedia).toEqual([
+			{
+				id: fixtureDocument().assets[0].id,
+				label: fixtureDocument().assets[0].label,
+				kind: fixtureDocument().assets[0].kind,
+				originalPath: fixtureDocument().assets[0].originalPath,
+			},
+		]);
+		expect(snapshot.assets[0].originalPath).toBe(fixtureDocument().assets[0].originalPath);
+		expect(snapshot.openMediaNote).toMatch(/visibleMedia/i);
+		expect(snapshot.openMediaNote).toMatch(/transcript is optional/i);
 	});
 
 	it("says whether each asset carries a webcam, and whether any clip does", () => {
@@ -2164,6 +2305,32 @@ describe("addAudio / setAudio", () => {
 		});
 	});
 
+	it("addAudio / setAudio write official fades", () => {
+		const placed = place(withAudioAsset(), {
+			assetId: "audio_1",
+			startSec: 2,
+			endSec: 6,
+			fadeInSec: 0.5,
+			fadeOutSec: 1,
+		});
+		expect(placed.ok).toBe(true);
+		expect((placed.document as AxcutDocument).audioTracks[0]).toMatchObject({
+			fadeInMs: 500,
+			fadeOutMs: 1000,
+		});
+		const id = JSON.parse(placed.resultJson).audioId;
+		const faded = executeAgentTool(
+			placed.document as AxcutDocument,
+			"setAudio",
+			JSON.stringify({ audioId: id, fadeInSec: 0.25 }),
+		);
+		expect((faded.document as AxcutDocument).audioTracks[0].fadeInMs).toBe(250);
+		const snapshot = JSON.parse(
+			executeAgentTool(faded.document as AxcutDocument, "getCurrentDocument", "").resultJson,
+		);
+		expect(snapshot.audioTracks[0]).toMatchObject({ fadeInSec: 0.25, fadeOutSec: 1 });
+	});
+
 	it("setAudio applies the same offset guard as addAudio", () => {
 		const placed = place(withAudioAsset(20), { assetId: "audio_1", startSec: 2, endSec: 6 });
 		const id = JSON.parse(placed.resultJson).audioId;
@@ -2376,5 +2543,87 @@ describe("setWordText", () => {
 			{ editsAllowed: false },
 		);
 		expect(result.document).toBeUndefined();
+	});
+});
+
+describe("addClip / setClipCrop", () => {
+	function withUnusedAsset(): AxcutDocument {
+		return documentSchema.parse({
+			...fixtureDocument(),
+			assets: [
+				...fixtureDocument().assets,
+				{
+					id: "asset_2",
+					kind: "video",
+					label: "Second take",
+					originalPath: "C:/videos/take2.mp4",
+					durationSec: 40,
+				},
+			],
+		});
+	}
+
+	it("addClip places unused footage at the end", () => {
+		const result = executeAgentTool(
+			withUnusedAsset(),
+			"addClip",
+			JSON.stringify({ assetId: "asset_2" }),
+		);
+		expect(result.ok).toBe(true);
+		const clips = result.document?.timeline.clips ?? [];
+		// withClipsChanged joins the fixture's two contiguous same-asset clips
+		// (0–30 then 30–60) into one, same as a media-panel drop.
+		expect(clips.map((c) => c.assetId)).toEqual(["asset_1", "asset_2"]);
+		expect(clips.at(-1)).toMatchObject({
+			assetId: "asset_2",
+			sourceStartSec: 0,
+			sourceEndSec: 40,
+			origin: "agent",
+		});
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("addClip refuses audio and names addAudio", () => {
+		const withAudio = documentSchema.parse({
+			...fixtureDocument(),
+			assets: [
+				...fixtureDocument().assets,
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "C:/audio/bed.mp3",
+					durationSec: 20,
+				},
+			],
+		});
+		const result = executeAgentTool(withAudio, "addClip", JSON.stringify({ assetId: "audio_1" }));
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toContain("addAudio");
+	});
+
+	it("setClipCrop writes a crop the snapshot exposes", () => {
+		const cropped = executeAgentTool(
+			fixtureDocument(),
+			"setClipCrop",
+			JSON.stringify({ clipId: "clip_1", crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 } }),
+		);
+		expect(cropped.ok).toBe(true);
+		expect(cropped.document?.timeline.clips[0].cropRegion).toEqual({
+			x: 0.1,
+			y: 0.2,
+			width: 0.5,
+			height: 0.6,
+		});
+		const snapshot = JSON.parse(
+			executeAgentTool(cropped.document as AxcutDocument, "getCurrentDocument", "").resultJson,
+		);
+		expect(snapshot.clips[0].cropRegion).toEqual({ x: 0.1, y: 0.2, width: 0.5, height: 0.6 });
+		const cleared = executeAgentTool(
+			cropped.document as AxcutDocument,
+			"setClipCrop",
+			JSON.stringify({ clipId: "clip_1", crop: null }),
+		);
+		expect(cleared.document?.timeline.clips[0].cropRegion).toBeUndefined();
 	});
 });

@@ -1324,6 +1324,34 @@
 	color: var(--fg-2);
 	line-height: 1.5;
 }
+.msgActions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 2px;
+	margin-top: 4px;
+}
+.msgAction {
+	width: 24px;
+	height: 24px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-xs);
+	color: var(--meta);
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.msgAction:hover {
+	background: var(--surface-3);
+	color: var(--fg);
+}
+.msgAction:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
 .msgBubble .msgAuthor { color: var(--accent); }
 
 .chatInput {
@@ -2337,4 +2365,102 @@
   flex: 0 0 auto;
   margin-top: 2px;
   opacity: 0.8;
+}
+
+.localCliPopover {
+	width: 280px;
+	overflow: auto;
+	background: color-mix(in oklab, var(--surface) 92%, #000);
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	box-shadow: var(--elev-pop);
+	padding: 10px 8px 8px;
+	z-index: 1100;
+	color: var(--fg);
+}
+.localCliHeader {
+	padding: 4px 10px 10px;
+}
+.localCliHeader strong {
+	display: block;
+	font: 650 14px/1.2 var(--font-display);
+}
+.localCliHeader p {
+	margin: 3px 0 0;
+	font: 400 11px/1.35 var(--font-body);
+	color: var(--muted);
+}
+.localCliSection {
+	margin: 8px 10px 4px;
+	font: 650 10px/1 var(--font-display);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--meta);
+}
+.localCliEmpty {
+	margin: 0 10px 8px;
+	font: 400 12px/1.45 var(--font-body);
+	color: var(--muted);
+}
+.localCliRow {
+	display: grid;
+	grid-template-columns: 18px 1fr auto auto;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 10px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: inherit;
+	font: 500 13px/1.2 var(--font-body);
+	text-align: left;
+	cursor: pointer;
+}
+button.localCliRow:hover,
+button.localCliRow:focus-visible {
+	background: var(--surface-3);
+}
+.localCliRow[data-active="true"],
+.localCliRow[data-selected="true"] {
+	background: var(--surface-3);
+}
+.localCliRow em {
+	font: 400 10.5px/1 var(--font-body);
+	color: var(--muted);
+	font-style: normal;
+}
+.localCliFooter {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--border-soft);
+}
+.localCliPermission {
+	margin: 8px 10px 4px;
+	padding: 0;
+	border: 0;
+}
+.localCliPermission legend {
+	font: 600 11px var(--font-body);
+	color: var(--fg-2);
+}
+.localCliPermissionHint {
+	margin: 4px 0 8px;
+	font: 400 11px/1.4 var(--font-body);
+	color: var(--muted);
+}
+.localCliPermissionOption {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin-bottom: 6px;
+	font: 500 12px/1.35 var(--font-body);
+	color: var(--fg-2);
+	cursor: pointer;
+}
+.localCliPermissionOption em {
+	display: block;
+	font: 400 11px/1.35 var(--font-body);
+	color: var(--muted);
+	font-style: normal;
 }

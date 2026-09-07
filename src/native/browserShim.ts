@@ -245,6 +245,7 @@ function createShimBridgeClient() {
 		baseUrl?: string;
 		reasoningEffort?: string;
 		allowAgentEdits?: boolean;
+		localAgentPermission?: "ask" | "always" | "never";
 	};
 	const credentialsByProvider = new Map<string, { apiKey: string }>();
 	let activeConfig: ShimLlmConfig | null = null;
@@ -280,7 +281,10 @@ function createShimBridgeClient() {
 	};
 	const buildLlmSnapshot = () => ({
 		config: activeConfig,
-		connectedProviders: [...credentialsByProvider.keys()],
+		connectedProviders: [
+			...credentialsByProvider.keys(),
+			...(activeConfig?.provider === "local-cli" && activeConfig.model ? ["local-cli"] : []),
+		],
 		availableProviders: PROVIDER_DEFINITIONS.map((d) => ({
 			id: d.id,
 			label: d.label,
@@ -288,10 +292,19 @@ function createShimBridgeClient() {
 		})),
 		credentialSummary: PROVIDER_DEFINITIONS.map((def) => ({
 			providerId: def.id,
-			connected: credentialsByProvider.has(def.id),
+			connected:
+				def.id === "local-cli"
+					? Boolean(activeConfig?.provider === "local-cli" && activeConfig.model)
+					: credentialsByProvider.has(def.id),
 			authKind: def.authKind,
 			credentialKind: credentialsByProvider.has(def.id) ? "api-key" : null,
 		})),
+		localAgents: [] as Array<{
+			id: string;
+			name: string;
+			kind: "cli" | "http";
+			ready: boolean;
+		}>,
 	});
 
 	// ponytail: chat sessions per project, persisted to localStorage so a
@@ -443,11 +456,14 @@ function createShimBridgeClient() {
 				return Promise.resolve({ assetId, document: next });
 			},
 			llmGetSnapshot: () => Promise.resolve(buildLlmSnapshot()),
+			llmRescanLocalAgents: () => Promise.resolve(buildLlmSnapshot()),
+			llmLoginLocalAgent: () => Promise.resolve({ success: true }),
 			llmSetConfig: (config: ShimLlmConfig) => {
 				activeConfig = config;
 				saveLlmState();
 				return Promise.resolve({ success: true });
 			},
+			llmGrantWatchSession: () => Promise.resolve({ success: true }),
 			llmSetApiKey: (providerId: string, apiKey: string) => {
 				if (apiKey.trim()) credentialsByProvider.set(providerId, { apiKey: apiKey.trim() });
 				else credentialsByProvider.delete(providerId);

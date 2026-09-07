@@ -8,9 +8,11 @@ import {
 import {
 	buildTimelineFromIntervals,
 	duplicateClip,
+	insertClip,
 	invertIntervals,
 	moveClip,
 	normalizeIntervals,
+	openTimelineMedia,
 	planTimelineReplacement,
 	primaryAssetDuration,
 	projectRawTimelineSecToPlayback,
@@ -21,6 +23,7 @@ import {
 	resequenceClips,
 	resolvePlaybackSegments,
 	restoreFullTimeline,
+	setClipCropRegion,
 	setClipSourceRange,
 	subtractInterval,
 	timelineIntervals,
@@ -65,6 +68,20 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 }
 
 describe("timeline pure functions", () => {
+	describe("openTimelineMedia", () => {
+		it("names the clip on the timeline as the open media", () => {
+			expect(openTimelineMedia(makeDoc())).toBeNull();
+			expect(
+				openTimelineMedia(makeDoc({ timeline: { ...makeDoc().timeline, clips: [makeClip()] } })),
+			).toMatchObject({
+				clipId: "clip_a",
+				assetId: "asset_1",
+				label: "screen.mp4",
+				originalPath: "/tmp/screen.mp4",
+			});
+		});
+	});
+
 	describe("normalizeIntervals", () => {
 		it("sorts and merges overlapping intervals", () => {
 			const result = normalizeIntervals(100, [
@@ -1738,5 +1755,66 @@ describe("projectRawTimelineSecToPlayback with speed regions", () => {
 	it("ignores a nonsense rate rather than dividing by it", () => {
 		const speed = [{ startMs: 0, endMs: 4000, speed: 0 }];
 		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(4, 6);
+	});
+});
+
+describe("insertClip", () => {
+	it("places an unused asset at the end and reseats the timeline", () => {
+		const doc = makeDoc({
+			assets: [
+				...makeDoc().assets,
+				{
+					id: "asset_2",
+					kind: "video",
+					label: "b-roll.mp4",
+					originalPath: "/tmp/b-roll.mp4",
+					durationSec: 12,
+					cameraTrack: null,
+				},
+			],
+			timeline: { ...makeDoc().timeline, clips: [makeClip()] },
+		});
+		const next = insertClip(doc, "asset_2", 1);
+		expect(next.timeline.clips).toHaveLength(2);
+		expect(next.timeline.clips[1]).toMatchObject({
+			assetId: "asset_2",
+			sourceStartSec: 0,
+			sourceEndSec: 12,
+			timelineStartSec: 5,
+			timelineEndSec: 17,
+			origin: "agent",
+		});
+	});
+
+	it("refuses an audio asset", () => {
+		const doc = makeDoc({
+			assets: [
+				...makeDoc().assets,
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "/tmp/bed.mp3",
+					durationSec: 20,
+					cameraTrack: null,
+				},
+			],
+		});
+		expect(() => insertClip(doc, "audio_1", 0)).toThrow(/audio/);
+	});
+});
+
+describe("setClipCropRegion", () => {
+	it("stores a non-identity crop and clears the identity", () => {
+		const doc = makeDoc({ timeline: { ...makeDoc().timeline, clips: [makeClip()] } });
+		const cropped = setClipCropRegion(doc, "clip_a", { x: 0.1, y: 0.2, width: 0.5, height: 0.6 });
+		expect(cropped.timeline.clips[0].cropRegion).toEqual({
+			x: 0.1,
+			y: 0.2,
+			width: 0.5,
+			height: 0.6,
+		});
+		const cleared = setClipCropRegion(cropped, "clip_a", { x: 0, y: 0, width: 1, height: 1 });
+		expect(cleared.timeline.clips[0].cropRegion).toBeUndefined();
 	});
 });
