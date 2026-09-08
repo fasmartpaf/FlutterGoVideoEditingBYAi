@@ -22,7 +22,14 @@ import {
 	placeAudioTrackInDocument,
 	trackGroupId,
 } from "../../src/lib/ai-edition/document/audioTracks";
+import {
+	assertImageDataUri,
+	GRAPHIC_KINDS,
+	isImageDataUri,
+	resolveGraphic,
+} from "../../src/lib/ai-edition/document/graphicPlate";
 import { createId } from "../../src/lib/ai-edition/document/ids";
+import { buildMediaContext } from "../../src/lib/ai-edition/document/mediaContext";
 import {
 	insertClip,
 	moveClip,
@@ -270,6 +277,44 @@ function coversNoClip(
 	);
 }
 
+function commitAnnotation(
+	document: AxcutDocument,
+	ann: Record<string, unknown>,
+	startMs: number,
+	endMs: number,
+	summary: string,
+): AgentToolExecution {
+	const placed = anchorForAgent(
+		{ ...ann, id: createId("ann"), startMs, endMs } as {
+			id: string;
+			startMs: number;
+			endMs: number;
+		},
+		document,
+		"ann",
+	);
+	const landing = landingOf(placed, document);
+	if (!landing.anchored) {
+		return coversNoClip("annotation", startMs / 1000, endMs / 1000, document);
+	}
+	const next: AxcutDocument = {
+		...document,
+		annotations: [...document.annotations, ...placed] as AxcutDocument["annotations"],
+	};
+	return {
+		ok: true,
+		document: next,
+		resultJson: JSON.stringify({
+			annotationId: landing.ids[0],
+			merged: true,
+			...landingReport(landing, startMs / 1000, endMs / 1000),
+		}),
+		summary:
+			`${summary} ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+			landingSuffix(landing, startMs / 1000, endMs / 1000),
+	};
+}
+
 // The landing fields shared by every add / set result, so the model reads the
 // same three things everywhere: what it asked for, what it got, and whether the
 // two differ. `clamped` and `fragments` are omitted when there is nothing to
@@ -507,7 +552,8 @@ export const setSpeedArgs = z.object({
 });
 
 const annotationColorSchema = z.string().min(1).max(64);
-const annotationTypeSchema = z.enum(["text", "figure", "blur"]);
+const annotationTypeSchema = z.enum(["text", "image", "figure", "blur"]);
+const imageDataUriSchema = z.string().min(1);
 
 export const addAnnotationArgs = z.object({
 	startSec: secondsSchema,
@@ -529,6 +575,7 @@ export const addAnnotationArgs = z.object({
 		.default("right"),
 	blurKind: z.enum(["blur", "mosaic"]).default("mosaic"),
 	blurShape: z.enum(["rectangle", "oval"]).default("rectangle"),
+	image: imageDataUriSchema.optional(),
 });
 
 export const setAnnotationArgs = z.object({
@@ -551,6 +598,29 @@ export const setAnnotationArgs = z.object({
 		.optional(),
 	blurKind: z.enum(["blur", "mosaic"]).optional(),
 	blurShape: z.enum(["rectangle", "oval"]).optional(),
+	image: imageDataUriSchema.optional(),
+});
+
+export const addGraphicArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	kind: z.enum(GRAPHIC_KINDS).default("title"),
+	text: z.string().default(""),
+	subtext: z.string().optional(),
+	x: z.number().min(0).max(100).optional(),
+	y: z.number().min(0).max(100).optional(),
+	width: z.number().positive().max(100).optional(),
+	height: z.number().positive().max(100).optional(),
+	color: annotationColorSchema.optional(),
+	backgroundColor: annotationColorSchema.optional(),
+	fontSize: z.number().positive().max(200).optional(),
+	fontWeight: z.enum(["normal", "bold"]).optional(),
+	textAlign: z.enum(["left", "center", "right"]).optional(),
+	textAnimation: textAnimationSchema.optional(),
+	arrowDirection: z
+		.enum(["up", "down", "left", "right", "up-right", "up-left", "down-right", "down-left"])
+		.optional(),
+	image: imageDataUriSchema.optional(),
 });
 
 export const addAudioArgs = z.object({
@@ -682,6 +752,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"addSpeed",
 	"setSpeed",
 	"addAnnotation",
+	"addGraphic",
 	"setAnnotation",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
@@ -761,6 +832,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addSpeed",
 	"setSpeed",
 	"addAnnotation",
+	"addGraphic",
 	"setAnnotation",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
@@ -870,7 +942,8 @@ function projectQueueForModel(document: AxcutDocument): Record<string, unknown> 
 			"unusedAssets are recordings in this project that are not on the timeline — addClip places one. " +
 			"editedDurationSec is the playback length after trims. sourceDurationSec on each clip is the full file. " +
 			"Clip-to-clip video transitions and multi-band EQ are not fields on this document; do not invent them. " +
-			"Annotation textAnimation is the official text enter animation. Audio gainDb + fadeInSec/fadeOutSec is the official level/fade.",
+			"Annotation textAnimation is the official text enter animation. Audio gainDb + fadeInSec/fadeOutSec is the official level/fade. " +
+			"addGraphic / addAnnotation land on the timeline and are already composited in preview and export — there is no separate merge step.",
 		editedDurationSec,
 		clipCount: clips.length,
 		unusedAssetCount: unusedAssets.length,
@@ -937,7 +1010,8 @@ export function documentSnapshotForModel(
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
 		openMedia: openTimelineMedia(document),
 		openMediaNote:
-			"visibleMedia lists every recording in this project. Watch those (ffmpeg stills, then Read) before you describe what is on screen or suggest edits. The JSON snapshot is metadata, not the picture. A transcript is optional; do not wait for captions.",
+			"mediaContext is the remembered outline of each recording (kept spans, speech, silence, prior visual notes). It is rebuilt when the project opens and reused on every later turn. Use it to plan edits. Do not extract ffmpeg stills unless the user asks to re-scan or mediaContext cannot answer the question. visibleMedia is the file list only. A transcript is optional.",
+		mediaContext: buildMediaContext(document),
 		visibleMedia: document.assets
 			.filter((a) => a.kind !== "audio" && Boolean(a.originalPath?.trim()))
 			.filter((a) => !/^https?:\/\//i.test(a.originalPath))
@@ -1025,23 +1099,32 @@ export function documentSnapshotForModel(
 			endSec: roundSec(s.endMs),
 			speed: s.speed,
 		})),
-		annotations: coalesceForAgent(document.annotations).map((a) => ({
-			id: a.id,
-			startSec: roundSec(a.startMs),
-			endSec: roundSec(a.endMs),
-			type: a.type,
-			text: a.textContent ?? a.content ?? "",
-			x: a.position?.x ?? 50,
-			y: a.position?.y ?? 50,
-			width: a.size?.width ?? 30,
-			height: a.size?.height ?? 20,
-			textAnimation: a.style?.textAnimation ?? "none",
-			color: a.style?.color ?? "#ffffff",
-			backgroundColor: a.style?.backgroundColor ?? "transparent",
-			fontSize: a.style?.fontSize ?? 32,
-			...(a.figureData ? { arrowDirection: a.figureData.arrowDirection } : {}),
-			...(a.blurData ? { blurKind: a.blurData.type, blurShape: a.blurData.shape } : {}),
-		})),
+		annotations: coalesceForAgent(document.annotations).map((a) => {
+			const raw = a.textContent ?? a.content ?? "";
+			const text = isImageDataUri(raw)
+				? a.textContent && !isImageDataUri(a.textContent)
+					? a.textContent
+					: ""
+				: raw;
+			return {
+				id: a.id,
+				startSec: roundSec(a.startMs),
+				endSec: roundSec(a.endMs),
+				type: a.type,
+				text,
+				hasImage: a.type === "image" && Boolean(a.content || a.imageContent),
+				x: a.position?.x ?? 50,
+				y: a.position?.y ?? 50,
+				width: a.size?.width ?? 30,
+				height: a.size?.height ?? 20,
+				textAnimation: a.style?.textAnimation ?? "none",
+				color: a.style?.color ?? "#ffffff",
+				backgroundColor: a.style?.backgroundColor ?? "transparent",
+				fontSize: a.style?.fontSize ?? 32,
+				...(a.figureData ? { arrowDirection: a.figureData.arrowDirection } : {}),
+				...(a.blurData ? { blurKind: a.blurData.type, blurShape: a.blurData.shape } : {}),
+			};
+		}),
 		cameraFullscreenRegions: coalesceForAgent(cameraFullscreenRegions).map((c) => ({
 			id: c.id,
 			startSec: roundSec(c.startMs),
@@ -2180,10 +2263,40 @@ export function executeAgentTool(
 			if (!parsed.success) return failure(parsed.error.message);
 			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
 			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			if (parsed.data.type === "image") {
+				try {
+					const graphic = resolveGraphic({
+						kind: "image",
+						text: parsed.data.text,
+						image: parsed.data.image,
+						x: parsed.data.x,
+						y: parsed.data.y,
+						width: parsed.data.width,
+						height: parsed.data.height,
+						color: parsed.data.color,
+						backgroundColor: parsed.data.backgroundColor,
+					});
+					return commitAnnotation(
+						document,
+						{
+							type: graphic.type,
+							content: graphic.content,
+							textContent: graphic.textContent,
+							imageContent: graphic.imageContent,
+							position: graphic.position,
+							size: graphic.size,
+							style: graphic.style,
+							zIndex: document.annotations.length + 1,
+						},
+						startMs,
+						endMs,
+						`added image ${graphic.textContent ? `"${graphic.textContent.slice(0, 24)}" ` : ""}`,
+					);
+				} catch (err) {
+					return failure(err instanceof Error ? err.message : String(err));
+				}
+			}
 			const ann = {
-				id: createId("ann"),
-				startMs,
-				endMs,
 				type: parsed.data.type,
 				content: parsed.data.text,
 				textContent: parsed.data.text,
@@ -2222,33 +2335,54 @@ export function executeAgentTool(
 						}
 					: {}),
 			};
-			const placed = anchorForAgent(ann, document, "ann");
-			const landing = landingOf(placed, document);
-			if (!landing.anchored) {
-				return coversNoClip("annotation", startMs / 1000, endMs / 1000, document);
+			return commitAnnotation(
+				document,
+				ann,
+				startMs,
+				endMs,
+				`added ${parsed.data.type} ${parsed.data.text ? `"${parsed.data.text.slice(0, 24)}" ` : ""}`,
+			);
+		}
+
+		case "addGraphic": {
+			const parsed = addGraphicArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
+			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			try {
+				const graphic = resolveGraphic(parsed.data);
+				return commitAnnotation(
+					document,
+					{
+						type: graphic.type,
+						content: graphic.content,
+						textContent: graphic.textContent,
+						...(graphic.imageContent ? { imageContent: graphic.imageContent } : {}),
+						position: graphic.position,
+						size: graphic.size,
+						style: graphic.style,
+						zIndex: document.annotations.length + 1,
+						...(graphic.figureData ? { figureData: graphic.figureData } : {}),
+					},
+					startMs,
+					endMs,
+					`added ${graphic.summaryLabel} (merged into video)`,
+				);
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
 			}
-			const next: AxcutDocument = {
-				...document,
-				annotations: [...document.annotations, ...placed] as AxcutDocument["annotations"],
-			};
-			return {
-				ok: true,
-				document: next,
-				resultJson: JSON.stringify({
-					annotationId: landing.ids[0],
-					...landingReport(landing, startMs / 1000, endMs / 1000),
-				}),
-				summary:
-					`added ${parsed.data.type} ${
-						parsed.data.text ? `"${parsed.data.text.slice(0, 24)}" ` : ""
-					}${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
-					landingSuffix(landing, startMs / 1000, endMs / 1000),
-			};
 		}
 
 		case "setAnnotation": {
 			const parsed = setAnnotationArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
+			if (parsed.data.image !== undefined) {
+				try {
+					parsed.data.image = assertImageDataUri(parsed.data.image);
+				} catch (err) {
+					return failure(err instanceof Error ? err.message : String(err));
+				}
+			}
 			const { annotationId } = parsed.data;
 			const existing = document.annotations.find((a) => a.id === annotationId);
 			const annPill = new Set(resolvePillIds(document.annotations, annotationId));
@@ -2260,7 +2394,16 @@ export function executeAgentTool(
 						? {
 								...a,
 								...(parsed.data.text !== undefined
-									? { content: parsed.data.text, textContent: parsed.data.text }
+									? a.type === "image"
+										? { textContent: parsed.data.text }
+										: { content: parsed.data.text, textContent: parsed.data.text }
+									: {}),
+								...(parsed.data.image !== undefined
+									? {
+											type: "image" as const,
+											content: parsed.data.image,
+											imageContent: parsed.data.image,
+										}
 									: {}),
 								...(parsed.data.x !== undefined || parsed.data.y !== undefined
 									? {

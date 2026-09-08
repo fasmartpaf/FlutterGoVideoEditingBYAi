@@ -6,6 +6,8 @@
 // ChatEventSink.
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import {
 	type AxcutTimelineOperation,
@@ -36,6 +38,102 @@ import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
 
 const sessionsByProject = new Map<string, Map<string, ChatSession>>();
+const hydratedProjects = new Set<string>();
+let persistDir: string | null = null;
+
+/** Write sessions under `dir` so a restart keeps the chat. Null = memory only (tests). */
+export function configureChatPersistence(dir: string | null): void {
+	persistDir = dir;
+	if (dir) fs.mkdirSync(dir, { recursive: true });
+}
+
+/** Drop the in-memory maps so the next read reloads from disk (tests / simulated restart). */
+export function resetChatSessionsForTests(): void {
+	sessionsByProject.clear();
+	hydratedProjects.clear();
+	messageCheckpointsBySession.clear();
+}
+
+function persistFileFor(projectId: string): string | null {
+	if (!persistDir) return null;
+	const safe = projectId.replace(/[^a-zA-Z0-9._-]/g, "_");
+	return path.join(persistDir, `${safe}.json`);
+}
+
+function persistProject(projectId: string): void {
+	const file = persistFileFor(projectId);
+	if (!file) return;
+	const sessions = [...(sessionsByProject.get(projectId)?.values() ?? [])];
+	const payload = {
+		version: 1 as const,
+		sessions: sessions.map((session) => ({
+			id: session.id,
+			projectId: session.projectId,
+			title: session.title,
+			createdAt: session.createdAt,
+			messages: session.messages,
+			compaction: session.compaction,
+		})),
+	};
+	const tmp = `${file}.tmp-${process.pid}`;
+	try {
+		fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
+		fs.renameSync(tmp, file);
+	} catch (error) {
+		try {
+			fs.unlinkSync(tmp);
+		} catch {
+			// leftover temp is harmless
+		}
+		console.warn(
+			`[ai-edition] failed to persist chat for ${projectId}:`,
+			error instanceof Error ? error.message : error,
+		);
+	}
+}
+
+function hydrateProject(projectId: string): void {
+	if (hydratedProjects.has(projectId)) return;
+	hydratedProjects.add(projectId);
+	const file = persistFileFor(projectId);
+	if (!file) return;
+	let raw: string;
+	try {
+		raw = fs.readFileSync(file, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		console.warn(
+			`[ai-edition] failed to read chat for ${projectId}:`,
+			error instanceof Error ? error.message : error,
+		);
+		return;
+	}
+	try {
+		const parsed = JSON.parse(raw) as { sessions?: ChatSession[] };
+		if (!Array.isArray(parsed.sessions)) return;
+		let map = sessionsByProject.get(projectId);
+		if (!map) {
+			map = new Map();
+			sessionsByProject.set(projectId, map);
+		}
+		for (const row of parsed.sessions) {
+			if (!row?.id || row.projectId !== projectId || !Array.isArray(row.messages)) continue;
+			map.set(row.id, {
+				id: row.id,
+				projectId,
+				title: typeof row.title === "string" ? row.title : defaultSessionTitle(map.size + 1),
+				createdAt: typeof row.createdAt === "string" ? row.createdAt : new Date().toISOString(),
+				messages: row.messages,
+				compaction: row.compaction,
+			});
+		}
+	} catch (error) {
+		console.warn(
+			`[ai-edition] corrupt chat file for ${projectId}:`,
+			error instanceof Error ? error.message : error,
+		);
+	}
+}
 
 // ponytail: per-message checkpoints, stored as an ordered list per session
 // (insertion order == the session's message order). Each entry captures the
@@ -116,9 +214,9 @@ function dropCheckpointsFrom(
 // ponytail: what compaction leaves behind. `coveredCount` counts the leading
 // transcript messages the summary stands in for — the transcript itself is
 // never rewritten, so the user keeps every message they wrote while the model
-// gets the shortened list. Sessions are in-memory only; deleting the messages
-// the renderer shows would be unrecoverable, and nothing in the UI would say
-// it happened.
+// gets the shortened list. Sessions persist to disk when configured; deleting
+// the messages the renderer shows would still be unrecoverable in-session.
+// nothing in the UI would say it happened.
 interface SessionCompaction {
 	summary: AiEditionChatMessage;
 	coveredCount: number;
@@ -179,6 +277,7 @@ function toSummary(s: ChatSession): ChatSessionSummary {
 }
 
 function getProjectSessions(projectId: string): Map<string, ChatSession> {
+	hydrateProject(projectId);
 	let m = sessionsByProject.get(projectId);
 	if (!m) {
 		m = new Map();
@@ -192,8 +291,7 @@ function defaultSessionTitle(index: number): string {
 }
 
 export function listSessions(projectId: string): ChatSessionSummary[] {
-	const m = sessionsByProject.get(projectId);
-	if (!m) return [];
+	const m = getProjectSessions(projectId);
 	return Array.from(m.values())
 		.map(toSummary)
 		.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -211,12 +309,13 @@ export function createSession(projectId: string, title?: string): ChatSessionSum
 		messages: [],
 	};
 	m.set(id, session);
+	persistProject(projectId);
 	return toSummary(session);
 }
 
 export function selectSession(projectId: string, sessionId: string): ChatSession | null {
-	const m = sessionsByProject.get(projectId);
-	const s = m?.get(sessionId);
+	const m = getProjectSessions(projectId);
+	const s = m.get(sessionId);
 	if (!s) return null;
 	// ponytail: shallow-copy messages so the caller can't mutate the live array.
 	// The compaction boundary stays behind: it is main-process bookkeeping, and
@@ -235,18 +334,20 @@ export function renameSession(
 	sessionId: string,
 	title: string,
 ): ChatSessionSummary | null {
-	const m = sessionsByProject.get(projectId);
-	const s = m?.get(sessionId);
+	const m = getProjectSessions(projectId);
+	const s = m.get(sessionId);
 	if (!s) return null;
 	const trimmed = title.trim();
 	if (trimmed) s.title = trimmed;
+	persistProject(projectId);
 	return toSummary(s);
 }
 
 export function deleteSession(projectId: string, sessionId: string): boolean {
-	const m = sessionsByProject.get(projectId);
-	if (!m?.has(sessionId)) return false;
+	const m = getProjectSessions(projectId);
+	if (!m.has(sessionId)) return false;
 	m.delete(sessionId);
+	persistProject(projectId);
 	return true;
 }
 
@@ -384,6 +485,7 @@ export async function runChat(
 	userMessage.checkpointId = documentForCheckpoint ? userMessage.id : null;
 
 	session.messages.push(userMessage);
+	persistProject(projectId);
 
 	const editsAllowed = config.allowAgentEdits !== false;
 
@@ -429,7 +531,8 @@ export async function runChat(
 			baseUrl: config.baseUrl,
 			reasoningEffort: config.reasoningEffort,
 			localAgentPermission: config.localAgentPermission,
-			watchGranted: config.localAgentPermission === "always" || llmConfig.isSessionWatchGranted(),
+			watchGranted:
+				config.localAgentPermission === "always" || llmConfig.isSessionWatchGranted?.() === true,
 		},
 		history,
 		userMessage: message,
@@ -459,6 +562,7 @@ export async function runChat(
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 	};
 	session.messages.push(assistantMessage);
+	persistProject(projectId);
 
 	return {
 		success: true,
@@ -494,7 +598,7 @@ export function rewindToMessage(
 			success: false;
 			error: string;
 	  } {
-	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	const session = getProjectSessions(projectId).get(sessionId);
 	if (!session) return { success: false, error: "Chat session not found." };
 	const messageIndex = session.messages.findIndex((m) => m.id === messageId);
 	if (messageIndex === -1) {
@@ -527,6 +631,7 @@ export function rewindToMessage(
 		session.compaction = undefined;
 	}
 	dropCheckpointsFrom(projectId, sessionId, target.checkpointId);
+	persistProject(projectId);
 
 	return {
 		success: true,
@@ -556,7 +661,7 @@ export async function runTimelineOperation(
 	conversationMessage: string,
 	documents: DocumentService,
 ): Promise<{ success: true; result: TimelineOperationResult } | { success: false; error: string }> {
-	let session = sessionsByProject.get(projectId)?.get(sessionId);
+	let session = getProjectSessions(projectId).get(sessionId);
 	const created = !session;
 	if (created) {
 		const summary = createSession(projectId);
@@ -594,6 +699,7 @@ export async function runTimelineOperation(
 			createdAt: new Date().toISOString(),
 		};
 		session.messages.push(assistantMessage);
+		persistProject(projectId);
 	}
 
 	return {
@@ -613,7 +719,7 @@ export async function compactSessionNow(
 	sessionId: string,
 	llmConfig: LlmConfigStore,
 ): Promise<{ summaryMessageId: string | null; summary: string; session: ChatSession } | null> {
-	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	const session = getProjectSessions(projectId).get(sessionId);
 	if (!session) return null;
 	const config = llmConfig.getConfig();
 	if (!config) return null;
@@ -654,7 +760,7 @@ export function getSessionContextUsage(
 	sessionId: string,
 	budgetTokens: number = DEFAULT_BUDGET_TOKENS,
 ): { usedTokens: number; budgetTokens: number; ratio: number; fillPercent: number } | null {
-	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	const session = getProjectSessions(projectId).get(sessionId);
 	if (!session) return null;
 	// Measured on what the model is given, not on the transcript -- after a
 	// compaction those differ, and the number that matters is the one that
@@ -695,7 +801,7 @@ export function getSessionBudget(
 	sessionId: string,
 	budgetTokens: number = DEFAULT_BUDGET_TOKENS,
 ): SessionBudgetSnapshot | null {
-	const s = sessionsByProject.get(projectId)?.get(sessionId);
+	const s = getProjectSessions(projectId).get(sessionId);
 	if (!s) return null;
 	// Same window the model is actually sent — see `getSessionContextUsage`.
 	const snap = budgetSnapshot(modelHistory(s), budgetTokens);
@@ -716,7 +822,7 @@ export async function compactSession(
 	sessionId: string,
 	llmConfig: LlmConfigStore,
 ): Promise<{ summaryMessageId: string | null; summary: string } | null> {
-	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	const session = getProjectSessions(projectId).get(sessionId);
 	if (!session) return null;
 	const config = llmConfig.getConfig();
 	if (!config) return null;
@@ -828,6 +934,7 @@ async function tryCompactSession(opts: {
 		return null;
 	}
 	session.compaction = { summary: summaryMessage, coveredCount: plan.coveredCount };
+	persistProject(session.projectId);
 	return {
 		summaryMessageId: summaryMessage.id,
 		summary,

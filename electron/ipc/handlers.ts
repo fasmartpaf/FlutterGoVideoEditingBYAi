@@ -42,6 +42,7 @@ import type {
 } from "../../src/native/contracts";
 import {
 	compactSessionNow,
+	configureChatPersistence,
 	createSession,
 	deleteSession,
 	getSessionContextUsage,
@@ -4355,6 +4356,7 @@ export function registerIpcHandlers(
 		RECORDINGS_DIR,
 		approveDocumentMedia,
 	);
+	configureChatPersistence(path.join(app.getPath("userData"), "chat-sessions"));
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does
 	// two sync readFileSync plus a safeStorage decrypt, and it was running on every

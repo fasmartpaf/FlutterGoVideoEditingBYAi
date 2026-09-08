@@ -314,7 +314,11 @@ export function computeCompositeLayout(params: {
 			size: screenSize,
 			maxSize: maxContentSize,
 		});
-		return { screenRect, webcamRect: null };
+		return {
+			screenRect,
+			webcamRect: null,
+			...(paddingFillsFrame(canvasSize, maxContentSize) ? { screenCover: true } : {}),
+		};
 	}
 
 	const webcamWidth = webcamSize?.width;
@@ -332,10 +336,12 @@ export function computeCompositeLayout(params: {
 
 		if (!webcamWidth || !webcamHeight || webcamWidth <= 0 || webcamHeight <= 0) {
 			// No camera on this clip: the block degenerates to the screen alone, which
-			// contain-fits the padded area like every other preset does.
+			// contain-fits the padded area like every other preset does — except at
+			// padding 0, where it cover-fills so wallpaper cannot leak as letterbox.
 			return {
 				screenRect: centerRect({ canvasSize, size: screenSize, maxSize: maxContentSize }),
 				webcamRect: null,
+				...(paddingFillsFrame(canvasSize, maxContentSize) ? { screenCover: true } : {}),
 			};
 		}
 
@@ -503,6 +509,7 @@ export function computeCompositeLayout(params: {
 			borderRadius,
 			maskShape: webcamMaskShape,
 		},
+		...(paddingFillsFrame(canvasSize, maxContentSize) ? { screenCover: true } : {}),
 	};
 }
 
@@ -523,6 +530,12 @@ function snapRect(x: number, y: number, width: number, height: number): RenderRe
 	};
 }
 
+function paddingFillsFrame(canvasSize: Size, maxContentSize: Size): boolean {
+	return (
+		maxContentSize.width >= canvasSize.width - 1 && maxContentSize.height >= canvasSize.height - 1
+	);
+}
+
 function centerRect(params: { canvasSize: Size; size: Size; maxSize: Size }): RenderRect {
 	const { canvasSize, size, maxSize } = params;
 	return centerRectInBounds({
@@ -541,12 +554,12 @@ function centerRectInBounds(params: { bounds: RenderRect; size: Size; maxSize: S
 	const resolvedWidth = Math.round(width * scale);
 	const resolvedHeight = Math.round(height * scale);
 
-	if (
-		maxWidth >= boundsWidth &&
-		maxHeight >= boundsHeight &&
-		Math.abs(boundsWidth - resolvedWidth) <= 4 &&
-		Math.abs(boundsHeight - resolvedHeight) <= 4
-	) {
+	// Padding 0: the content box IS the frame. Contain-fitting a mismatched
+	// capture (16:10 in 16:9, ultrawide window, …) would letterbox wallpaper
+	// even though the slider already says there is no margin. Cover the frame
+	// instead; overflow is cropped. Padding > 0 still contain-fits so the
+	// wallpaper ring is the only empty band.
+	if (maxWidth >= boundsWidth - 1 && maxHeight >= boundsHeight - 1) {
 		return {
 			x: boundsX,
 			y: boundsY,

@@ -76,6 +76,7 @@ const ARGS: Record<string, unknown> = {
 	addSpeed: { startSec: 1, endSec: 2 },
 	setSpeed: { speedId: "speed_nope" },
 	addAnnotation: { startSec: 1, endSec: 2, text: "hi" },
+	addGraphic: { startSec: 1, endSec: 2, kind: "title", text: "Coach Pulse" },
 	setAnnotation: { annotationId: "ann_nope" },
 	addCameraFullscreen: { startSec: 1, endSec: 2 },
 	setCameraFullscreen: { cameraFullscreenId: "cam_nope" },
@@ -232,16 +233,18 @@ describe("the tool surface handed to the model", () => {
 		expect(SYSTEM_PROMPT).not.toMatch(/file ?system|file path|write_todos|sub-?agent/i);
 	});
 
-	it("tells the model to watch the open recording; a transcript is optional", () => {
+	it("tells the model to reuse the remembered recording outline; a transcript is optional", () => {
 		expect(SYSTEM_PROMPT).toMatch(/visibleMedia/i);
+		expect(SYSTEM_PROMPT).toMatch(/mediaContext/i);
 		expect(SYSTEM_PROMPT).toMatch(/transcript is optional/i);
-		expect(SYSTEM_PROMPT).toMatch(/ffmpeg/i);
+		expect(SYSTEM_PROMPT).toMatch(/Do not extract ffmpeg stills/i);
 		expect(SYSTEM_PROMPT).toMatch(/Never say you cannot see the project/i);
 	});
 
 	it("teaches a one-pass finish and refuses invented schema fields", () => {
 		expect(SYSTEM_PROMPT).toMatch(/One-pass finish/);
 		expect(SYSTEM_PROMPT).toMatch(/CTAs/);
+		expect(SYSTEM_PROMPT).toMatch(/addGraphic/);
 		expect(SYSTEM_PROMPT).toMatch(/type 'blur'/);
 		expect(SYSTEM_PROMPT).toMatch(/not fields on this document/);
 		expect(SYSTEM_PROMPT).toMatch(/clip-to-clip transitions/);

@@ -247,6 +247,10 @@ export function printArgvForAgent(
 ): string[] {
 	if (agentId === "codex") return ["exec", "--skip-git-repo-check", prompt];
 	if (agentId === "gemini") return ["-p", prompt];
+	// Cursor Agent refuses a temp cwd until the workspace is trusted. This
+	// spawn is headless (no TTY), so `--trust` is the non-interactive grant
+	// the CLI itself tells you to pass.
+	if (agentId === "cursor") return ["-p", "--trust", prompt];
 	if (agentId === "claude") {
 		// Print mode: OpenScreen JSON tools stay in the prompt (stdin). When a
 		// recording is open, grant Read on that folder so Claude can watch it.

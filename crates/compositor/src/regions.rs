@@ -12,6 +12,100 @@ use crate::scene::{SceneCameraFullscreenRegion, SceneSpeedRegion, SceneZoomRegio
 pub const SPEED_FRAME_EPSILON_SEC: f64 = 0.001;
 const MIN_SPEED_SEGMENT_SEC: f64 = 0.0001;
 
+/// Half-window of a cross-dissolve at a hard cut. Trims already split into
+/// compositor clips; the outgoing last frame is mixed over the incoming clip
+/// so the join is a dissolve, not a wallpaper dip and not a slide.
+pub const CUT_FADE_HALF_SEC: f64 = 0.35;
+
+fn smooth01(t: f64) -> f32 {
+    let x = t.clamp(0.0, 1.0);
+    ((x * x) * (3.0 - 2.0 * x)) as f32
+}
+
+/// How much of the previous clip's last frame to mix in (1 = only previous, 0 = only current).
+/// First clip and a lone clip stay at 0. The outgoing side is not faded to wallpaper.
+pub fn incoming_dissolve(
+    clip_index: usize,
+    clip_count: usize,
+    source_t: f64,
+    source_start: f64,
+    source_end: f64,
+) -> f32 {
+    if clip_count < 2 || clip_index == 0 {
+        return 0.0;
+    }
+    let span = source_end - source_start;
+    if !(span > 1e-4) {
+        return 0.0;
+    }
+    let half = CUT_FADE_HALF_SEC.min(span * 0.45);
+    1.0 - smooth01((source_t - source_start) / half)
+}
+
+/// Kept for call sites that still say "fade": this is the dissolve amount, not wallpaper alpha.
+pub fn cut_fade_opacity(
+    clip_index: usize,
+    clip_count: usize,
+    source_t: f64,
+    source_start: f64,
+    source_end: f64,
+) -> f32 {
+    incoming_dissolve(clip_index, clip_count, source_t, source_start, source_end)
+}
+
+/// Speed changes stay on the same picture — a dissolve needs two clips. Always 1.
+pub fn speed_edge_fade_opacity(_regions: &[SceneSpeedRegion], _source_t: f64) -> f32 {
+    1.0
+}
+
+/// Dissolve mix for the active clip (previous hold vs current). Speed edges do not dip.
+pub fn footage_fade_opacity(
+    clip_index: usize,
+    clips: &[crate::scene::SceneClip],
+    _speed_regions: &[SceneSpeedRegion],
+    source_t: f64,
+) -> f32 {
+    let Some(clip) = clips.get(clip_index) else {
+        return 0.0;
+    };
+    incoming_dissolve(
+        clip_index,
+        clips.len(),
+        source_t,
+        clip.source_start_sec,
+        clip.source_end_sec,
+    )
+}
+
+/// Last frame of the outgoing clip, kept so the incoming clip can dissolve over it.
+pub struct DissolveHold(pub *mut crate::ffi::AVFrame);
+
+impl Drop for DissolveHold {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { crate::ffi::av_frame_free(&mut self.0) };
+        }
+    }
+}
+
+impl DissolveHold {
+    pub unsafe fn clone_from(frame: *const crate::ffi::AVFrame) -> Option<Self> {
+        if frame.is_null() {
+            return None;
+        }
+        let cloned = crate::ffi::av_frame_clone(frame);
+        if cloned.is_null() {
+            None
+        } else {
+            Some(Self(cloned))
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const crate::ffi::AVFrame {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SpeedSegment {
     pub start_sec: f64,
@@ -1120,5 +1214,45 @@ mod exporter_frame_totals {
         );
         assert_eq!(frames(4.0, 4.0, &[], FPS), 0, "fenêtre vide");
         assert_eq!(frames(0.0, 10.0, &[], 0.0), 0, "fps non positif");
+    }
+}
+
+#[cfg(test)]
+mod cut_fade {
+    use super::*;
+
+    #[test]
+    fn a_single_clip_has_no_dissolve() {
+        assert_eq!(incoming_dissolve(0, 1, 1.0, 0.0, 10.0), 0.0);
+    }
+
+    #[test]
+    fn an_internal_join_dissolves_from_the_previous_clip() {
+        let at_join = incoming_dissolve(1, 3, 4.0, 4.0, 8.0);
+        let mid = incoming_dissolve(1, 3, 6.0, 4.0, 8.0);
+        let at_exit = incoming_dissolve(1, 3, 8.0, 4.0, 8.0);
+        assert!(at_join > 0.95, "join should be the outgoing hold, got {at_join}");
+        assert!(mid < 0.05, "mid-segment should be the current clip, got {mid}");
+        assert!(at_exit < 0.05, "exit must not dip to wallpaper, got {at_exit}");
+    }
+
+    #[test]
+    fn the_first_clip_does_not_dissolve_and_the_last_does_not_fade_to_paper() {
+        assert_eq!(incoming_dissolve(0, 2, 0.0, 0.0, 5.0), 0.0);
+        assert!(incoming_dissolve(1, 2, 5.0, 5.0, 10.0) > 0.95);
+        assert!(incoming_dissolve(0, 2, 5.0, 0.0, 5.0) < 0.05);
+        assert!(incoming_dissolve(1, 2, 10.0, 5.0, 10.0) < 0.05);
+    }
+
+    #[test]
+    fn a_speed_change_does_not_dissolve() {
+        let sped = [SceneSpeedRegion {
+            clip_index: None,
+            start_sec: 2.0,
+            end_sec: 4.0,
+            speed: 1.5,
+        }];
+        assert_eq!(speed_edge_fade_opacity(&sped, 2.0), 1.0);
+        assert_eq!(speed_edge_fade_opacity(&sped, 3.0), 1.0);
     }
 }

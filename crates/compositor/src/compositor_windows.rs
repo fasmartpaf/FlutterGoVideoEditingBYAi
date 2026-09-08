@@ -139,6 +139,7 @@ pub struct Compositor {
     /// Scène pilotée par l'app (contrat) : quand présente, remplace le layout fixture de
     /// `timeline()`. Voir `scene.rs` / `SceneDescription` (TS).
     scene: RefCell<Option<Scene>>,
+    dissolve_hold: RefCell<Option<crate::regions::DissolveHold>>,
     /// Rastériseur de texte (Direct2D/DirectWrite). `Option` parce qu'un échec d'init des
     /// fabriques ne doit pas empêcher tout le compositeur de tourner : sans lui, les annotations
     /// texte sont simplement absentes, comme avant.
@@ -609,6 +610,7 @@ impl Compositor {
             srv_cache: RefCell::new(HashMap::new()),
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
+            dissolve_hold: RefCell::new(None),
             text_raster: match crate::text::TextRasterizer::new() {
                 Ok(r) => Some(r),
                 Err(e) => {
@@ -1391,6 +1393,14 @@ impl Compositor {
         *self.timeline_t_override.borrow_mut() = t;
     }
 
+    pub unsafe fn capture_dissolve_hold(&self, screen: *const AVFrame) {
+        *self.dissolve_hold.borrow_mut() = crate::regions::DissolveHold::clone_from(screen);
+    }
+
+    pub fn clear_dissolve_hold(&self) {
+        *self.dissolve_hold.borrow_mut() = None;
+    }
+
     /// Copie de la scène courante (si présente) — utilisé par l'export multiclip pour lire les
     /// réglages curseur (thème/lissage/show) sans dupliquer le contrat de scène côté pipeline.
     pub fn scene_snapshot(&self) -> Option<Scene> {
@@ -1660,6 +1670,7 @@ impl Compositor {
         let w_px = g.w_px;
         let w_radius = g.w_radius;
         let shape_fade = g.shape_fade;
+        let cut_fade = g.cut_fade;
 
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
@@ -1794,6 +1805,12 @@ impl Compositor {
             }
         }
         if crate::regions::is_identity_rotation(zoom_rotation) {
+            let hold = self.dissolve_hold.borrow();
+            let hold_tex = if cut_fade > 0.02 {
+                hold.as_ref().and_then(|h| self.nv12_srvs(h.as_ptr()).ok())
+            } else {
+                None
+            };
             self.draw_video(
                 &LayerCB {
                     dst: s_dst,
@@ -1810,6 +1827,24 @@ impl Compositor {
                 &sy,
                 &suv,
             );
+            if let Some((hy, huv)) = hold_tex.as_ref() {
+                self.draw_video(
+                    &LayerCB {
+                        dst: s_dst,
+                        src: [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv],
+                        quad_px: s_px,
+                        radius_px: s_radius,
+                        mode: 0.0,
+                        color: [0.0, 0.0, 0.0, cut_fade],
+                        src_prev: [su0_p, sv0_p, su0_p + 2.0 * hu_p, sv0_p + 2.0 * hv_p],
+                        dst_prev: s_dst_prev,
+                        mb: [mb_taps, mb_amount, 1.0, 0.0],
+                        ..Default::default()
+                    },
+                    hy,
+                    huv,
+                );
+            }
         } else {
             // Tilt 3D (zoom "rotation" iso/left/right) : warp bilinéaire inverse (mode 8, voir
             // shaders.hlsl). Pas de motion blur dans ce chemin — le tilt est un effet bref, la

@@ -259,6 +259,8 @@ pub struct Compositor {
     render_w: u32,
     render_h: u32,
     scene: RefCell<Option<Scene>>,
+    /// Last frame of the outgoing clip, mixed over the incoming clip (cross-dissolve).
+    dissolve_hold: RefCell<Option<crate::regions::DissolveHold>>,
     cursor: RefCell<Option<crate::cursor::CursorTrack>>,
     cursor_time: RefCell<Option<f32>>,
     timeline_time: RefCell<Option<f32>>,
@@ -608,6 +610,7 @@ impl Compositor {
             render_w: rw,
             render_h: rh,
             scene: RefCell::new(None),
+            dissolve_hold: RefCell::new(None),
             cursor: RefCell::new(None),
             cursor_time: RefCell::new(None),
             timeline_time: RefCell::new(None),
@@ -684,6 +687,14 @@ impl Compositor {
 
     pub fn set_timeline_time(&self, t: Option<f32>) {
         *self.timeline_time.borrow_mut() = t;
+    }
+
+    pub unsafe fn capture_dissolve_hold(&self, screen: *const AVFrame) {
+        *self.dissolve_hold.borrow_mut() = crate::regions::DissolveHold::clone_from(screen);
+    }
+
+    pub fn clear_dissolve_hold(&self) {
+        *self.dissolve_hold.borrow_mut() = None;
     }
 
     pub fn clear_cursor(&self) {
@@ -2090,24 +2101,54 @@ impl Compositor {
             }
         }
         let [su0, sv0, su1, sv1] = g.cut;
+        let dissolve = g.cut_fade;
+        let hold = self.dissolve_hold.borrow();
+        let hold_tex = if dissolve > 0.02 {
+            hold.as_ref().and_then(|h| self.nv12_srvs(h.as_ptr()).ok())
+        } else {
+            None
+        };
         match tilt.as_ref() {
-            None => self.draw_video(
-                enc,
-                &LayerCB {
-                    dst: g.s_dst,
-                    src: [su0, sv0, su1, sv1],
-                    quad_px: s_px,
-                    radius_px: g.s_radius,
-                    mode: 0.0,
-                    color: [0.0, 0.0, 0.0, 1.0],
-                    src_prev: [su0, sv0, su1, sv1],
-                    dst_prev: g.s_dst_prev,
-                    mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
-                    ..Default::default()
-                },
-                &sy,
-                &suv,
-            ),
+            None => {
+                // Current clip is always opaque so the wallpaper cannot show through
+                // the mix. The outgoing hold sits on top and fades out.
+                self.draw_video(
+                    enc,
+                    &LayerCB {
+                        dst: g.s_dst,
+                        src: [su0, sv0, su1, sv1],
+                        quad_px: s_px,
+                        radius_px: g.s_radius,
+                        mode: 0.0,
+                        color: [0.0, 0.0, 0.0, 1.0],
+                        src_prev: [su0, sv0, su1, sv1],
+                        dst_prev: g.s_dst_prev,
+                        mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
+                        ..Default::default()
+                    },
+                    &sy,
+                    &suv,
+                );
+                if let Some((hy, huv)) = hold_tex.as_ref() {
+                    self.draw_video(
+                        enc,
+                        &LayerCB {
+                            dst: g.s_dst,
+                            src: [su0, sv0, su1, sv1],
+                            quad_px: s_px,
+                            radius_px: g.s_radius,
+                            mode: 0.0,
+                            color: [0.0, 0.0, 0.0, dissolve],
+                            src_prev: [su0, sv0, su1, sv1],
+                            dst_prev: g.s_dst_prev,
+                            mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
+                            ..Default::default()
+                        },
+                        hy,
+                        huv,
+                    );
+                }
+            }
             Some(quad) => self.draw_tilted_screen(
                 enc, quad, s_px, quad_center_px, g.cut, g.s_radius, &sy, &suv,
             ),

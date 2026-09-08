@@ -404,6 +404,11 @@ describe("V4Timeline clip row", () => {
 			);
 		}
 	});
+
+	it("draws a dissolve mark at each touching clip join", () => {
+		renderTimeline(CLIPS);
+		expect(screen.getAllByTestId("clip-join-transition")).toHaveLength(2);
+	});
 });
 
 // Issue #350 — dragging an imported audio track on its lane. The pixel→second

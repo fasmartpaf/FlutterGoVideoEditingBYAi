@@ -57,6 +57,24 @@ describe("DocumentService", () => {
 			expect(fetched.project.id).toBe(created.project.id);
 		});
 
+		it("persists a remembered outline of each recording on open", async () => {
+			const created = await service.createProject("Remembered take");
+			const withAsset = await service.addAsset(created.project.id, {
+				path: path.join(mediaDir, "studio.mp4"),
+				label: "Studio take",
+			});
+			const raw = JSON.parse(
+				await fs.readFile(path.join(tempDir, `${created.project.id}.openscreen`), "utf8"),
+			) as { legacyEditor?: { mediaContext?: { assets?: Array<{ assetId: string }> } } };
+			expect(raw.legacyEditor?.mediaContext?.assets?.[0]?.assetId).toBe(withAsset.assets[0].id);
+
+			const reopened = await service.getProject(created.project.id);
+			expect(
+				(reopened.legacyEditor as { mediaContext?: { assets: Array<{ label: string }> } } | null)
+					?.mediaContext?.assets[0]?.label,
+			).toBe("Studio take");
+		});
+
 		it("throws DocumentNotFoundError for missing projects", async () => {
 			await expect(service.getProject("proj_does-not-exist")).rejects.toBeInstanceOf(
 				DocumentNotFoundError,

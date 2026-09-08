@@ -759,6 +759,8 @@ pub struct FrameGeometry {
     pub w_px: [f32; 2],
     pub w_radius: f32,
     pub shape_fade: f32,
+    /// Cross-dissolve mix at an incoming cut (1 = previous clip hold, 0 = current only).
+    pub cut_fade: f32,
 }
 
 /// Rect de destination d'une annotation dans un rect d'ancrage, en fractions de la sortie.
@@ -1185,6 +1187,16 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         w_px,
         w_radius,
         shape_fade,
+        cut_fade: scene
+            .map(|s| {
+                crate::regions::footage_fade_opacity(
+                    s.active_clip_index,
+                    &s.clips,
+                    &s.speed_regions,
+                    source_t as f64,
+                )
+            })
+            .unwrap_or(1.0),
     }
 }
 
@@ -2072,6 +2084,7 @@ mod tests {
             w_px: [0.0, 0.0],
             w_radius: 0.0,
             shape_fade: 0.0,
+            cut_fade: 1.0,
         };
 
         // 1. Curseur immobile avec blur actif -> taps = 1

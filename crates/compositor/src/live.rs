@@ -582,6 +582,7 @@ impl Player {
         }
         self.has_current_frame = true;
         self.use_current_on_next_step = false;
+        comp.clear_dissolve_hold();
         self.sync_time(comp);
         // "idx" ne sert plus qu'au fallback fixture (jamais lu si une scène est posée) — dérivé
         // du temps réel pour rester cohérent si jamais consulté.
@@ -1211,6 +1212,14 @@ unsafe fn advance_to_next_scene_clip(
     } else {
         0
     };
+    if next_index == 0 {
+        comp.clear_dissolve_hold();
+    } else {
+        let sf = player.sdec.cur_frame();
+        if !sf.is_null() {
+            comp.capture_dissolve_hold(sf);
+        }
+    }
     let next_clip = &scene.clips[next_index];
 
     // N'importe quel préchargement en cours ne concerne plus que CETTE frontière (on vient

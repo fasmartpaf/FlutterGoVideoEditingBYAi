@@ -13,6 +13,7 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
+import { attachMediaContext } from "../../src/lib/ai-edition/document/mediaContext";
 import { removeClip } from "../../src/lib/ai-edition/document/timeline";
 import {
 	type AxcutAsset,
@@ -293,7 +294,14 @@ export class DocumentService {
 		);
 		// AFTER the relink, so what is granted is the path the renderer will actually ask for.
 		this.onProjectRead?.(document);
-		return document;
+		const withContext = attachMediaContext(document);
+		if (withContext !== document) {
+			// Remembered outline lives on the project file so a later open already
+			// has it. Relink repairs stay in-memory; this write is only the extra
+			// legacyEditor.mediaContext envelope.
+			await this.writeProject(withContext);
+		}
+		return withContext;
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {
@@ -308,7 +316,7 @@ export class DocumentService {
 	}
 
 	async saveProject(document: AxcutDocument): Promise<AxcutDocument> {
-		const parsed = documentSchema.parse(document);
+		const parsed = documentSchema.parse(attachMediaContext(document));
 		const stamped: AxcutDocument = {
 			...parsed,
 			project: { ...parsed.project, updatedAt: new Date().toISOString() },

@@ -338,6 +338,13 @@ pub(crate) unsafe fn walk_composited_timeline(
             }
         }
 
+        if clip_index + 1 < clips.len() {
+            let last = sdec.cur_frame();
+            if !last.is_null() {
+                comp.capture_dissolve_hold(last);
+            }
+        }
+
         on_clip_end(
             clip_index,
             source_end_sec,
