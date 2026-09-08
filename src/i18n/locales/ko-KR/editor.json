@@ -347,7 +347,10 @@
 		"reset": "재설정",
 		"apply": "적용",
 		"pickClipTitle": "편집할 클립 선택",
-		"clipLabel": "클립 {{index}}"
+		"clipLabel": "클립 {{index}}",
+		"cropToContent": "기기에 맞게 자르기",
+		"drawCropHint": "미리보기에서 드래그해 폰을 고르세요. 또는 잘라 검은 여백을 제거하세요.",
+		"cropToContentMiss": "이 프레임에서 자를 내용이 없습니다"
 	},
 	"insertSourceDialog": {
 		"title": "소스 삽입",

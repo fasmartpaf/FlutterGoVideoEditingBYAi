@@ -347,7 +347,10 @@
 		"reset": "إعادة التعيين",
 		"apply": "تطبيق",
 		"pickClipTitle": "اختر مقطعًا لتعديله",
-		"clipLabel": "المقطع {{index}}"
+		"clipLabel": "المقطع {{index}}",
+		"cropToContent": "قص للجهاز",
+		"drawCropHint": "اسحب على المعاينة لاختيار الهاتف. أو اقص لإزالة السواد.",
+		"cropToContentMiss": "لا يوجد شيء لقصّه في هذا الإطار"
 	},
 	"insertSourceDialog": {
 		"title": "إدراج المصدر",

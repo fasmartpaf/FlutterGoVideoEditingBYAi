@@ -413,24 +413,26 @@ export function useTimeline() {
 	);
 
 	const addAnnotation = useCallback(
-		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
+		async (durationSec = DEFAULT_NEW_REGION_SEC, kind: "text" | "blur" = "text") => {
 			if (!document) return;
 			const timeMs = Math.round(playheadSec() * 1000);
+			const hide = kind === "blur";
 			const ann: AnnotationRegion = {
 				id: createId("ann"),
 				startMs: timeMs,
 				endMs: timeMs + Math.round(durationSec * 1000),
-				type: "text" as AnnotationType,
+				type: (hide ? "blur" : "text") as AnnotationType,
 				// Real, localised text rather than an empty field. An empty annotation
 				// renders nothing at all, so the user added a region and saw no change
 				// on the canvas; the inspector's placeholder is CSS ghost text that
 				// never reaches `content`, so it never reached the compositor either.
 				// `textContent` stays empty because the render path reads
 				// `content || textContent` and seeding both would just duplicate it.
-				content: ts("annotation.defaultText"),
+				// Hide / blur has no text slot — an empty content is correct there.
+				content: hide ? "" : ts("annotation.defaultText"),
 				textContent: "",
 				position: { x: 50, y: 50 },
-				size: { width: 30, height: 20 },
+				size: { width: hide ? 28 : 30, height: hide ? 22 : 20 },
 				style: {
 					color: "#ffffff",
 					backgroundColor: "transparent",
@@ -443,6 +445,18 @@ export function useTimeline() {
 					textAnimation: "none",
 				},
 				zIndex: document.annotations.length + 1,
+				// Mosaic + black so a Hide drop actually covers UI, not a light frost.
+				...(hide
+					? {
+							blurData: {
+								type: "mosaic" as const,
+								shape: "rectangle" as const,
+								color: "black" as const,
+								intensity: 24,
+								blockSize: 32,
+							},
+						}
+					: {}),
 			};
 			const created = anchorRegionsWithDerivedMs([ann], document.timeline.clips, () =>
 				createId("ann"),

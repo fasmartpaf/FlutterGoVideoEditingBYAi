@@ -1,0 +1,64 @@
+[
+	{
+		"op": "trim",
+		"startSec": 12,
+		"endSec": 76,
+		"reason": "cut pricing miss and empty homepage wait"
+	},
+	{
+		"op": "trim",
+		"startSec": 105,
+		"endSec": 158,
+		"reason": "cut long modal hold"
+	},
+	{
+		"op": "zoom",
+		"startSec": 12,
+		"endSec": 30,
+		"depth": 3,
+		"focus": { "cx": 0.5, "cy": 0.42 }
+	},
+	{
+		"op": "annotation",
+		"startSec": 0.5,
+		"endSec": 5,
+		"text": "Describe. Build. Ship.",
+		"x": 50,
+		"y": 10,
+		"width": 72,
+		"height": 12,
+		"textAnimation": "pop",
+		"fontSize": 36,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	},
+	{
+		"op": "annotation",
+		"startSec": 14,
+		"endSec": 28,
+		"text": "Coach Pulse",
+		"x": 50,
+		"y": 11,
+		"width": 52,
+		"height": 12,
+		"textAnimation": "pop",
+		"fontSize": 34,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	},
+	{
+		"op": "annotation",
+		"startSec": 44,
+		"endSec": 61,
+		"text": "Workspace",
+		"x": 50,
+		"y": 10,
+		"width": 40,
+		"height": 12,
+		"backgroundColor": "#34B27B",
+		"color": "#ffffff",
+		"fontSize": 28,
+		"fontWeight": "bold",
+		"textAnimation": "pop"
+	}
+]

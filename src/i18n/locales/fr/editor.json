@@ -347,7 +347,10 @@
 		"reset": "Réinitialiser",
 		"apply": "Appliquer",
 		"pickClipTitle": "Choisissez un clip à modifier",
-		"clipLabel": "Clip {{index}}"
+		"clipLabel": "Clip {{index}}",
+		"cropToContent": "Recadrer sur l'appareil",
+		"drawCropHint": "Glissez sur l'aperçu pour choisir le téléphone. Ou recadrez pour retirer le noir.",
+		"cropToContentMiss": "Rien à recadrer sur cette image"
 	},
 	"insertSourceDialog": {
 		"title": "Insérer la source",

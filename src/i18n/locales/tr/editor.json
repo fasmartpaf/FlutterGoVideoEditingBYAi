@@ -347,7 +347,10 @@
 		"reset": "Sıfırla",
 		"apply": "Uygula",
 		"pickClipTitle": "Düzenlenecek klibi seçin",
-		"clipLabel": "Klip {{index}}"
+		"clipLabel": "Klip {{index}}",
+		"cropToContent": "Cihaza kırp",
+		"drawCropHint": "Telefonu seçmek için önizlemede sürükleyin. Ya da siyahı kaldırmak için kırpın.",
+		"cropToContentMiss": "Bu karede kırpılacak bir şey yok"
 	},
 	"insertSourceDialog": {
 		"title": "Kaynağı ekle",

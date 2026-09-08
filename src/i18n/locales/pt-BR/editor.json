@@ -347,7 +347,10 @@
 		"reset": "Redefinir",
 		"apply": "Aplicar",
 		"pickClipTitle": "Escolha um clipe para editar",
-		"clipLabel": "Clipe {{index}}"
+		"clipLabel": "Clipe {{index}}",
+		"cropToContent": "Recortar no dispositivo",
+		"drawCropHint": "Arraste na prévia para escolher o telefone. Ou recorte para remover o preto.",
+		"cropToContentMiss": "Nada para recortar neste quadro"
 	},
 	"insertSourceDialog": {
 		"title": "Inserir fonte",

@@ -347,7 +347,10 @@
 		"reset": "Restablecer",
 		"apply": "Aplicar",
 		"pickClipTitle": "Elige un clip para editar",
-		"clipLabel": "Clip {{index}}"
+		"clipLabel": "Clip {{index}}",
+		"cropToContent": "Recortar al dispositivo",
+		"drawCropHint": "Arrastra en la vista previa para elegir el teléfono. O recorta para quitar el negro.",
+		"cropToContentMiss": "Nada que recortar en este fotograma"
 	},
 	"insertSourceDialog": {
 		"title": "Insertar fuente",

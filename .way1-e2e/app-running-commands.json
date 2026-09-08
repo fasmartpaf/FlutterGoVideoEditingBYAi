@@ -1,0 +1,65 @@
+[
+	{
+		"op": "trim",
+		"startSec": 0,
+		"endSec": 0.4,
+		"reason": "cut record preroll"
+	},
+	{
+		"op": "speed",
+		"startSec": 0,
+		"endSec": 38,
+		"speed": 1.8
+	},
+	{
+		"op": "zoom",
+		"startSec": 0,
+		"endSec": 58,
+		"depth": 4,
+		"focus": { "cx": 0.5, "cy": 0.52 }
+	},
+	{
+		"op": "annotation",
+		"startSec": 0.5,
+		"endSec": 6,
+		"text": "Coach Pulse",
+		"x": 50,
+		"y": 9,
+		"width": 52,
+		"height": 11,
+		"textAnimation": "pop",
+		"fontSize": 36,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	},
+	{
+		"op": "annotation",
+		"startSec": 8,
+		"endSec": 16,
+		"text": "Start Session",
+		"x": 50,
+		"y": 86,
+		"width": 44,
+		"height": 11,
+		"backgroundColor": "#E85D4C",
+		"color": "#ffffff",
+		"fontSize": 26,
+		"fontWeight": "bold",
+		"textAnimation": "pop"
+	},
+	{
+		"op": "annotation",
+		"startSec": 24,
+		"endSec": 40,
+		"text": "Live workout",
+		"x": 50,
+		"y": 9,
+		"width": 44,
+		"height": 11,
+		"backgroundColor": "#34B27B",
+		"color": "#ffffff",
+		"fontSize": 26,
+		"fontWeight": "bold",
+		"textAnimation": "pop"
+	}
+]

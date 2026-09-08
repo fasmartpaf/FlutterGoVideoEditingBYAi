@@ -1,0 +1,28 @@
+[
+	{
+		"op": "trim",
+		"startSec": 90,
+		"endSec": 180,
+		"reason": "keep the generate-UI stretch"
+	},
+	{
+		"op": "speed",
+		"startSec": 0,
+		"endSec": 90,
+		"speed": 2
+	},
+	{
+		"op": "annotation",
+		"startSec": 1,
+		"endSec": 14,
+		"text": "Writing Coach Pulse",
+		"x": 50,
+		"y": 10,
+		"width": 64,
+		"height": 12,
+		"textAnimation": "pop",
+		"fontSize": 32,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	}
+]

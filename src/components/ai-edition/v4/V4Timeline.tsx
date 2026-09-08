@@ -2,6 +2,7 @@ import {
 	AudioLines,
 	Clock,
 	Crosshair,
+	EyeOff,
 	Loader2,
 	Maximize2,
 	MessageSquare,
@@ -96,7 +97,7 @@ type TimelineApi = ReturnType<typeof useTimeline>;
 
 const ASSET_MIME = "application/x-axcut-asset";
 
-type ToolId = "cut" | "comment" | "speed";
+type ToolId = "cut" | "comment" | "hide" | "speed";
 
 // "Nice" ruler steps, from a 20th of a second up to an hour. The one that gets
 // used depends on the zoom (see rulerTicks), so the ladder has to cover both a
@@ -1468,6 +1469,7 @@ export function V4Timeline({
 	const tools: Array<{ id: ToolId; label: string; icon: React.ReactNode }> = [
 		{ id: "cut", label: t("buttons.addTrim"), icon: <SplitSquareHorizontal size={15} /> },
 		{ id: "comment", label: t("toolbar.comment"), icon: <MessageSquare size={15} /> },
+		{ id: "hide", label: t("toolbar.hide"), icon: <EyeOff size={15} /> },
 		{ id: "speed", label: t("buttons.addSpeed"), icon: <Clock size={15} /> },
 	];
 
@@ -1830,6 +1832,7 @@ export function V4Timeline({
 												const dur = newRegionDurationSec();
 												if (tool.id === "speed") void tl.addSpeed(dur);
 												if (tool.id === "comment") void tl.addAnnotation(dur);
+												if (tool.id === "hide") void tl.addAnnotation(dur, "blur");
 												if (tool.id === "cut") void tl.addTrim(dur);
 											}}
 										>

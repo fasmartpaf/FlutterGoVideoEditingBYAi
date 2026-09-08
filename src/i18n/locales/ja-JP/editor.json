@@ -347,7 +347,10 @@
 		"reset": "リセット",
 		"apply": "適用",
 		"pickClipTitle": "編集するクリップを選択",
-		"clipLabel": "クリップ {{index}}"
+		"clipLabel": "クリップ {{index}}",
+		"cropToContent": "端末に合わせて切り抜き",
+		"drawCropHint": "プレビューをドラッグして端末を選びます。または切り抜いて黒を除きます。",
+		"cropToContentMiss": "このフレームに切り抜くものがありません"
 	},
 	"insertSourceDialog": {
 		"title": "ソースを挿入",

@@ -13,7 +13,10 @@ import { formatSeconds } from "@/lib/ai-edition/timeline/format";
 import {
 	cropDraftFromRegion,
 	cropDraftToPct,
+	cropPctFromDrag,
+	detectPreviewCrop,
 	displayPct,
+	MIN_CROP_PCT,
 	previewBoxStyle,
 	stepPct,
 } from "./cropDraft";
@@ -594,7 +597,7 @@ function centeredFitPct(fr: number): { x: number; y: number; w: number; h: numbe
 	return { x: (100 - w) / 2, y: 0, w, h: 100 };
 }
 
-const MIN_PCT = 4;
+const MIN_PCT = MIN_CROP_PCT;
 const clampPct = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 type ResizeEdges = { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean };
@@ -704,6 +707,7 @@ export function EditClipModal({
 	const [cropHPct, setCropHPct] = useState(100);
 	const [cropRatio, setCropRatio] = useState("free");
 	const [cropTouched, setCropTouched] = useState(false);
+	const [cropMiss, setCropMiss] = useState(false);
 	// Source video's real pixel aspect ratio (width/height) — needed to convert
 	// between a preset's visual ratio (e.g. 16/9) and the crop region's
 	// fraction-of-frame width/height. 16/9 is just a placeholder until the
@@ -727,6 +731,7 @@ export function EditClipModal({
 		setCropWPct(pct.w);
 		setCropHPct(pct.h);
 		setCropTouched(false);
+		setCropMiss(false);
 	}, [open, clip]);
 
 	// Re-detect the active ratio preset whenever the stored region or the
@@ -777,6 +782,8 @@ export function EditClipModal({
 		Math.abs(draftStart - clip.sourceStartSec) > 0.001 ||
 		Math.abs(draftEnd - (clip.sourceEndSec ?? 0)) > 0.001;
 	const hasChanges = hasTrimChanges || cropTouched;
+	const isIdentityCrop =
+		cropXPct <= 0.05 && cropYPct <= 0.05 && cropWPct >= 99.9 && cropHPct >= 99.9;
 	const clipSources = videoSources.filter((s) => s.id === clip.assetId);
 	const cropPreviewSource = clipSources[0] ?? null;
 
@@ -897,6 +904,74 @@ export function EditClipModal({
 		window.addEventListener("pointerup", up);
 	};
 
+	// Draw a new crop by dragging on the preview — the only way to pick a
+	// phone sitting in a full-frame (identity) crop. The identity overlay
+	// covers the whole video, so a move-only handle can never land on the
+	// device; this starts from the click instead.
+	const startCropDraw = (e: ReactPointerEvent) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		const el = cropFrameRef.current;
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		if (r.width < 1 || r.height < 1) return;
+		const originX = ((e.clientX - r.left) / r.width) * 100;
+		const originY = ((e.clientY - r.top) / r.height) * 100;
+		setCropTouched(true);
+		setCropRatio("free");
+		setCropMiss(false);
+		const move = (ev: PointerEvent) => {
+			const x = ((ev.clientX - r.left) / r.width) * 100;
+			const y = ((ev.clientY - r.top) / r.height) * 100;
+			const next = cropPctFromDrag(originX, originY, x, y);
+			if (!next) return;
+			setCropXPct(next.x);
+			setCropYPct(next.y);
+			setCropWPct(next.w);
+			setCropHPct(next.h);
+		};
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+	};
+
+	const applyContentCrop = () => {
+		const video = cropVideoRef.current;
+		if (!video || video.videoWidth < 2 || video.videoHeight < 2) {
+			setCropMiss(true);
+			return;
+		}
+		const maxW = 480;
+		const sw = Math.min(maxW, video.videoWidth);
+		const sh = Math.max(2, Math.round((video.videoHeight * sw) / video.videoWidth));
+		const canvas = document.createElement("canvas");
+		canvas.width = sw;
+		canvas.height = sh;
+		const ctx = canvas.getContext("2d", { willReadFrequently: true });
+		if (!ctx) {
+			setCropMiss(true);
+			return;
+		}
+		ctx.drawImage(video, 0, 0, sw, sh);
+		const image = ctx.getImageData(0, 0, sw, sh);
+		const region = detectPreviewCrop(image.data, sw, sh);
+		if (!region) {
+			setCropMiss(true);
+			return;
+		}
+		const pct = cropDraftToPct(region);
+		setCropXPct(pct.x);
+		setCropYPct(pct.y);
+		setCropWPct(pct.w);
+		setCropHPct(pct.h);
+		setCropRatio("free");
+		setCropTouched(true);
+		setCropMiss(false);
+	};
+
 	// Drag one of the 8 edge/corner handles to resize. When a fixed ratio is
 	// active, the opposite dimension follows to keep width/height locked.
 	const startCropResize = (edges: ResizeEdges) => (e: ReactPointerEvent) => {
@@ -991,6 +1066,7 @@ export function EditClipModal({
 		setCropHPct(pct.h);
 		setCropRatio(detectRatio(region, videoAspectRatio));
 		setCropTouched(false);
+		setCropMiss(false);
 	};
 	const handleApply = () => {
 		const nextCrop: CropRegion = {
@@ -1013,7 +1089,11 @@ export function EditClipModal({
 			subtitle={assetMeta?.label ?? undefined}
 			wide
 		>
-			<div ref={cropFrameRef} style={previewBoxStyle(videoAspectRatio)}>
+			<div
+				ref={cropFrameRef}
+				style={{ ...previewBoxStyle(videoAspectRatio), cursor: "crosshair" }}
+				onPointerDown={startCropDraw}
+			>
 				{cropPreviewSource ? (
 					<video
 						ref={cropVideoRef}
@@ -1027,6 +1107,7 @@ export function EditClipModal({
 							height: "100%",
 							objectFit: "contain",
 							background: "#000",
+							pointerEvents: "none",
 						}}
 					/>
 				) : null}
@@ -1040,9 +1121,10 @@ export function EditClipModal({
 						border: "1.5px solid var(--fg)",
 						borderRadius: 4,
 						boxShadow: "0 0 0 9999px var(--overlay-dark)",
-						cursor: "move",
+						cursor: isIdentityCrop ? "crosshair" : "move",
+						pointerEvents: isIdentityCrop ? "none" : "auto",
 					}}
-					onPointerDown={startCropMove}
+					onPointerDown={isIdentityCrop ? undefined : startCropMove}
 				>
 					<div
 						onPointerDown={startCropResize({ left: true, top: true })}
@@ -1087,6 +1169,34 @@ export function EditClipModal({
 						})}
 					/>
 				</div>
+			</div>
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "space-between",
+					gap: 12,
+					margin: "-6px 0 12px",
+					flexShrink: 0,
+				}}
+			>
+				<p
+					style={{
+						margin: 0,
+						font: "500 12px/1.4 var(--font-body)",
+						color: cropMiss ? "var(--danger, #e85d4c)" : "var(--muted)",
+					}}
+				>
+					{cropMiss ? t("editClipDialog.cropToContentMiss") : t("editClipDialog.drawCropHint")}
+				</p>
+				<button
+					type="button"
+					className={`${styles.btn} ${styles.btnSecondary}`}
+					onClick={applyContentCrop}
+				>
+					<Crop size={14} />
+					{t("editClipDialog.cropToContent")}
+				</button>
 			</div>
 
 			<div style={{ flexShrink: 0 }}>

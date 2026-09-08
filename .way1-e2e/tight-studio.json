@@ -1,0 +1,83 @@
+[
+	{
+		"op": "trim",
+		"startSec": 3.5,
+		"endSec": 76,
+		"reason": "cut empty homepage, pricing miss, and waiting"
+	},
+	{
+		"op": "trim",
+		"startSec": 84,
+		"endSec": 96,
+		"reason": "cut sitting on the typed prompt"
+	},
+	{
+		"op": "trim",
+		"startSec": 101,
+		"endSec": 169,
+		"reason": "cut long data-live modal hold"
+	},
+	{
+		"op": "speed",
+		"startSec": 17,
+		"endSec": 27,
+		"speed": 1.55
+	},
+	{
+		"op": "zoom",
+		"startSec": 3.2,
+		"endSec": 11,
+		"depth": 4,
+		"focus": { "cx": 0.5, "cy": 0.42 }
+	},
+	{
+		"op": "zoom",
+		"startSec": 16,
+		"endSec": 24,
+		"depth": 3,
+		"focus": { "cx": 0.52, "cy": 0.48 }
+	},
+	{
+		"op": "annotation",
+		"startSec": 0.3,
+		"endSec": 3,
+		"text": "Describe. Build. Ship.",
+		"x": 50,
+		"y": 9,
+		"width": 72,
+		"height": 11,
+		"textAnimation": "pop",
+		"fontSize": 34,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	},
+	{
+		"op": "annotation",
+		"startSec": 3.5,
+		"endSec": 9,
+		"text": "Coach Pulse",
+		"x": 50,
+		"y": 10,
+		"width": 50,
+		"height": 11,
+		"textAnimation": "pop",
+		"fontSize": 34,
+		"fontWeight": "bold",
+		"color": "#ffffff"
+	},
+	{
+		"op": "annotation",
+		"startSec": 17,
+		"endSec": 24,
+		"text": "Workspace",
+		"x": 50,
+		"y": 9,
+		"width": 38,
+		"height": 11,
+		"backgroundColor": "#34B27B",
+		"color": "#ffffff",
+		"fontSize": 26,
+		"fontWeight": "bold",
+		"textAnimation": "pop"
+	}
+]

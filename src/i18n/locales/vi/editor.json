@@ -347,7 +347,10 @@
 		"reset": "Đặt lại",
 		"apply": "Áp dụng",
 		"pickClipTitle": "Chọn clip để chỉnh sửa",
-		"clipLabel": "Clip {{index}}"
+		"clipLabel": "Clip {{index}}",
+		"cropToContent": "Cắt theo thiết bị",
+		"drawCropHint": "Kéo trên bản xem trước để chọn điện thoại. Hoặc cắt để bỏ phần đen.",
+		"cropToContentMiss": "Không có gì để cắt trên khung này"
 	},
 	"insertSourceDialog": {
 		"title": "Chèn nguồn",

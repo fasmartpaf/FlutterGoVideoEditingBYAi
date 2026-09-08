@@ -593,6 +593,24 @@ describe("useTimeline.addAnnotation", () => {
 			id: (annotations[0] as { id: string }).id,
 		});
 	});
+
+	it("creates a mosaic hide region that covers part of the frame", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addAnnotation(2, "blur");
+		});
+		const annotations = useProjectStore.getState().document?.annotations ?? [];
+		expect(annotations).toHaveLength(1);
+		expect(annotations[0]).toMatchObject({
+			type: "blur",
+			content: "",
+			blurData: { type: "mosaic", shape: "rectangle", color: "black" },
+		});
+		expect(result.current.selection).toEqual({
+			kind: "annotation",
+			id: (annotations[0] as { id: string }).id,
+		});
+	});
 });
 
 describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
