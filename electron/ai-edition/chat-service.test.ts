@@ -1,12 +1,15 @@
+import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AxcutDocument, createEmptyDocument } from "../../src/lib/ai-edition/schema";
 import {
+	configureChatPersistence,
 	createSession,
 	deleteSession,
 	listSessions,
 	renameSession,
+	resetChatSessionsForTests,
 	runTimelineOperation,
 	selectSession,
 } from "./chat-service";
@@ -225,5 +228,43 @@ describe("runTimelineOperation", () => {
 		expect(result.success).toBe(false);
 		if (result.success) return;
 		expect(result.error).toBe("disk is dead");
+	});
+});
+
+describe("chat-service persistence", () => {
+	let dir: string;
+
+	beforeEach(async () => {
+		dir = await fs.mkdtemp(path.join(tmpdir(), "openscreen-chat-persist-"));
+		resetChatSessionsForTests();
+		configureChatPersistence(dir);
+	});
+
+	afterEach(async () => {
+		configureChatPersistence(null);
+		resetChatSessionsForTests();
+		await fs.rm(dir, { recursive: true, force: true });
+	});
+
+	it("reloads the conversation after a simulated restart", async () => {
+		const documents = new DocumentService(dir, dir);
+		const project = await documents.createProject("Kept chat");
+		const session = createSession(project.project.id, "Demo edits");
+		await runTimelineOperation(
+			project.project.id,
+			session.id,
+			{ type: "restore_full_timeline" },
+			"Cut the waits and kept the phone in frame.",
+			documents,
+		);
+
+		resetChatSessionsForTests();
+
+		const list = listSessions(project.project.id);
+		expect(list).toHaveLength(1);
+		expect(list[0].title).toBe("Demo edits");
+		expect(list[0].messageCount).toBe(1);
+		const reloaded = selectSession(project.project.id, session.id);
+		expect(reloaded?.messages[0]?.content).toBe("Cut the waits and kept the phone in frame.");
 	});
 });

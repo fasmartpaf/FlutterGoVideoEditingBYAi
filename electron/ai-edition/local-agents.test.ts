@@ -73,6 +73,7 @@ describe("selectionForAgent", () => {
 describe("local CLI helpers", () => {
 	it("prints agent-specific argv", () => {
 		expect(printArgvForAgent("codex", "hi")).toEqual(["exec", "--skip-git-repo-check", "hi"]);
+		expect(printArgvForAgent("cursor", "hi")).toEqual(["-p", "--trust", "hi"]);
 		expect(localCliPromptOnStdin("claude")).toBe(true);
 		expect(printArgvForAgent("claude", "hi")).toEqual([
 			"-p",

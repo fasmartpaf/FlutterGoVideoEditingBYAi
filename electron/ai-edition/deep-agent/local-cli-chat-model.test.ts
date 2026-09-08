@@ -29,7 +29,9 @@ describe("buildPrompt", () => {
 		expect(prompt).toContain("USER: List windows I can record");
 		expect(prompt).toContain('"tool_calls"');
 		expect(prompt).toContain("You can SEE it");
+		expect(prompt).toContain("mediaContext");
 		expect(prompt).toContain("visibleMedia");
 		expect(prompt).toContain("ffmpeg");
+		expect(prompt).toContain("addGraphic");
 	});
 });

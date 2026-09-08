@@ -1922,6 +1922,65 @@
 	border-radius: 2px;
 	background: var(--accent);
 }
+.tlFilmstrip {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	pointer-events: none;
+	z-index: 0;
+}
+.tlFilmstrip img {
+	flex: 1 1 0;
+	min-width: 0;
+	height: 100%;
+	object-fit: cover;
+	filter: saturate(1.05);
+}
+.tlJoin {
+	position: absolute;
+	top: 50%;
+	z-index: 8;
+	width: 13px;
+	height: 13px;
+	margin-left: -7px;
+	transform: translateY(-50%) rotate(45deg);
+	border: 1.5px solid color-mix(in srgb, var(--accent) 80%, #fff);
+	background: color-mix(in srgb, var(--bg) 35%, var(--accent));
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent);
+	pointer-events: none;
+}
+.lanePillFilm {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	pointer-events: none;
+	z-index: 0;
+	opacity: 0.55;
+}
+.lanePillFilm img {
+	flex: 1 1 0;
+	min-width: 0;
+	height: 100%;
+	object-fit: cover;
+}
+.lanePillJoin {
+	position: absolute;
+	left: -5px;
+	top: 50%;
+	z-index: 3;
+	width: 9px;
+	height: 9px;
+	transform: translateY(-50%) rotate(45deg);
+	border: 1.5px solid color-mix(in srgb, var(--accent) 85%, #fff);
+	background: color-mix(in srgb, var(--bg) 40%, var(--accent));
+	pointer-events: none;
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.lanePill > svg,
+.lanePillLabel {
+	position: relative;
+	z-index: 1;
+}
 .tlClipLabel {
 	position: absolute;
 	left: 10px;

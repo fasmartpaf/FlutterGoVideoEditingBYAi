@@ -298,6 +298,7 @@ pub struct Compositor {
     cursor: RefCell<Option<crate::cursor::CursorTrack>>,
     cursor_time: RefCell<Option<f32>>,
     timeline_time: RefCell<Option<f32>>,
+    dissolve_hold: RefCell<Option<crate::regions::DissolveHold>>,
 
     /// Rasterizer de texte (annotations mode 11). `None` si l'init cosmic-text
     /// echoue -- le rendu continue sans texte plutot que de tout casser.
@@ -670,6 +671,7 @@ impl Compositor {
             cursor: RefCell::new(None),
             cursor_time: RefCell::new(None),
             timeline_time: RefCell::new(None),
+            dissolve_hold: RefCell::new(None),
             text_raster: crate::text::TextRasterizer::new().ok(),
             img_cache: RefCell::new(std::collections::HashMap::new()),
             img_tick: std::cell::Cell::new(0),
@@ -968,6 +970,14 @@ impl Compositor {
 
     pub fn set_timeline_time(&self, t: Option<f32>) {
         *self.timeline_time.borrow_mut() = t;
+    }
+
+    pub unsafe fn capture_dissolve_hold(&self, screen: *const AVFrame) {
+        *self.dissolve_hold.borrow_mut() = crate::regions::DissolveHold::clone_from(screen);
+    }
+
+    pub fn clear_dissolve_hold(&self) {
+        *self.dissolve_hold.borrow_mut() = None;
     }
 
     pub fn clear_cursor(&self) {
@@ -1966,6 +1976,13 @@ impl Compositor {
         // `plane_px` dans `dst_prev`). Les deux sens ne peuvent pas cohabiter dans
         // un meme draw. macOS et Windows sautent egalement le flou sur le chemin
         // incline, pour la meme raison.
+        let dissolve = g.cut_fade;
+        let hold_ref = self.dissolve_hold.borrow();
+        let hold_planes = if dissolve > 0.02 && tilt.is_none() {
+            hold_ref.as_ref().and_then(|h| self.nv12_srvs(h.as_ptr()).ok())
+        } else {
+            None
+        };
         let screen_layer = match tilt.as_ref() {
             None => LayerCB {
                 dst: g.s_dst,
@@ -1984,6 +2001,21 @@ impl Compositor {
         // Bind group construit AVANT le pass (doit vivre pendant tout le pass) ;
         // `_screen_uniform` garde le buffer uniforme en vie (reference par le bind).
         let dummy = self.dummy_view();
+        let hold_bind = hold_planes.as_ref().map(|(hy, hu, hv)| {
+            let cb = LayerCB {
+                dst: g.s_dst,
+                src: g.cut,
+                quad_px: s_px,
+                radius_px: g.s_radius,
+                mode: 0.0,
+                color: [1.0, 1.0, 1.0, dissolve],
+                src_prev: g.cut,
+                dst_prev: g.s_dst_prev,
+                mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
+                ..Default::default()
+            };
+            self.make_bind(&cb, Some((hy, hu, hv)), &dummy)
+        });
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &su, &sv)), &dummy);
 
@@ -2764,6 +2796,10 @@ impl Compositor {
             }
             rpass.set_bind_group(0, &screen_bind, &[]);
             rpass.draw(0..4, 0..1);
+            if let Some((_buf, bind)) = &hold_bind {
+                rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
             if let Some((_buf, bind)) = &webcam_shadow {
                 rpass.set_bind_group(0, bind, &[]);
                 rpass.draw(0..4, 0..1);

@@ -40,6 +40,29 @@ describe("computeCompositeLayout", () => {
 		expect(layout!.webcamRect!.y).toBeGreaterThan(1080 / 2);
 	});
 
+	it("cover-fills a mismatched capture at padding 0 so wallpaper cannot letterbox", () => {
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 1920, height: 1080 },
+			maxContentSize: { width: 1920, height: 1080 },
+			screenSize: { width: 2560, height: 1080 },
+			layoutPreset: "no-webcam",
+		});
+		expect(layout?.screenRect).toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
+		expect(layout?.screenCover).toBe(true);
+	});
+
+	it("still contain-fits when padding leaves a wallpaper ring", () => {
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 1920, height: 1080 },
+			maxContentSize: { width: 1536, height: 864 },
+			screenSize: { width: 2560, height: 1080 },
+			layoutPreset: "no-webcam",
+		});
+		expect(layout?.screenCover).toBeFalsy();
+		expect(layout?.screenRect.height).toBeLessThan(864);
+		expect(layout?.screenRect.y).toBeGreaterThan(0);
+	});
+
 	it("scales small screen content up to the export canvas when no padding is applied", () => {
 		const layout = computeCompositeLayout({
 			canvasSize: { width: 1280, height: 720 },

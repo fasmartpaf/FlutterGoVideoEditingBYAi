@@ -1,7 +1,6 @@
-// "Turn the background off" (#84) is four settings, not one, and the aspect ratio is the one
-// that is easy to forget: padding 0 only fills the WIDTH, so a 16:10 capture in a 16:9 project
-// keeps its wallpaper bars however zeroed the frame is. That is exactly why the issue reads as
-// unfixable to someone who already found the padding slider — so it gets pinned here.
+// "Turn the background off" (#84) is four settings, not one. Padding 0 now cover-fills the
+// output frame (no letterbox wallpaper), but that crops a mismatched capture. Fit still
+// adopts the footage's shape so the whole recording stays visible without a crop.
 
 import { describe, expect, it } from "vitest";
 import { fitClipPatch } from "./RightPanes";

@@ -172,6 +172,7 @@ describe("the mutating-tool table", () => {
 		expect([...MUTATING_TOOL_NAMES].sort()).toEqual(
 			[
 				"addAnnotation",
+				"addGraphic",
 				"addAudio",
 				"addCameraFullscreen",
 				"addSpeed",
@@ -767,6 +768,50 @@ describe("executeAgentTool", () => {
 		expect(() => documentSchema.parse(blur.document)).not.toThrow();
 	});
 
+	it("addGraphic creates a title that is already on the timeline", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addGraphic",
+			JSON.stringify({
+				startSec: 0,
+				endSec: 3,
+				kind: "title",
+				text: "Coach Pulse",
+				subtext: "Try the demo",
+			}),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.summary).toMatch(/merged into video/);
+		const payload = JSON.parse(result.resultJson) as { merged?: boolean; annotationId?: string };
+		expect(payload.merged).toBe(true);
+		expect(result.document?.annotations.at(-1)).toMatchObject({
+			type: "text",
+			textContent: "Coach Pulse\nTry the demo",
+			position: { y: 16 },
+			style: { textAnimation: "fade" },
+		});
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("addGraphic bakes an image plate and the snapshot never dumps the pixels", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addGraphic",
+			JSON.stringify({ startSec: 1, endSec: 4, kind: "image", text: "CP" }),
+		);
+		expect(result.ok).toBe(true);
+		const ann = result.document?.annotations.at(-1);
+		expect(ann?.type).toBe("image");
+		expect(String(ann?.content).startsWith("data:image/png;base64,")).toBe(true);
+		const snapshot = JSON.parse(
+			executeAgentTool(result.document as AxcutDocument, "getCurrentDocument", "").resultJson,
+		);
+		const row = snapshot.annotations.find((a: { type: string }) => a.type === "image");
+		expect(row).toMatchObject({ type: "image", text: "CP", hasImage: true });
+		expect(JSON.stringify(snapshot)).not.toMatch(/data:image\/png;base64,/);
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
 	it("snapshot exposes the project queue, unused assets, and edited duration", () => {
 		const unused = documentSchema.parse({
 			...fixtureDocument(),
@@ -1113,6 +1158,7 @@ describe("documentSnapshotForModel", () => {
 		const snapshot = snapshotOf(fixtureDocument()) as Snapshot & {
 			openMedia: { clipId: string; label: string; originalPath: string | null } | null;
 			openMediaNote: string;
+			mediaContext: { assets: Array<{ assetId: string; parts: unknown[] }> };
 			visibleMedia: Array<{ originalPath: string }>;
 			assets: Array<{ originalPath?: string }>;
 		};
@@ -1130,7 +1176,9 @@ describe("documentSnapshotForModel", () => {
 			},
 		]);
 		expect(snapshot.assets[0].originalPath).toBe(fixtureDocument().assets[0].originalPath);
-		expect(snapshot.openMediaNote).toMatch(/visibleMedia/i);
+		expect(snapshot.mediaContext.assets[0]?.assetId).toBe(fixtureDocument().assets[0].id);
+		expect(snapshot.mediaContext.assets[0]?.parts.length).toBeGreaterThan(0);
+		expect(snapshot.openMediaNote).toMatch(/mediaContext/i);
 		expect(snapshot.openMediaNote).toMatch(/transcript is optional/i);
 	});
 

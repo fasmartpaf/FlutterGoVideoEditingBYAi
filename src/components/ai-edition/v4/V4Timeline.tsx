@@ -54,6 +54,12 @@ import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
+import {
+	clipJoinTimes,
+	filmstripCellCount,
+	filmstripSampleTimes,
+	posterTimeForSpan,
+} from "@/lib/ai-edition/timeline/clipFilmstrip";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -66,6 +72,7 @@ import {
 	resolveTimelineSpanToTrim,
 	ventilateTimelineSpanToTrims,
 } from "@/lib/ai-edition/timeline/trim-mapping";
+import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
 	type AutoZoomSuggestion,
 	buildAutoZoomSuggestionsForClips,
@@ -74,6 +81,7 @@ import { formatBinding } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native/client";
 import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
+import { ClipFilmstrip } from "./ClipFilmstrip";
 import styles from "./EditorShellV4.module.css";
 
 // The AI option's prompt — sent straight to the chat agent via the prompt-bus.
@@ -1636,6 +1644,31 @@ export function V4Timeline({
 				}
 				title={p.label}
 			>
+				{(() => {
+					if (!seg.showContent || compact) return null;
+					const posterAt = posterTimeForSpan(seg.segStart, seg.segEnd);
+					const pos = locateVirtualPosition(clips, posterAt);
+					const url = pos
+						? videoSources.find((source) => source.id === pos.clip.assetId)?.src
+						: undefined;
+					return (
+						<ClipFilmstrip
+							url={url}
+							times={pos ? [pos.sourceTimeSec] : []}
+							className={styles.lanePillFilm}
+						/>
+					);
+				})()}
+				{(p.kind === "speed" || p.kind === "trim") &&
+				seg.showContent &&
+				!seg.suppressLeftSeam &&
+				!compact ? (
+					<span
+						aria-hidden
+						data-testid={`${p.kind}-join-transition`}
+						className={styles.lanePillJoin}
+					/>
+				) : null}
 				{seg.interactive ? (
 					<span
 						className={styles.lanePillHandle}
@@ -2227,6 +2260,15 @@ export function V4Timeline({
 										}}
 										title={t("toolbar.dragToReorderHint")}
 									>
+										<ClipFilmstrip
+											url={clipVideoUrl}
+											times={filmstripSampleTimes(
+												c.sourceStartSec,
+												c.sourceEndSec ?? c.sourceStartSec + dur,
+												filmstripCellCount(boxLen * pxPerSec),
+											)}
+											className={styles.tlFilmstrip}
+										/>
 										<ClipWaveform
 											videoUrl={clipVideoUrl}
 											assetDurationSec={asset?.durationSec}
@@ -2269,6 +2311,15 @@ export function V4Timeline({
 									</div>
 								);
 							})}
+							{clipJoinTimes(clips).map((sec) => (
+								<div
+									key={`join-${sec}`}
+									aria-hidden
+									data-testid="clip-join-transition"
+									className={styles.tlJoin}
+									style={{ left: `${pctAt(sec)}%` }}
+								/>
+							))}
 							{dragOver ? (
 								<div aria-hidden className={styles.tlDropHint}>
 									{t("toolbar.dropToAdd")}
