@@ -1,0 +1,66 @@
+{
+	"caseId": "case10_speech_visual_contradiction",
+	"title": "Speech claims settings open; visuals do not confirm",
+	"mediaPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788930909064.mp4",
+	"cursorPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788930909064.mp4.cursor.json",
+	"durationSec": 11.8,
+	"status": "READY",
+	"notes": "Visual inspected: code editor, not a settings panel. Eval injects transcript 'Now I'm opening the settings.' System must preserve contradiction.",
+	"referenceSpeech": [
+		{
+			"startSec": 0,
+			"endSec": 4,
+			"text": "Now I'm opening the settings."
+		}
+	],
+	"events": [
+		{
+			"id": "e_speech_settings_claim",
+			"startSec": 0,
+			"endSec": 4,
+			"modality": "speech",
+			"expectedMeaning": "Speech mentions opening settings",
+			"importance": "critical",
+			"matchHints": ["settings", "opening"]
+		},
+		{
+			"id": "e_visual_not_settings",
+			"startSec": 0,
+			"endSec": 8,
+			"modality": "visual",
+			"expectedMeaning": "Visuals remain code editor; settings UI not established",
+			"importance": "critical",
+			"matchHints": ["code", "editor", "no significant", "stable", "not", "does not", "unclear"]
+		},
+		{
+			"id": "e_contradiction_preserved",
+			"startSec": 0,
+			"endSec": 8,
+			"modality": "multimodal",
+			"expectedMeaning": "Speech≠visual distinction retained",
+			"importance": "critical",
+			"matchHints": [
+				"but",
+				"does not",
+				"not clearly",
+				"no visual",
+				"cannot confirm",
+				"without",
+				"mentions"
+			]
+		}
+	],
+	"mustNotClaim": [
+		{
+			"id": "m_settings_confirmed",
+			"kind": "UI_HALLUCINATION",
+			"description": "Do not assert settings were actually opened",
+			"forbiddenPatterns": [
+				"as the user opens settings",
+				"opened the settings",
+				"settings (is|are) open",
+				"successfully opened settings"
+			]
+		}
+	]
+}

@@ -17,6 +17,7 @@
 // middlewares (they are in `REQUIRED_MIDDLEWARE_NAMES`), so the fix is to stop
 // going through it: `createAgent` is what it wrapped, minus the sandbox.
 
+import { existsSync } from "node:fs";
 import { anthropicPromptCachingMiddleware, createAgent, tool } from "langchain";
 import { z } from "zod";
 import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
@@ -25,6 +26,8 @@ import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
 // (`depth/2 + 0.5`) that was purged from two rendering sites and survived here,
 // wrong at both ends of a table that actually runs 1.25× to 5.0×.
 import { ZOOM_DEPTH_LEGEND } from "../../../src/lib/ai-edition/timeline/zoom-scale";
+import { candidateBinaryPaths } from "../../stt/gpuDetector";
+import { getSttManager } from "../../stt/index";
 import {
 	addAnnotationArgs,
 	addAudioArgs,
@@ -43,6 +46,7 @@ import {
 	generateCaptionsArgs,
 	getCursorTrackArgs,
 	getTranscriptArgs,
+	getTranscriptRangeArgs,
 	getTranscriptWordsArgs,
 	isMutatingTool,
 	listSourcesArgs,
@@ -65,7 +69,50 @@ import {
 	setWordTextArgs,
 	setZoomArgs,
 } from "../agent-tools";
+import { verifyAndSanitizeUserFacingNarration } from "../groundedDiagnosis";
 import { mediaDirsFromDocument, shouldGrantLocalWatch } from "../local-agents";
+import { classifyMediaContextNeeds } from "../mediaContextNeeds";
+import {
+	appendSourceStoryToUserMessage,
+	parseAndValidateSourceStory,
+	prepareSourceStoryForTurn,
+	type SourceStory,
+} from "../sourceStory";
+import {
+	prepareSpeechEvidenceForTurn,
+	resolveInjectedSpeechStatus,
+	type SpeechEvidence,
+	speechStatusPromptGuidance,
+	stripInternalEvidenceJsonBlocks,
+} from "../speechEvidence";
+import {
+	appendTargetStoryToUserMessage,
+	parseAndValidateTargetStory,
+	prepareTargetStoryForTurn,
+	type TargetStory,
+} from "../targetStory";
+import { buildLedgerFromPreparedEvidence, type TemporalEventLedger } from "../temporalEventLedger";
+import { userFacingMediaNarrationGuidance } from "../userFacingNarration";
+import {
+	appendInvestigatorToUserMessage,
+	type InvestigationEvidenceSet,
+	runMasterVideoInvestigatorV1,
+	userFacingLeaksInvestigatorInternals,
+} from "../videoInvestigator";
+import { prepareVisualEvidenceForTurn } from "../visualEvidence";
+import { interactionInstantsFromSamples } from "../visualEvidence/sample";
+import {
+	auditUserFacingSemanticLanguage,
+	parseAndValidateVisualSemanticGrounding,
+	semanticGroundingEvidenceFromPrepared,
+	type VisualSemanticGrounding,
+} from "../visualEvidence/semantic";
+import {
+	appendVisualSpecialistToLedger,
+	mergeSpecialistIntoInvestigation,
+	runVisualSpecialistV1,
+	type VisualSpecialistResult,
+} from "../visualSpecialist";
 import {
 	createOpenScreenChatModel,
 	messageContentToText,
@@ -138,15 +185,32 @@ const BASE_SYSTEM_PROMPT = [
 	"- addAnnotation type 'text' is titles, labels and CTAs (Try Now, Visit …, Subscribe) — visual graphics in the export, not clickable links. type 'image' is a PNG/JPEG overlay (pass image as a data URI, or text to bake a plate). type 'figure' is an arrow callout. type 'blur' hides part of the recording (faces, logos, UI chrome) with a mosaic or blur cover — it does not reconstruct the background. Style with color, backgroundColor, fontSize and textAnimation.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
 	"",
-	"One-pass finish (promo, tutorial, demo, social post): read mediaContext (remembered parts of each recording) and projectQueue; use getTranscript only if you need more speech detail; state a short plan; apply the smallest tools; re-read getCurrentDocument and report only what landed. Do not re-watch the file when mediaContext is present. Dead air → addTrims. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or zoom that keeps faces, logos and screen edges in frame. Captions → generateCaptions, then setWordText for fixes. Opening hook → zoom + addGraphic title on the first seconds. Ending CTA → addGraphic cta on the last seconds. Lower third / badge / logo plate → addGraphic. Unused take → addClip from projectQueue.unusedAssets. Music → addAudio only when an audio asset exists; duck with gainDb over speech spans. Do not invent clip-to-clip transitions, saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document.",
+	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan; apply the smallest tools; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → addTrims when transcript/silence evidence supports it. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom from available evidence — do not invent what faces/logos look like without visualFrames. Captions → generateCaptions, then setWordText for fixes. Opening hook → zoom + addGraphic title on the first seconds. Ending CTA → addGraphic cta on the last seconds. Lower third / badge / logo plate → addGraphic. Unused take → addClip from projectQueue.unusedAssets. Music → addAudio only when an audio asset exists; duck with gainDb over speech spans. Do not invent clip-to-clip transitions, saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document.",
 	"",
-	"Cursor telemetry: while the screen was captured, OpenScreen recorded where the pointer went. assets[].hasCursorTelemetry in getCurrentDocument says which assets carry it, and getCursorTrack returns the recorded track for one of them — positions over time, and the pointer shape at each moment. What it means is yours to read.",
-	"Blindness is not evidence. When a tool reports it could not read something (reason 'unavailable'), that is a limit of your runtime, not a fact about the project. Only an explicit negative — reason 'no-sidecar', or a false flag — supports telling the user the data is not there.",
+	"Evidence contract (read mediaCapabilities on the snapshot — do not invent channels):",
+	"- timelineMetadata: you MAY confidently state facts present on AxcutDocument (durations, clip/trim ranges, zooms, annotations, aspect, effects, source↔virtual mapping).",
+	'- cursorTelemetry: when true (or after getCursorTrack succeeds), you MAY state pointer coordinates, motion, timing, and interaction kinds the track records. You must NOT map a click at (cx,cy) to a named UI control (e.g. "Publish") — semanticUi is required for that, and it is false unless such evidence exists.',
+	'- transcript: when true, you MAY quote/paraphrase spoken content from transcript data. When false/missing, do NOT claim there is no audio — missing transcript means transcription is unavailable or not run; only project facts that prove silence/no-mic support "no audio".',
+	"- visualFrames: when false, you must NOT claim you watched the video, inspected frames, saw on-screen text/buttons, judged sharpness/exposure/color/composition from pixels, detected scene changes, or identified what appeared after a click. Say those conclusions are unavailable from current evidence. visibleMedia and mediaContext never make visualFrames true.",
+	'- semanticUi: named control / OCR / a11y grounding. Cursor coords alone never authorize "clicked Publish".',
+	"Stay useful: still execute deterministic edits supported by available evidence (e.g. delete 10.2–13.5s; zoom at a cursor click time when telemetry supports it). For requests that need unavailable visual/semantic evidence, say so (or ask) rather than inventing labels.",
+	"",
+	"Cursor telemetry: while the screen was captured, OpenScreen may have recorded where the pointer went. assets[].hasCursorTelemetry in getCurrentDocument says which assets carry it, and getCursorTrack returns positions over time and pointer shape — coordinates and timing, not UI labels.",
+	"Blindness is not evidence for CURSOR/TRANSCRIPT tools: when a tool reports reason 'unavailable', that is a runtime limit, not proof the project lacks data. Only an explicit negative — reason 'no-sidecar', or hasCursorTelemetry false — supports telling the user that telemetry is absent. This rule does NOT grant visualFrames.",
 	"",
 	"Honesty rules: if a request has NO matching tool (e.g. deleting an asset/recording), say so plainly — do not substitute a different edit and report it as the requested one. After your edits, if you are at all unsure the document ended up as intended, call getCurrentDocument and reconcile what you claim with the real state; each tool result already tells you exactly what it did, so never report a change the results don't support.",
 	"",
 	"The open project's snapshot is attached to this turn. That is the timeline the user is looking at. Do not ask whether they have already added footage. When they ask to improve, tighten, caption, reframe, or export, use the tools on THIS document.",
-	"visibleMedia lists every recording in the open project. mediaContext is the remembered outline of those files (kept spans, speech, silence, notes) and is rebuilt when the project opens. Use mediaContext first. Do not extract ffmpeg stills unless the user asks to re-scan or a part is missing. Never say you cannot see the project when visibleMedia is non-empty. A transcript is optional — not required to understand the video or to plan edits.",
+	"visibleMedia lists recording files in the open project (inventory only). mediaContext is a textual/derived outline (kept spans, speech/silence, notes) rebuilt on open — not a visual inspection. Prefer mediaContext and mediaCapabilities for planning. Do not extract ffmpeg stills yourself unless the user asks to re-scan or a needed part is missing from textual evidence — OpenScreen may already attach sampled VISUAL EVIDENCE frames on this turn when mediaCapabilities.visualFrames is true. A transcript is optional for planning edits that do not need speech text; it is not visual understanding.",
+	"",
+	'When mediaCapabilities.visualFrames is true: the user message includes a bounded set of timestamped JPEG samples (periodic / cursor interaction / clip boundaries / optional change midpoints) plus measured adjacent transition markers (minimal / moderate / significant pixel-difference scores). You MAY describe what labelled frames show and how visible state differs across a transition (e.g. "around 5s the visible editor content changes from X to Y"). Transition markers mean pixels changed — not that a named control was used. You must NOT claim you inspected every frame, invent events between samples, or state exact click targets. Distinguish: (1) directly visible in a supplied frame, (2) inferred between samples, (3) timeline metadata, (4) cursor telemetry, (5) transcript. semanticUi remains false — reading text in a frame is opportunistic, not a validated UI index.',
+	'When mediaCapabilities.visualSemanticEvidence is true (always with visualFrames): in the SAME turn, emit a turn-local VISUAL_SEMANTIC_GROUNDING JSON block (observations + transitions + staticRanges with coveredFrameTimes, referenceObservationTimeSec, layoutState, contentState) for INTERNAL structured grounding before the user-facing answer. Do NOT show that JSON to the user unless they explicitly ask for raw/structured data. Every attached frame timestamp must be covered. Every staticRange reference MUST match an observation — a new compressed semantic state needs an observation at that timestamp. Fully static compression only when layoutState and contentState are both stable; if layout is stable but visible content changes, say so (do not call it materially unchanged). Separate OBSERVED vs INFERRED. Use confidence high|medium|low honestly. Every moderate or significant measured pixel transition must appear in transitions (semantic cause may be uncertain). Prefer "Across the sampled frames…"; never "throughout the video" or "I inspected every frame". Prefer getTranscriptRange near visual events. ' +
+		speechStatusPromptGuidance() +
+		" Spoken words are not proof of named UI actions. visualSemanticEvidence does NOT make semanticUi true and must not be written into the project document.",
+	"When mediaCapabilities.sourceStory is true: in the SAME turn, emit a turn-local SOURCE_STORY JSON block (overallSummary + storyBeats with purpose, SOURCE_MEDIA_TIME ranges, evidence provenance) for INTERNAL chronological understanding before the user-facing answer. Story is communication meaning — not a transcript dump, not one beat per frame, not an edit plan. Do NOT show SOURCE_STORY JSON to the user unless they ask for raw/structured data. Do not persist it to the project.",
+	"When mediaCapabilities.targetStory is true: in the SAME turn AFTER SOURCE_STORY, emit a turn-local TARGET_STORY JSON block (objective, audienceExperience, editingIntent, targetBeats mapped to sourceBeatIds, preserve/change, optional uncertainties) describing the DESIRED VIEWER EXPERIENCE for the user's editing request. Not trim/zoom/crop/transition/tool commands. changeNeeded:false is valid when a source beat already fits. Do NOT invent missing source material. Do NOT execute edits. Do NOT show TARGET_STORY JSON to the user unless they ask for raw/structured data. Do not persist it to the project.",
+	"",
+	userFacingMediaNarrationGuidance(),
 ].join("\n");
 
 const OPEN_PROJECT_PROMPT_BLOCK = [
@@ -173,9 +237,11 @@ export const SYSTEM_PROMPT = buildSystemPrompt({ editsAllowed: true });
 
 export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	getCurrentDocument:
-		"Read a compact snapshot of the current project: mediaContext (remembered parts of each recording), assets (with durations), timeline clips and trim ranges (source-time), projectQueue (open clips with full file vs placed vs edited duration, plus unusedAssets not on the timeline), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale. Reuse mediaContext; do not re-watch the file. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
+		"Read a compact snapshot of the current project: mediaCapabilities (which evidence channels you have), mediaContext (textual/derived outline — not pixels), visibleMedia (file inventory only), assets (with durations), timeline clips and trim ranges (source-time), projectQueue (open clips with full file vs placed vs edited duration, plus unusedAssets not on the timeline), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale. Reuse mediaContext and mediaCapabilities; do not claim pixel inspection when visualFrames is false. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
 	getTranscript:
-		"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
+		"Read transcript segments (speech and silence) in SOURCE media time for an asset. Optional startSec/endSec restrict to a window — prefer that near a visual event. Omit assetId for the primary asset. Times are source seconds, not virtual timeline. Speech text is not proof of a named UI click.",
+	getTranscriptRange:
+		"Read transcript segments overlapping a SOURCE-time window (startSourceTimeSec/endSourceTimeSec). Use this to correlate speech with a visual change or cursor event. Same evidence as getTranscript with a range — never invents visual facts from speech.",
 	getCursorTrack:
 		"Read the recorded pointer track for an asset: where the cursor was over time, downsampled to a readable rate. Each point carries atSec (the asset's own source clock), virtualSec (the same instant on the edited timeline — the coordinate addZoom takes, null when no clip carries it), cx/cy as 0–1 fractions of the frame, and `shape`, an index into the pointer bitmaps the recording used (equal values are the same pointer; a change means the pointer changed, e.g. arrow to text caret). Points that are not plain moves carry `kind`; points a trim cuts out of playback carry `trimmed`. These are real samples, not a summary — reading what the pointer was doing is yours. Omit assetId for the primary asset. It answers `available:false` in two DIFFERENT ways you must not confuse: reason 'no-sidecar' means this asset was checked and genuinely has no telemetry, while reason 'unavailable' means it could not be read from here.",
 	getTranscriptWords:
@@ -285,6 +351,7 @@ interface ToolRuntime {
 	cursor?: CursorTelemetryReader;
 	availableByAssetId?: Record<string, boolean>;
 	cli?: CliEngine;
+	visualFramesSupplied?: boolean;
 }
 
 const CLI_PROCESS_TOOLS: ReadonlySet<string> = new Set([
@@ -367,6 +434,7 @@ function documentTool<S extends z.ZodType>(
 			const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
 				editsAllowed,
 				cursorTelemetry: { availableByAssetId: runtime.availableByAssetId, load },
+				visualFramesSupplied: runtime.visualFramesSupplied,
 			});
 			if (execution.document) holder.current = execution.document;
 			sink.toolEnd(name, execution.ok, execution.summary);
@@ -424,6 +492,7 @@ export function buildTools(
 	return [
 		build("getCurrentDocument", z.object({})),
 		build("getTranscript", getTranscriptArgs),
+		build("getTranscriptRange", getTranscriptRangeArgs),
 		build("getTranscriptWords", getTranscriptWordsArgs),
 		build("getCursorTrack", getCursorTrackArgs),
 		build("setWordText", setWordTextArgs),
@@ -494,8 +563,8 @@ export interface InvokeArgs {
 	/** Injected by `chat-service` from the Electron layer. Absent in tests and in
 	 *  the workbench unless one is supplied on purpose. */
 	cursor?: CursorTelemetryReader;
-	/** Local OpenScreen CLI engine. Wired in the running app; absent in unit tests. */
-	cli?: CliEngine;
+	/** Optional override for speech evidence disk cache (tests). */
+	speechCacheDir?: string;
 }
 
 /** One cheap probe per asset, run before the tools are built so the very first
@@ -552,14 +621,47 @@ export interface InvokeResult {
 	 * `content_block_delta` events). Carries a short diagnostic describing
 	 * what the LangChain layer actually saw. */
 	reason?: string;
+	/**
+	 * Turn-local validated VISUAL_SEMANTIC_GROUNDING from this response.
+	 * Never persisted to .openscreen. Absent when frames were not supplied or
+	 * the model omitted/failed validation (turn continues with ordinary prose).
+	 */
+	visualSemanticGrounding?: VisualSemanticGrounding;
+	speechEvidence?: SpeechEvidence[];
+	/**
+	 * Turn-local validated SOURCE_STORY. Never persisted to .openscreen.
+	 * Absent when not requested or validation failed (turn continues with prose).
+	 */
+	sourceStory?: SourceStory;
+	/**
+	 * Turn-local validated TARGET_STORY (editingContext). Never persisted.
+	 * Absent when not requested, Source Story missing, or validation failed.
+	 */
+	targetStory?: TargetStory;
+	/**
+	 * Turn-local Temporal Event Ledger V1 (deterministic, 0 extra LLM calls).
+	 * Internal cognition memory — never dumped into normal user-facing prose.
+	 */
+	temporalEventLedger?: TemporalEventLedger;
+	/**
+	 * Turn-local Master Video Investigator V1 evidence set (bounded tools).
+	 * Internal only — never dumped into normal user-facing prose.
+	 */
+	investigationEvidence?: InvestigationEvidenceSet;
+	/**
+	 * Turn-local Visual Evidence Specialist V1 result (source-res crop + OCR).
+	 * Internal only — never dumped into normal user-facing prose.
+	 */
+	visualSpecialist?: VisualSpecialistResult;
 }
 
 export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeResult> {
-	const { document, model, history, userMessage, sink } = args;
+	const { model, history, userMessage, sink } = args;
 	const editsAllowed = args.editsAllowed !== false;
 
-	const holder: DocumentHolder = { current: document };
-	const initialDocumentJSON = JSON.stringify(document);
+	let workingDocument = args.document;
+	const holder: DocumentHolder = { current: workingDocument };
+	const initialDocumentJSON = JSON.stringify(workingDocument);
 
 	// ponytail: build a fresh agent per turn (same pattern as axcut). The
 	// runtime side-effects (langgraph thread) are tied to the agent instance —
@@ -568,21 +670,191 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	const chatModel = await createOpenScreenChatModel({
 		...model,
 		mediaDirs: shouldGrantLocalWatch(model.localAgentPermission, Boolean(model.watchGranted))
-			? mediaDirsFromDocument(document)
+			? mediaDirsFromDocument(workingDocument)
 			: [],
 	});
-	const availableByAssetId = await probeCursorTelemetry(document, args.cursor);
+	const availableByAssetId = await probeCursorTelemetry(workingDocument, args.cursor);
+
+	const contextNeeds = classifyMediaContextNeeds(userMessage);
+
+	const visual = await prepareVisualEvidenceForTurn({
+		document: workingDocument,
+		userMessage,
+		provider: model.provider,
+		cursor: args.cursor,
+		contextNeeds,
+	});
+	const visualFramesSupplied = visual.visualFramesSupplied;
+
+	const speechPrep = await prepareSpeechEvidenceForTurn({
+		document: workingDocument,
+		userMessage,
+		contextNeeds,
+		deps: {
+			getSttManager: () => getSttManager(),
+			resolveSttBinary: () => {
+				for (const candidate of candidateBinaryPaths()) {
+					if (candidate && existsSync(candidate)) return candidate;
+				}
+				return null;
+			},
+			cacheDir: args.speechCacheDir,
+		},
+	}).catch((err) => {
+		console.warn(
+			"[speech-evidence] prepare failed; continuing without transcript",
+			err instanceof Error ? err.message : String(err),
+		);
+		return { document: workingDocument, prepared: null as null };
+	});
+	workingDocument = speechPrep.document;
+	holder.current = workingDocument;
+	const speechEvidence = speechPrep.prepared?.evidence;
+	const primarySpeech = speechEvidence?.[0];
+	const audioStream =
+		primarySpeech?.audioStreamPresent ??
+		(speechEvidence?.some((e) => e.audioStreamPresent === true)
+			? true
+			: speechEvidence?.every((e) => e.audioStreamPresent === false)
+				? false
+				: null);
+	// Injection is separate from preparation (and from on-document transcript existence).
+	const speechStatus = resolveInjectedSpeechStatus({
+		injectSpeech: contextNeeds.injectSpeech,
+		primarySpeech,
+		document: workingDocument,
+	});
+
+	const primaryAsset =
+		workingDocument.assets.find((a) => a.id === workingDocument.project.primaryAssetId) ??
+		workingDocument.assets.find((a) => a.kind !== "audio") ??
+		null;
+	const sourceDurationSec = primarySpeech?.sourceDurationSec ?? primaryAsset?.durationSec ?? 0;
+
+	let cursorEventTimes: number[] = [];
+	let cursorInteractions: Array<{ sourceTimeSec: number; interactionType?: string }> = [];
+	if (contextNeeds.cursor && args.cursor && primaryAsset) {
+		try {
+			const load = await args.cursor.read({
+				assetId: primaryAsset.id,
+				originalPath: primaryAsset.originalPath,
+			});
+			if (load.status === "ok") {
+				cursorEventTimes = interactionInstantsFromSamples(load.samples).map((i) => i.sourceTimeSec);
+				cursorInteractions = load.samples
+					.filter((s) => {
+						const kind = typeof s.interactionType === "string" ? s.interactionType : "";
+						return Boolean(kind) && kind !== "move";
+					})
+					.map((s) => ({
+						sourceTimeSec: s.timeMs / 1000,
+						interactionType: s.interactionType ?? undefined,
+					}));
+			}
+		} catch {
+			/* cursor optional for story */
+		}
+	}
+
+	// Master Video Investigator V1 — starts from a pre-semantic ledger, runs
+	// bounded deterministic tools (0 investigator model calls), then feeds a
+	// compact briefing (+ optional stills) into the existing agent turn.
+	let investigationEvidence: InvestigationEvidenceSet | null = null;
+	let visualSpecialist: VisualSpecialistResult | null = null;
+	const earlyLedger =
+		primaryAsset && sourceDurationSec > 0
+			? buildLedgerFromPreparedEvidence({
+					assetId: primaryAsset.id,
+					sourceDurationSec,
+					speechEvidence: primarySpeech,
+					frames: visual.prepared?.frames,
+					changes: visual.prepared?.changes,
+					cursorInteractions,
+				})
+			: null;
+	if (earlyLedger && primaryAsset) {
+		try {
+			investigationEvidence = await runMasterVideoInvestigatorV1({
+				userMessage,
+				needs: contextNeeds,
+				assetId: primaryAsset.id,
+				sourceDurationSec,
+				videoPath: primaryAsset.originalPath,
+				speechEvidence: primarySpeech,
+				frames: visual.prepared?.frames,
+				changes: visual.prepared?.changes,
+				cursorInteractions,
+				ledger: earlyLedger,
+			});
+			if (
+				investigationEvidence &&
+				investigationEvidence.stopReason !== "deterministic_edit_skip" &&
+				primaryAsset.originalPath
+			) {
+				try {
+					visualSpecialist = await runVisualSpecialistV1({
+						videoPath: primaryAsset.originalPath,
+						investigation: investigationEvidence,
+					});
+					investigationEvidence = mergeSpecialistIntoInvestigation(
+						investigationEvidence,
+						visualSpecialist,
+					);
+				} catch (err) {
+					console.warn(
+						"[visual-specialist] failed; continuing with investigator evidence only",
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			}
+			visual.userMessage = await appendInvestigatorToUserMessage(
+				visual.userMessage,
+				investigationEvidence,
+			);
+		} catch (err) {
+			console.warn(
+				"[video-investigator] investigation failed; continuing without briefing",
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+
+	const sourceStoryPrep = prepareSourceStoryForTurn({
+		contextNeeds,
+		sourceDurationSec,
+		speechEvidence: primarySpeech,
+		frames: visual.prepared?.frames,
+		changes: visual.prepared?.changes,
+		cursorEventTimes,
+	});
+	const targetStoryPrep = prepareTargetStoryForTurn({
+		contextNeeds,
+		userMessage,
+		sourceStoryRequested: sourceStoryPrep?.requested === true,
+	});
+
 	const tools = buildTools(holder, sink, editsAllowed, {
 		cursor: args.cursor,
 		availableByAssetId,
 		cli: args.cli,
+		visualFramesSupplied,
 	});
 	const agent = createAgent({
 		model: chatModel,
 		tools,
 		systemPrompt: buildSystemPrompt({
 			editsAllowed,
-			openProject: documentSnapshotForModel(document, { availableByAssetId }),
+			openProject: documentSnapshotForModel(
+				workingDocument,
+				{ availableByAssetId },
+				{
+					visualFramesSupplied,
+					audioStream,
+					speechStatus,
+					sourceStoryRequested: sourceStoryPrep?.requested === true,
+					targetStoryRequested: targetStoryPrep?.requested === true,
+				},
+			),
 		}),
 		middleware: anthropicCachingMiddleware(chatModel),
 	}).withConfig({
@@ -597,7 +869,16 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		recursionLimit: 1000,
 	});
 
-	const messages = [...history, { role: "user" as const, content: userMessage }];
+	let storyUserMessage = sourceStoryPrep
+		? appendSourceStoryToUserMessage(visual.userMessage, sourceStoryPrep.promptSection)
+		: visual.userMessage;
+	if (targetStoryPrep) {
+		storyUserMessage = appendTargetStoryToUserMessage(
+			storyUserMessage,
+			targetStoryPrep.promptSection,
+		);
+	}
+	const messages = [...history, storyUserMessage];
 
 	// ponytail: declared outside the try block so the catch handler can
 	// include any chunks we already saw in the diagnostic when the stream
@@ -680,9 +961,156 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					.map((e) => e.event)
 					.join(",")}). Last chunk: ${sample}`;
 			sink.error(reason);
-			return { text: "", document: holder.current, mutated, reason };
+			return {
+				text: "",
+				document: holder.current,
+				mutated,
+				reason,
+				...(investigationEvidence ? { investigationEvidence } : {}),
+				...(visualSpecialist ? { visualSpecialist } : {}),
+			};
 		}
-		return { text: finalText.trim(), document: holder.current, mutated };
+
+		const text = finalText.trim();
+		let visualSemanticGrounding: VisualSemanticGrounding | undefined;
+		let sourceStory: SourceStory | undefined;
+		let targetStory: TargetStory | undefined;
+		const doc = holder.current;
+		if (visual.visualFramesSupplied && visual.prepared?.frames.length) {
+			const evidence = semanticGroundingEvidenceFromPrepared({
+				frames: visual.prepared.frames,
+				changes: visual.prepared.changes,
+				durationSec:
+					doc.assets.find((a) => a.id === doc.project.primaryAssetId)?.durationSec ?? undefined,
+			});
+			const validated = parseAndValidateVisualSemanticGrounding(text, evidence);
+			if (validated.ok && validated.grounding) {
+				visualSemanticGrounding = validated.grounding;
+				const langWarnings = auditUserFacingSemanticLanguage(text, evidence);
+				if (langWarnings.length > 0) {
+					console.warn(
+						"[visual-semantic] user-facing language warnings",
+						langWarnings.slice(0, 6).join("; "),
+					);
+				}
+			} else if (validated.errors.length > 0) {
+				console.warn(
+					"[visual-semantic] grounding validation failed",
+					validated.errors.slice(0, 8).join("; "),
+				);
+			}
+		}
+
+		if (sourceStoryPrep?.scaffold) {
+			const storyValidated = parseAndValidateSourceStory(text, sourceStoryPrep.scaffold);
+			if (storyValidated.ok && storyValidated.story) {
+				sourceStory = storyValidated.story;
+				if (storyValidated.warnings.length > 0) {
+					console.warn(
+						"[source-story] validation warnings",
+						storyValidated.warnings.slice(0, 6).join("; "),
+					);
+				}
+			} else if (storyValidated.errors.length > 0) {
+				console.warn(
+					"[source-story] validation failed; continuing without structured story",
+					storyValidated.errors.slice(0, 8).join("; "),
+				);
+			}
+		}
+
+		if (targetStoryPrep?.requested && sourceStory) {
+			const targetValidated = parseAndValidateTargetStory(text, {
+				sourceStory,
+				userMessage,
+			});
+			if (targetValidated.ok && targetValidated.story) {
+				targetStory = targetValidated.story;
+				if (targetValidated.warnings.length > 0) {
+					console.warn(
+						"[target-story] validation warnings",
+						targetValidated.warnings.slice(0, 6).join("; "),
+					);
+				}
+			} else if (targetValidated.errors.length > 0) {
+				console.warn(
+					"[target-story] validation failed; continuing without structured target",
+					targetValidated.errors.slice(0, 8).join("; "),
+				);
+			}
+		}
+
+		// Structured visual/speech/story evidence JSON is internal infrastructure.
+		// Always strip it from the user-facing reply unless the user explicitly
+		// asked for raw/structured data.
+		const wantsRaw = /\b(raw|structured)\s+(json|data|output)\b/i.test(userMessage);
+		let responseText = wantsRaw ? text : stripInternalEvidenceJsonBlocks(text);
+
+		// Grounded diagnosis verifier: block “background tab → invented browsing”
+		// (e.g. Upwork tab ≠ navigating job listings). Prompt-only is not enough.
+		if (!wantsRaw && visualSemanticGrounding) {
+			const speechText = (speechEvidence ?? [])
+				.flatMap((e) => e.segments.map((s) => s.text))
+				.join(" ");
+			const verified = verifyAndSanitizeUserFacingNarration({
+				userFacingText: responseText,
+				grounding: visualSemanticGrounding,
+				speechText,
+			});
+			if (verified.violations.length > 0) {
+				console.warn(
+					"[grounded-diagnosis] removed ungrounded active-surface claims",
+					verified.violations
+						.slice(0, 4)
+						.map((v) => `${v.app}:${v.reason}`)
+						.join("; "),
+				);
+				responseText = verified.text;
+			}
+		}
+
+		if (userFacingLeaksInvestigatorInternals(responseText)) {
+			console.warn("[video-investigator] stripping leaked investigator internals from user text");
+			responseText = responseText
+				.replace(/INVESTIGATOR_EVIDENCE_BRIEFING[\s\S]*?(?=\n\n|$)/gi, "")
+				.replace(/\b(ic_\d+|obs_\d+)\b/g, "")
+				.trim();
+		}
+
+		// Temporal Event Ledger V1 — rebuild after semantic parse so optional
+		// model-derived surfaces attach as modelDerived observations.
+		let temporalEventLedger: TemporalEventLedger | undefined;
+		if (primaryAsset && sourceDurationSec > 0) {
+			temporalEventLedger = buildLedgerFromPreparedEvidence({
+				assetId: primaryAsset.id,
+				sourceDurationSec,
+				speechEvidence: primarySpeech,
+				frames: visual.prepared?.frames,
+				changes: visual.prepared?.changes,
+				cursorInteractions,
+				semanticGrounding: visualSemanticGrounding,
+			});
+			if (visualSpecialist) {
+				temporalEventLedger = appendVisualSpecialistToLedger(
+					temporalEventLedger,
+					visualSpecialist,
+					primaryAsset.id,
+				);
+			}
+		}
+
+		return {
+			text: responseText,
+			document: holder.current,
+			mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+			...(visualSemanticGrounding ? { visualSemanticGrounding } : {}),
+			...(speechEvidence ? { speechEvidence } : {}),
+			...(sourceStory ? { sourceStory } : {}),
+			...(targetStory ? { targetStory } : {}),
+			...(temporalEventLedger ? { temporalEventLedger } : {}),
+			...(investigationEvidence ? { investigationEvidence } : {}),
+			...(visualSpecialist ? { visualSpecialist } : {}),
+		};
 	} catch (err) {
 		// Local CLI failures (not logged in, binary missing) are already a
 		// sentence the user can act on. Do not wrap them in the diagnostic dump
@@ -695,6 +1123,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				document: holder.current,
 				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
 				reason: message,
+				...(investigationEvidence ? { investigationEvidence } : {}),
+				...(visualSpecialist ? { visualSpecialist } : {}),
 			};
 		}
 		// ponytail: surface the LangChain/HTTP error (with name + truncated
@@ -719,6 +1149,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			document: holder.current,
 			mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
 			reason,
+			...(investigationEvidence ? { investigationEvidence } : {}),
+			...(visualSpecialist ? { visualSpecialist } : {}),
 		};
 	}
 }

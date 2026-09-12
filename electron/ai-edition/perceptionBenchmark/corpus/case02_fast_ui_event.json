@@ -1,0 +1,9 @@
+{
+	"caseId": "case02_fast_ui_event",
+	"title": "Fast sub-second UI event (dropdown/modal)",
+	"mediaPath": null,
+	"status": "RECORDING_REQUIRED",
+	"recordingScript": "CASE 2 — FAST UI EVENT\n\nDuration: ~10–12 seconds\nVoice: none (silent)\n\nProcedure:\n0.0–2.0s  Keep Cursor (or any app) fully stable — no clicks.\n~2.5s     Open a dropdown or menu (e.g. editor tab context menu OR macOS menu).\n~2.5–2.9s Close it within ~0.4 seconds (important: fully closed before 3.0s).\n3.0–6.0s  Continue with stable screen; move mouse slowly only.\n6.0–8.0s  Optional: one normal click on a file in the sidebar (slow, deliberate).\n8.0–10s   Hold still, then stop recording.\n\nDo NOT narrate. Do NOT leave the menu open.\nAfter recording: we will annotate the exact open/close times from the file.",
+	"events": [],
+	"mustNotClaim": []
+}

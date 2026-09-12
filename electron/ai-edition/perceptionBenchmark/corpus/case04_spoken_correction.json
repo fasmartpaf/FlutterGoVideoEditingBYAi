@@ -1,0 +1,9 @@
+{
+	"caseId": "case04_spoken_correction",
+	"title": "Spoken correction (Actually… / let me go back…)",
+	"mediaPath": null,
+	"status": "RECORDING_REQUIRED",
+	"recordingScript": "CASE 4 — SPOKEN CORRECTION\n\nDuration: ~15–20 seconds\nVoice: required (mic on)\nVisual: stay on one stable editor screen (no app switching).\n\nScript (say clearly):\n0–5s   \"First I will open the timeline panel to arrange clips.\"\n5–8s   \"I mean — actually, let me go back. I meant the effects panel, not the timeline.\"\n8–14s  \"Okay, now looking at the effects panel settings.\"\n\nVisual: do NOT actually open either panel if possible — or open something different —\nso speech correction is the signal, not a perfect UI match.\nStop after ~15–20s.\n\nAfter recording: annotate correction span from waveform/transcript.",
+	"events": [],
+	"mustNotClaim": []
+}

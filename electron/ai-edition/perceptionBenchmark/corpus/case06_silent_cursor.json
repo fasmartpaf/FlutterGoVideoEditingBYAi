@@ -1,0 +1,50 @@
+{
+	"caseId": "case06_silent_cursor",
+	"title": "Silent screen recording with cursor motion/clicks",
+	"mediaPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788958840550.mp4",
+	"cursorPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788958840550.mp4.cursor.json",
+	"durationSec": 4.875,
+	"status": "READY",
+	"notes": "Inspected: no audio stream; Cursor IDE + audit doc; cursor.json has move+click samples. No invented narration.",
+	"events": [
+		{
+			"id": "e_no_speech",
+			"startSec": 0,
+			"endSec": 4.875,
+			"modality": "speech",
+			"expectedMeaning": "No spoken narration (no audio / silent)",
+			"importance": "critical",
+			"matchHints": ["no audio", "no speech", "silent", "without narration"]
+		},
+		{
+			"id": "e_cursor_activity",
+			"startSec": 0,
+			"endSec": 4.875,
+			"modality": "cursor",
+			"expectedMeaning": "Cursor movement/click activity present",
+			"importance": "important",
+			"matchHints": ["cursor", "pointer", "click", "move"]
+		},
+		{
+			"id": "e_visual_editor",
+			"startSec": 0,
+			"endSec": 4.875,
+			"modality": "visual",
+			"expectedMeaning": "Code editor / audit document visible",
+			"importance": "important",
+			"matchHints": ["editor", "audit", "cursor", "document", "code"]
+		}
+	],
+	"mustNotClaim": [
+		{
+			"id": "m_fake_speech",
+			"kind": "SPEECH_HALLUCINATION",
+			"description": "Do not invent spoken dialogue",
+			"forbiddenPatterns": [
+				"the (speaker|narrator) (said|says|explains)",
+				"you (said|say|explain)",
+				"the (user|presenter) (said|says|explains|narrates)"
+			]
+		}
+	]
+}

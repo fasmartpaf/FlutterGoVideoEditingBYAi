@@ -66,6 +66,11 @@ import {
 	effectiveZoomScale,
 	ZOOM_DEPTH_LEGEND,
 } from "../../src/lib/ai-edition/timeline/zoom-scale";
+import {
+	buildMediaEvidenceCapabilities,
+	MEDIA_EVIDENCE_NOTE,
+	type MediaEvidenceCapabilities,
+} from "./mediaEvidence";
 
 export interface AgentToolExecution {
 	ok: boolean;
@@ -501,6 +506,16 @@ const fadeSecSchema = z.number().nonnegative().max(60);
 
 export const getTranscriptArgs = z.object({
 	assetId: z.string().min(1).optional(),
+	/** Inclusive source-time window — omit both for the full transcript. */
+	startSec: z.number().finite().optional(),
+	endSec: z.number().finite().optional(),
+});
+
+/** Explicit range alias — same contract as getTranscript with startSec/endSec. */
+export const getTranscriptRangeArgs = z.object({
+	assetId: z.string().min(1).optional(),
+	startSourceTimeSec: z.number().finite(),
+	endSourceTimeSec: z.number().finite(),
 });
 
 // ponytail: an assetId, never a path. The model names a row of the document and
@@ -735,6 +750,7 @@ export const removeClipArgs = z.object({
 export const OPENSCREEN_TOOL_NAMES = [
 	"getCurrentDocument",
 	"getTranscript",
+	"getTranscriptRange",
 	"getTranscriptWords",
 	"getCursorTrack",
 	"setWordText",
@@ -980,6 +996,13 @@ function projectQueueForModel(document: AxcutDocument): Record<string, unknown> 
 export function documentSnapshotForModel(
 	document: AxcutDocument,
 	cursorTelemetry?: CursorTelemetryContext,
+	evidence?: {
+		visualFramesSupplied?: boolean;
+		audioStream?: boolean | null;
+		speechStatus?: MediaEvidenceCapabilities["speechStatus"];
+		sourceStoryRequested?: boolean;
+		targetStoryRequested?: boolean;
+	},
 ): Record<string, unknown> {
 	const availability = cursorTelemetry?.availableByAssetId;
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
@@ -997,6 +1020,14 @@ export function documentSnapshotForModel(
 	// second thing to be confidently wrong about, so the projection reports the
 	// EFFECTIVE mode and the flag that decides it.
 	const autoFocusAll = legacy?.autoFocusAll === true;
+	const mediaCapabilities = buildMediaEvidenceCapabilities(document, {
+		cursorTelemetryAvailableByAssetId: availability,
+		visualFramesSupplied: evidence?.visualFramesSupplied,
+		audioStream: evidence?.audioStream,
+		speechStatus: evidence?.speechStatus,
+		sourceStoryRequested: evidence?.sourceStoryRequested,
+		targetStoryRequested: evidence?.targetStoryRequested,
+	});
 	return {
 		timeBaseNote:
 			"clips and trims are in source-time seconds; zooms, speedRegions, annotations, cameraFullscreenRegions and audioTracks are in virtual (edited-timeline) seconds.",
@@ -1010,7 +1041,9 @@ export function documentSnapshotForModel(
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
 		openMedia: openTimelineMedia(document),
 		openMediaNote:
-			"mediaContext is the remembered outline of each recording (kept spans, speech, silence, prior visual notes). It is rebuilt when the project opens and reused on every later turn. Use it to plan edits. Do not extract ffmpeg stills unless the user asks to re-scan or mediaContext cannot answer the question. visibleMedia is the file list only. A transcript is optional.",
+			"mediaContext is a TEXTUAL/derived outline of each recording (kept spans, speech/silence parts, stored notes) — not pixels. It is rebuilt when the project opens and reused on later turns. visibleMedia is only the file inventory (ids/paths). Neither grants visualFrames. A transcript is optional and separate from whether audio exists.",
+		mediaEvidenceNote: MEDIA_EVIDENCE_NOTE,
+		mediaCapabilities,
 		mediaContext: buildMediaContext(document),
 		visibleMedia: document.assets
 			.filter((a) => a.kind !== "audio" && Boolean(a.originalPath?.trim()))
@@ -1287,6 +1320,8 @@ export interface AgentToolOptions {
 	 *  Absent means the runtime has no telemetry reader wired at all, which the
 	 *  executor reports as "could not look", never as "there is none". */
 	cursorTelemetry?: CursorTelemetryContext;
+	/** True only when this turn already attached JPEG visual evidence to the model. */
+	visualFramesSupplied?: boolean;
 }
 
 /**
@@ -1475,7 +1510,7 @@ export function executeAgentTool(
 	options?: AgentToolOptions,
 ): AgentToolExecution {
 	let args: unknown = {};
-	if (rawArgs.trim()) {
+	if (typeof rawArgs === "string" && rawArgs.trim()) {
 		try {
 			args = JSON.parse(rawArgs);
 		} catch {
@@ -1501,7 +1536,11 @@ export function executeAgentTool(
 		case "getCurrentDocument": {
 			return {
 				ok: true,
-				resultJson: JSON.stringify(documentSnapshotForModel(document, options?.cursorTelemetry)),
+				resultJson: JSON.stringify(
+					documentSnapshotForModel(document, options?.cursorTelemetry, {
+						visualFramesSupplied: options?.visualFramesSupplied,
+					}),
+				),
 			};
 		}
 
@@ -1571,31 +1610,48 @@ export function executeAgentTool(
 			if (!transcript) {
 				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
 			}
-			// ponytail: no cap. There used to be a `.slice(0, 800)` here, guarded by
-			// "words would blow the context" — written believing a segment was a
-			// phrase. On the production path a segment IS one word
-			// (src/lib/captioning/transcribe.ts: whisper's word timings are mapped
-			// one-to-one), so the cap cut the transcript at the 800th WORD — around
-			// five minutes of speech — and said nothing about it. The model read a
-			// fifth of a half-hour recording, cut the silences it could see, and
-			// reported the job done, because nothing in the payload told it otherwise.
-			//
-			// A whole 30-minute transcript is ~285k characters, ~70k tokens: large,
-			// and well inside every model this app talks to. If a recording ever does
-			// get near a window, the honest fix is to know the window — the app has no
-			// per-model context budget today — not to guess a number here and drop the
-			// rest in silence.
-			const segments = transcript.segments.map((s) => ({
-				id: s.id,
-				kind: s.kind,
-				startSec: s.startSec,
-				endSec: s.endSec,
-				text: s.text,
-			}));
+			const from = parsed.data.startSec ?? Number.NEGATIVE_INFINITY;
+			const to = parsed.data.endSec ?? Number.POSITIVE_INFINITY;
+			const ranged = parsed.data.startSec != null || parsed.data.endSec != null;
+			const segments = transcript.segments
+				.filter((s) => s.endSec >= from && s.startSec <= to)
+				.map((s) => ({
+					id: s.id,
+					kind: s.kind,
+					startSec: s.startSec,
+					endSec: s.endSec,
+					text: s.text,
+				}));
 			return {
 				ok: true,
-				resultJson: JSON.stringify({ assetId, language: transcript.language, segments }),
+				resultJson: JSON.stringify({
+					assetId,
+					language: transcript.language,
+					timebase: "source",
+					ranged,
+					totalSegments: transcript.segments.length,
+					returned: segments.length,
+					segments,
+					note: ranged
+						? "Source-time window only. Speech is not proof of visual UI actions."
+						: "Full transcript in source time. Prefer startSec/endSec or getTranscriptRange near visual events. Speech is not proof of visual UI actions.",
+				}),
 			};
+		}
+
+		case "getTranscriptRange": {
+			const parsed = getTranscriptRangeArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			return executeAgentTool(
+				document,
+				"getTranscript",
+				JSON.stringify({
+					assetId: parsed.data.assetId,
+					startSec: parsed.data.startSourceTimeSec,
+					endSec: parsed.data.endSourceTimeSec,
+				}),
+				options,
+			);
 		}
 
 		// The word-level read. `getTranscript` answers in SEGMENTS, whose ids belong to a

@@ -59,6 +59,7 @@ const PHANTOM_TOOLS: readonly string[] = PHANTOM_TOOL_NAMES;
 const ARGS: Record<string, unknown> = {
 	getCurrentDocument: {},
 	getTranscript: {},
+	getTranscriptRange: { startSourceTimeSec: 0, endSourceTimeSec: 5 },
 	getTranscriptWords: {},
 	getCursorTrack: {},
 	setWordText: { wordId: "word_1", text: "Hullo" },
@@ -233,12 +234,23 @@ describe("the tool surface handed to the model", () => {
 		expect(SYSTEM_PROMPT).not.toMatch(/file ?system|file path|write_todos|sub-?agent/i);
 	});
 
-	it("tells the model to reuse the remembered recording outline; a transcript is optional", () => {
+	it("states the evidence contract: metadata ≠ visualFrames; cursor ≠ semantic UI", () => {
 		expect(SYSTEM_PROMPT).toMatch(/visibleMedia/i);
 		expect(SYSTEM_PROMPT).toMatch(/mediaContext/i);
-		expect(SYSTEM_PROMPT).toMatch(/transcript is optional/i);
-		expect(SYSTEM_PROMPT).toMatch(/Do not extract ffmpeg stills/i);
-		expect(SYSTEM_PROMPT).toMatch(/Never say you cannot see the project/i);
+		expect(SYSTEM_PROMPT).toMatch(/mediaCapabilities/i);
+		expect(SYSTEM_PROMPT).toMatch(/visualFrames/i);
+		expect(SYSTEM_PROMPT).toMatch(/semanticUi/i);
+		expect(SYSTEM_PROMPT).toMatch(/textual\/derived/i);
+		expect(SYSTEM_PROMPT).toMatch(
+			/Missing transcript ≠ missing audio|missing transcript means transcription/i,
+		);
+		expect(SYSTEM_PROMPT).toMatch(/must NOT map a click/i);
+		expect(SYSTEM_PROMPT).toMatch(/sampled JPEG|VISUAL EVIDENCE/i);
+		expect(SYSTEM_PROMPT).toMatch(/must NOT claim you inspected every frame/i);
+		expect(SYSTEM_PROMPT).toMatch(/USER-FACING REPLY STYLE/);
+		expect(SYSTEM_PROMPT).toMatch(/FRONTMOST/);
+		expect(SYSTEM_PROMPT).not.toMatch(/Never say you cannot see the project/i);
+		expect(SYSTEM_PROMPT).not.toMatch(/not required to understand the video/i);
 	});
 
 	it("teaches a one-pass finish and refuses invented schema fields", () => {
@@ -408,6 +420,7 @@ describe("one description of the tools, not two", () => {
 		expect(OPENSCREEN_TOOLS.filter((n) => !isMutatingTool(n))).toEqual([
 			"getCurrentDocument",
 			"getTranscript",
+			"getTranscriptRange",
 			"getTranscriptWords",
 			"getCursorTrack",
 			"listSources",

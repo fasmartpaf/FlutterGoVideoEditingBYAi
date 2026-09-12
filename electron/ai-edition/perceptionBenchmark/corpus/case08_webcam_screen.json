@@ -1,0 +1,38 @@
+{
+	"caseId": "case08_webcam_screen",
+	"title": "Screen recording with separate webcam track",
+	"mediaPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788895487347.mp4",
+	"webcamPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788895487347-webcam.webm",
+	"cursorPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788895487347.mp4.cursor.json",
+	"durationSec": 12.38,
+	"status": "READY",
+	"notes": "Inspected: screen shows Cursor + Openscreen localhost preview; webcam webm shows a person (face). Current OpenScreen visual prep may only attach screen frames unless webcam is primary — baseline must report that honestly.",
+	"events": [
+		{
+			"id": "e_screen_openscreen",
+			"startSec": 0,
+			"endSec": 12,
+			"modality": "visual",
+			"expectedMeaning": "Screen shows development UI / OpenScreen or editor",
+			"importance": "important",
+			"matchHints": ["openscreen", "editor", "cursor", "localhost", "electron"]
+		},
+		{
+			"id": "e_webcam_person",
+			"startSec": 0,
+			"endSec": 12,
+			"modality": "visual",
+			"expectedMeaning": "Webcam track contains a visible person/face",
+			"importance": "critical",
+			"matchHints": ["webcam", "camera", "face", "person", "talking", "pip"]
+		}
+	],
+	"mustNotClaim": [
+		{
+			"id": "m_emotion_face",
+			"kind": "EMOTION_HALLUCINATION",
+			"description": "Do not claim specific emotions from face",
+			"forbiddenPatterns": ["\\bfrustrat", "\\bangry\\b", "\\bhappy\\b", "\\bsad\\b"]
+		}
+	]
+}

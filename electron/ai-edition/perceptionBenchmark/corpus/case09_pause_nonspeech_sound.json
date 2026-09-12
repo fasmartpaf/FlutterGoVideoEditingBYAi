@@ -1,0 +1,9 @@
+{
+	"caseId": "case09_pause_nonspeech_sound",
+	"title": "Speech pause plus meaningful non-speech sound",
+	"mediaPath": null,
+	"status": "RECORDING_REQUIRED",
+	"recordingScript": "CASE 9 — PAUSE + NON-SPEECH SOUND\n\nDuration: ~15 seconds\nVoice: mic on; capture system/keyboard if possible\n\nProcedure:\n0–4s    Say: \"Next I will save the project.\"\n4–7s    Stay silent. During silence, press several keyboard keys loudly\n        OR play a short notification chime once (non-speech).\n7–12s   Say: \"Saved. Now we continue with the export settings.\"\nStop.\n\nDo not talk over the non-speech sound.\nAfter recording: mark speech spans, silence span, and non-speech event time.",
+	"events": [],
+	"mustNotClaim": []
+}

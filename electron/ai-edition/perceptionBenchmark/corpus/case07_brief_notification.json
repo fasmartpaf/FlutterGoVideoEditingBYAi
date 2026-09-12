@@ -1,0 +1,9 @@
+{
+	"caseId": "case07_brief_notification",
+	"title": "Brief notification / transient UI state",
+	"mediaPath": null,
+	"status": "RECORDING_REQUIRED",
+	"recordingScript": "CASE 7 — BRIEF NOTIFICATION\n\nDuration: ~12 seconds\nVoice: optional short line OR silent\n\nProcedure:\n0–3s   Stable editor fullscreen.\n~3.5s  Trigger a brief OS or app notification that appears then disappears\n       (examples: Toggle macOS Focus / send a test notification /\n       unmute-mute mic so OpenScreen HUD or system toast flashes).\n       The toast must be visible <1.5s then gone.\n5–10s  Continue stable; do not reopen notification center.\nStop.\n\nGoal: a visual event shorter than the 2s sampling grid.\nAfter recording: mark exact appear/disappear times.",
+	"events": [],
+	"mustNotClaim": []
+}

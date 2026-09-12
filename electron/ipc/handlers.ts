@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -59,6 +59,11 @@ import { createInAppCliEngine } from "../cli/inAppCliEngine";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
+import {
+	accessibilityPermissionDetail,
+	macOsPrivacyListAppName,
+	screenRecordingPermissionDetail,
+} from "../macosPermissionAppName";
 import { RECORDINGS_DIR } from "../main";
 import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
@@ -1833,6 +1838,31 @@ export function registerIpcHandlers(
 		clipboard.writeText(text);
 	});
 
+	/**
+	 * Name the user will actually see in macOS Privacy lists for this running copy.
+	 * Packaged → product name. Dev → Electron.app's CFBundleDisplayName (or "Electron").
+	 */
+	function resolveMacOsPrivacyListAppName(): string {
+		let devHostDisplayName: string | undefined;
+		if (process.platform === "darwin" && !app.isPackaged) {
+			const plistPath = path.join(path.dirname(process.execPath), "..", "Info.plist");
+			const result = spawnSync(
+				"plutil",
+				["-extract", "CFBundleDisplayName", "raw", "-o", "-", plistPath],
+				{ encoding: "utf8" },
+			);
+			if (result.status === 0) {
+				devHostDisplayName = result.stdout.trim();
+			}
+		}
+		return macOsPrivacyListAppName({
+			platform: process.platform,
+			isPackaged: app.isPackaged,
+			packagedAppName: app.getName(),
+			devHostDisplayName,
+		});
+	}
+
 	async function requestScreenAccess() {
 		if (process.platform !== "darwin") {
 			return { success: true, granted: true, status: "granted" };
@@ -2029,8 +2059,7 @@ export function registerIpcHandlers(
 			}
 
 			const mainWin = getMainWindow();
-			const detail =
-				"Allow OpenScreen under System Settings → Privacy & Security → Accessibility, then press record again to start the countdown.";
+			const detail = accessibilityPermissionDetail(resolveMacOsPrivacyListAppName());
 			const messageOptions = {
 				type: "warning",
 				buttons: ["Open Accessibility Settings", "Cancel"],
@@ -2077,8 +2106,7 @@ export function registerIpcHandlers(
 					defaultId: 0,
 					cancelId: 1,
 					message: "Screen Recording permission is required",
-					detail:
-						"Allow OpenScreen in macOS System Settings, then come back and choose a screen or window.",
+					detail: screenRecordingPermissionDetail(resolveMacOsPrivacyListAppName()),
 				} satisfies Electron.MessageBoxOptions;
 				const result =
 					mainWin && !mainWin.isDestroyed()
