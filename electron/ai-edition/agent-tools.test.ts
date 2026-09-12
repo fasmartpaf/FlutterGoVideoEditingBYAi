@@ -1179,7 +1179,12 @@ describe("documentSnapshotForModel", () => {
 		expect(snapshot.mediaContext.assets[0]?.assetId).toBe(fixtureDocument().assets[0].id);
 		expect(snapshot.mediaContext.assets[0]?.parts.length).toBeGreaterThan(0);
 		expect(snapshot.openMediaNote).toMatch(/mediaContext/i);
+		expect(snapshot.openMediaNote).toMatch(/not pixels/i);
 		expect(snapshot.openMediaNote).toMatch(/transcript is optional/i);
+		expect(
+			(snapshot as { mediaCapabilities?: { visualFrames?: boolean } }).mediaCapabilities
+				?.visualFrames,
+		).toBe(false);
 	});
 
 	it("says whether each asset carries a webcam, and whether any clip does", () => {

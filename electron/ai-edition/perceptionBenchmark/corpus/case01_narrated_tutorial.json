@@ -1,0 +1,101 @@
+{
+	"caseId": "case01_narrated_tutorial",
+	"title": "Narrated software tutorial with document progression",
+	"mediaPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-bug5-narrated.mp4",
+	"durationSec": 16.896,
+	"status": "READY",
+	"notes": "Inspected frames: Cursor IDE + AI_VIDEO_EDITOR_TECHNICAL_AUDIT.md; HUD timer advances; later frames show capability matrix (document scroll). Speech from controlled Bug 5 narration.",
+	"referenceSpeech": [
+		{
+			"startSec": 0,
+			"endSec": 4.5,
+			"text": "Today I am going to show you the open screen editor and walk through a short demo."
+		},
+		{
+			"startSec": 4.5,
+			"endSec": 8.5,
+			"text": "First we look at the timeline and how clips are arranged on the ruler."
+		},
+		{
+			"startSec": 10.9,
+			"endSec": 16.9,
+			"text": "Now, let's move into the code and open the technical audit document so we can review the architecture notes together."
+		}
+	],
+	"events": [
+		{
+			"id": "e_speech_intro",
+			"startSec": 0,
+			"endSec": 4.5,
+			"modality": "speech",
+			"expectedMeaning": "Speaker introduces OpenScreen editor demo",
+			"importance": "critical",
+			"matchHints": ["open screen", "openscreen", "demo", "editor", "walk through"]
+		},
+		{
+			"id": "e_speech_timeline",
+			"startSec": 4.5,
+			"endSec": 8.5,
+			"modality": "speech",
+			"expectedMeaning": "Speaker explains timeline / clips on the ruler",
+			"importance": "critical",
+			"matchHints": ["timeline", "clips", "ruler"]
+		},
+		{
+			"id": "e_speech_pause",
+			"startSec": 8.5,
+			"endSec": 10.9,
+			"modality": "speech",
+			"expectedMeaning": "Speech gap / pause between explanation and next topic",
+			"importance": "important",
+			"matchHints": ["pause", "gap", "silence", "speech gap", "no speech"]
+		},
+		{
+			"id": "e_speech_audit",
+			"startSec": 10.9,
+			"endSec": 16.9,
+			"modality": "speech",
+			"expectedMeaning": "Speaker moves into code / technical audit document",
+			"importance": "critical",
+			"matchHints": ["technical audit", "architecture", "code", "audit document"]
+		},
+		{
+			"id": "e_visual_editor",
+			"startSec": 0,
+			"endSec": 8,
+			"modality": "visual",
+			"expectedMeaning": "Cursor IDE showing technical audit markdown (stable app)",
+			"importance": "important",
+			"matchHints": ["cursor", "editor", "audit", "markdown", "technical"]
+		},
+		{
+			"id": "e_visual_matrix_scroll",
+			"startSec": 12,
+			"endSec": 16.9,
+			"modality": "visual",
+			"expectedMeaning": "Document content progresses to capability matrix section",
+			"importance": "important",
+			"matchHints": ["capability", "matrix", "implemented", "ocr", "whisper", "table"]
+		}
+	],
+	"mustNotClaim": [
+		{
+			"id": "m_emotion",
+			"kind": "EMOTION_HALLUCINATION",
+			"description": "Do not invent speaker frustration/anger",
+			"forbiddenPatterns": ["\\bfrustrat", "\\bangry\\b", "\\bannoyed\\b", "\\bnervous\\b"]
+		},
+		{
+			"id": "m_dead_time",
+			"kind": "INTENT_HALLUCINATION",
+			"description": "Pause must not be labeled dead time to delete",
+			"forbiddenPatterns": ["dead\\s*time", "should be deleted", "unnecessary pause"]
+		},
+		{
+			"id": "m_settings_open",
+			"kind": "UI_HALLUCINATION",
+			"description": "Do not claim settings UI was opened",
+			"forbiddenPatterns": ["opened the settings", "settings (is|are) open", "user opens settings"]
+		}
+	]
+}

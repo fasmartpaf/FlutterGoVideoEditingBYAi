@@ -1,5 +1,6 @@
 import type { TrimRegion } from "@/components/video-editor/types";
 import type { SttWordSegment } from "../../../electron/stt/transcriptionContract";
+import { isDegenerateWordTimeline } from "../../../electron/stt/wordTimelineQuality";
 
 export interface CaptionSegment {
 	startSec: number;
@@ -138,7 +139,27 @@ function runTranscription(
 	return api
 		.transcribe({ ...payload, language: forcedLanguage })
 		.then((result) => {
-			const words = result.wordSegments ?? [];
+			const phrases = result.segments ?? [];
+			let words = result.wordSegments ?? [];
+			// Defense in depth: main-process STT should already clear collapsed
+			// DTW words, but if any path still prefers them, fall back to phrases.
+			if (
+				words.length > 0 &&
+				isDegenerateWordTimeline(
+					words.map((w) => ({
+						word: w.word,
+						startSec: w.startSec,
+						endSec: w.endSec,
+					})),
+					phrases.map((s) => ({
+						text: s.text,
+						startSec: s.startSec,
+						endSec: s.endSec,
+					})),
+				)
+			) {
+				words = [];
+			}
 			let segments: CaptionSegment[];
 			let granularity: CaptionTimestampGranularity;
 			if (words.length > 0) {
@@ -152,7 +173,7 @@ function runTranscription(
 				// ponytail: whisper dropped every word for a segment (e.g. OOV
 				// heavy); fall back to raw phrase spans so the user still gets
 				// captions to edit.
-				segments = (result.segments ?? []).map((s) => ({
+				segments = phrases.map((s) => ({
 					startSec: s.startSec,
 					endSec: s.endSec,
 					text: s.text,

@@ -1,0 +1,37 @@
+{
+	"caseId": "case03_scroll_small_text",
+	"title": "Code/editor document scroll with small table text",
+	"mediaPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788978271417.mp4",
+	"cursorPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-1788978271417.mp4.cursor.json",
+	"durationSec": 21.438,
+	"status": "PARTIAL",
+	"notes": "Inspected: frames change MD5 across clip; content scrolls within AI_VIDEO_EDITOR_TECHNICAL_AUDIT.md to capability matrix with small table text (OCR-relevant). Not a code-editor rapid line scroll — markdown document scroll. No controlled sub-second UI flash.",
+	"events": [
+		{
+			"id": "e_doc_scroll",
+			"startSec": 0,
+			"endSec": 21,
+			"modality": "visual",
+			"expectedMeaning": "Visible document content/scroll position changes over time",
+			"importance": "important",
+			"matchHints": ["scroll", "capability", "matrix", "change", "section", "table"]
+		},
+		{
+			"id": "e_small_table_text",
+			"startSec": 12,
+			"endSec": 21,
+			"modality": "visual",
+			"expectedMeaning": "Small readable table text about OCR/NOT IMPLEMENTED becomes visible",
+			"importance": "critical",
+			"matchHints": ["ocr", "not implemented", "whisper", "cursor telemetry", "semantic"]
+		}
+	],
+	"mustNotClaim": [
+		{
+			"id": "m_clicked_publish",
+			"kind": "UI_HALLUCINATION",
+			"description": "Do not claim a named Publish click",
+			"forbiddenPatterns": ["clicked Publish", "pressed Publish"]
+		}
+	]
+}

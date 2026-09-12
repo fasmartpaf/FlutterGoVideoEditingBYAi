@@ -1,7 +1,6 @@
-// Remembered outline of each recording. Built from the document (clips, trims,
-// transcript) so a later chat turn does not have to re-watch the file.
-// Stored on `legacyEditor.mediaContext` — the OpenScreen envelope, not a new
-// Axcut clip field.
+// Remembered TEXTUAL outline of each recording. Built from the document (clips,
+// trims, transcript) so a later chat turn can plan without claiming pixel
+// inspection. Stored on `legacyEditor.mediaContext` — the OpenScreen envelope.
 
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { resolvePlaybackSegments } from "./timeline";
@@ -29,7 +28,7 @@ export interface MediaContext {
 	version: typeof MEDIA_CONTEXT_VERSION;
 	builtAt: string;
 	assets: MediaAssetContext[];
-	/** Visual notes from a prior watch. Kept across opens when the fingerprint matches. */
+	/** Stored textual notes kept across opens when the fingerprint matches. */
 	notes: Array<{ assetId: string; startSec: number; endSec: number; text: string }>;
 }
 

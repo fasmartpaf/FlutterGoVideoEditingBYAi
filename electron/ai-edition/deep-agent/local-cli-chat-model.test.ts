@@ -28,7 +28,9 @@ describe("buildPrompt", () => {
 		expect(prompt).toContain("listSources");
 		expect(prompt).toContain("USER: List windows I can record");
 		expect(prompt).toContain('"tool_calls"');
-		expect(prompt).toContain("You can SEE it");
+		expect(prompt).toContain("mediaCapabilities");
+		expect(prompt).toContain("visualFrames");
+		expect(prompt).not.toContain("You can SEE it");
 		expect(prompt).toContain("mediaContext");
 		expect(prompt).toContain("visibleMedia");
 		expect(prompt).toContain("ffmpeg");

@@ -300,6 +300,7 @@ export function loginCommandForAgent(agentId: string): string | null {
 	if (agentId === "claude") return "claude auth login";
 	if (agentId === "codex") return "codex login";
 	if (agentId === "gemini") return "gemini auth login";
+	if (agentId === "cursor") return "agent login";
 	return null;
 }
 
@@ -310,6 +311,12 @@ export function formatLocalCliError(raw: string): string {
 		/not logged in|please run \/login|loggedIn["']?\s*:\s*false/i.test(text)
 	) {
 		return "Claude Code is not signed in. Run `claude auth login` in Terminal, then Rescan PATH.";
+	}
+	if (/Workspace Trust Required|trust the contents of this directory|Pass `--trust`/i.test(text)) {
+		return (
+			"Cursor Agent refused the workspace (needs --trust). " +
+			"Restart OpenScreen after the latest update and send again."
+		);
 	}
 	if (/timed out/i.test(text)) {
 		return (

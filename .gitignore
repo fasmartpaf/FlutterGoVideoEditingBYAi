@@ -133,3 +133,5 @@ workbench/fixtures/
 /aur_ci.pub
 /aur_known_hosts
 tmp_handoff.md
+/tmp/
+tmp/

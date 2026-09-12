@@ -15,6 +15,7 @@ import type {
 	SttWordSegment,
 } from "./transcriptionContract";
 import { cleanupWav, writeSamplesAsWav } from "./wav";
+import { isDegenerateWordTimeline } from "./wordTimelineQuality";
 
 /** whisper.cpp helper is stdio-shaped: stdin ignored, stdout/stderr captured. */
 type WhisperChild = ChildProcessByStdio<null, Readable, Readable>;
@@ -565,7 +566,7 @@ export class WhisperServerManager {
 			// whisper.cpp's DTW boundaries run ~80–150 ms behind the audio, which the
 			// transcript editor turns into imprecise trims (see snapWordBoundaries.ts).
 			// Re-anchor them on the same samples whisper was given.
-			const wordSegments: SttWordSegment[] = snapWordBoundariesToAudio(
+			let wordSegments: SttWordSegment[] = snapWordBoundariesToAudio(
 				raw
 					.flatMap((seg) =>
 						(seg.words ?? []).map((w) => {
@@ -579,6 +580,11 @@ export class WhisperServerManager {
 					.filter((w) => w.word.length > 0),
 				opts.samples,
 			);
+			// Metal DTW sometimes pins every word to one timestamp while phrase
+			// t0/t1 stay correct. Prefer phrases over those collapsed words.
+			if (isDegenerateWordTimeline(wordSegments, segments)) {
+				wordSegments = [];
+			}
 			const detectedLanguage = json.detected_language ?? json.language ?? "auto";
 			const backend = this.toBackend(json.backend);
 			const timing = this.toTiming(json.timing);

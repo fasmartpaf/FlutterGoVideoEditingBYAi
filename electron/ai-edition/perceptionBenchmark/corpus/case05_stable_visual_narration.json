@@ -1,0 +1,59 @@
+{
+	"caseId": "case05_stable_visual_narration",
+	"title": "Stable visuals with important continuous narration",
+	"mediaPath": "/Users/osama/Library/Application Support/openscreen/recordings/recording-bug5-narrated.mp4",
+	"durationSec": 16.896,
+	"status": "READY",
+	"notes": "Same file as case01. Focus window 4.5–8.5s: speech about timeline while visuals remain the same editor/document layout (inspected).",
+	"referenceSpeech": [
+		{
+			"startSec": 0,
+			"endSec": 4.5,
+			"text": "Today I am going to show you the open screen editor and walk through a short demo."
+		},
+		{
+			"startSec": 4.5,
+			"endSec": 8.5,
+			"text": "First we look at the timeline and how clips are arranged on the ruler."
+		},
+		{
+			"startSec": 10.9,
+			"endSec": 16.9,
+			"text": "Now, let's move into the code and open the technical audit document so we can review the architecture notes together."
+		}
+	],
+	"events": [
+		{
+			"id": "e_stable_visual",
+			"startSec": 4.5,
+			"endSec": 8.5,
+			"modality": "visual",
+			"expectedMeaning": "Editor layout remains the same application during narration",
+			"importance": "important",
+			"matchHints": ["stable", "unchanged", "same", "editor", "layout", "no significant"]
+		},
+		{
+			"id": "e_narration_timeline",
+			"startSec": 4.5,
+			"endSec": 8.5,
+			"modality": "speech",
+			"expectedMeaning": "Important narration about timeline/clips continues",
+			"importance": "critical",
+			"matchHints": ["timeline", "clips", "ruler"]
+		}
+	],
+	"mustNotClaim": [
+		{
+			"id": "m_fake_app_switch",
+			"kind": "UI_HALLUCINATION",
+			"description": "Do not invent an application switch in 4.5–8.5",
+			"forbiddenPatterns": ["switched (to|into) (a )?(different|new) (app|application)"]
+		},
+		{
+			"id": "m_emotion",
+			"kind": "EMOTION_HALLUCINATION",
+			"description": "Do not invent speaker frustration/anger",
+			"forbiddenPatterns": ["\\bfrustrat", "\\bangry\\b", "\\bannoyed\\b", "\\bnervous\\b"]
+		}
+	]
+}

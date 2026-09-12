@@ -1,0 +1,70 @@
+/**
+ * Prompt section asking the SAME model turn to emit turn-local SOURCE_STORY JSON.
+ */
+
+import { userFacingMediaNarrationGuidance } from "../userFacingNarration";
+import { formatSourceStoryScaffoldText } from "./scaffold";
+import type { SourceStoryScaffold } from "./types";
+
+export function buildSourceStoryPromptSection(scaffold: SourceStoryScaffold): string {
+	const scaffoldText = formatSourceStoryScaffoldText(scaffold);
+	return [
+		"",
+		"SOURCE STORY (same turn — required structured block before your final user-facing answer)",
+		"Build an INTERNAL chronological Source Story of what this recording is communicating over time.",
+		"This is NOT Target Story, NOT an edit plan, NOT cuts/trims/zooms.",
+		"Use SOURCE_MEDIA_TIME only. Story ≠ transcript dump and ≠ one beat per visual frame.",
+		"",
+		"Beat boundaries (merge evidence windows when purpose is continuous):",
+		"- speech topic/purpose change",
+		"- meaningful application/UI state change (from frames/transitions)",
+		"- meaningful interaction sequence",
+		"- substantial pause associated with state change",
+		"- clear setup → demonstration → result shifts",
+		"",
+		"Rules:",
+		"- Every beat needs evidence provenance (speechSegmentIds / visualTimes / cursorEventTimes from the scaffold).",
+		"- high confidence requires supporting evidence; otherwise use medium/low.",
+		"- Speech anchors meaning when narration exists, but speech does not verify visuals.",
+		"- If speech and visuals disagree, say so explicitly in BOTH overallSummary and beats (do not assert the spoken UI change as observed).",
+		"- overallSummary must not turn spoken claims into confirmed visual actions when frames do not show them.",
+		"- visualMeaning must name the FRONTMOST app/site when readable; do not call a background preview the main app.",
+		"- Silent / no-audio / empty speech: leave spokenMeaning empty/null; do not invent dialogue or narration.",
+		"- Without speech, prefer medium/low confidence unless visuals strongly establish phases.",
+		"- Windows marked [speech gap] must be represented (purpose pause or transition), not skipped.",
+		"- purpose 'pause' or 'transition' for gaps when evidence supports it — never 'dead time' / editing judgments.",
+		"- purpose 'correction'/'repetition' only with strong speech evidence.",
+		"- Do not invent emotion or unsupported intention.",
+		"- Cover the recording chronologically with minimal unexplained gaps.",
+		"- After the JSON, answer the user in natural readable prose.",
+		userFacingMediaNarrationGuidance(),
+		"- Do NOT mention structured data, supplied frames, JSON, storyBeats, speechSegmentIds, or SOURCE_STORY unless the user asked for raw/debug output.",
+		"",
+		scaffoldText,
+		"",
+		"Emit ONE fenced JSON block named conceptually SOURCE_STORY:",
+		"```json",
+		"{",
+		'  "sourceDurationSec": ' + scaffold.sourceDurationSec + ",",
+		'  "overallSummary": "what this recording communicates and its major stages",',
+		'  "contentType": "tutorial|demo|presentation|screen_recording|talking_head|mixed|unknown",',
+		'  "primaryGoal": "optional short goal",',
+		'  "storyBeats": [{',
+		'    "id": "b1",',
+		'    "startSourceTimeSec": 0,',
+		'    "endSourceTimeSec": 1,',
+		'    "purpose": "intro|setup|explanation|demonstration|navigation|transition|result|pause|repetition|correction|outro|unknown",',
+		'    "summary": "communication-purpose summary (not a transcript quote dump)",',
+		'    "spokenMeaning": "optional",',
+		'    "visualMeaning": "optional — only from frames; name frontmost app when readable",',
+		'    "interactionMeaning": "optional",',
+		'    "evidence": { "speechSegmentIds": ["s1"], "visualTimes": [0, 2], "cursorEventTimes": [] },',
+		'    "confidence": "high|medium|low"',
+		"  }],",
+		'  "unresolvedEvidence": [{ "note": "optional uncertainty" }]',
+		"}",
+		"```",
+		"contentType and purpose MUST be exactly one enum token from the lists above (snake_case), not free-prose labels.",
+		"Then answer the user request in natural language.",
+	].join("\n");
+}

@@ -168,6 +168,31 @@ describe("WhisperServerManager", () => {
 		}
 	});
 
+	it("drops collapsed DTW word timestamps and keeps phrase segments", async () => {
+		const words = Array.from({ length: 20 }, (_, i) => ({
+			word: ` w${i}`,
+			start: 9.5,
+			end: 9.52,
+			probability: 0.9,
+		}));
+		const result = await transcribeWith({
+			segments: [
+				{
+					text: " full narration across the clip",
+					start: 0.5,
+					end: 12,
+					words,
+				},
+			],
+			detected_language: "english",
+			backend: "whispercpp-metal",
+		});
+		expect(result.segments).toEqual([
+			{ text: "full narration across the clip", startSec: 0.5, endSec: 12 },
+		]);
+		expect(result.wordSegments).toEqual([]);
+	});
+
 	/** Answer `/inference` with one canned body and run a single transcription. */
 	async function transcribeWith(json: unknown) {
 		vi.stubGlobal(
