@@ -54,7 +54,8 @@ const MODEL_BASE = "https://huggingface.co";
 // long-standing public model-file repo that never moved when the engine's
 // GitHub org was renamed.
 const MODEL_REPO = "ggerganov/whisper.cpp";
-const MODEL_FILE = "ggml-small-q8_0.bin";
+export const MODEL_FILE_NAME = "ggml-small-q8_0.bin";
+const MODEL_FILE = MODEL_FILE_NAME;
 // Pinned to a commit rather than `main` so `expectedSha256` is an invariant and
 // not a bet: `main` is a mutable branch pointer, and a re-upload under it would
 // now invalidate every cache in the field at once instead of merely breaking new

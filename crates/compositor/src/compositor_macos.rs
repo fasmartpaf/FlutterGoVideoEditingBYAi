@@ -246,6 +246,90 @@ struct WebcamMask {
 // Compositor
 // ---------------------------------------------------------------------------
 
+/// Geometry for the FROM overlay in A/B transitions.
+/// Returns (dst, src, alpha) where alpha is the FROM contribution.
+fn ab_from_layer_geometry(
+    mode: u32,
+    progress: f32,
+    dissolve: f32,
+    full_dst: [f32; 4],
+    full_src: [f32; 4],
+) -> ([f32; 4], [f32; 4], f32) {
+    let p = progress.clamp(0.0, 1.0);
+    let [dx, dy, dw, dh] = full_dst;
+    let [su0, sv0, su1, sv1] = full_src;
+    let sw = su1 - su0;
+    let sh = sv1 - sv0;
+    match mode {
+        0 => (full_dst, full_src, 0.0), // cut
+        // dissolve / fade: full-frame FROM fading out
+        1 | 10 => {
+            // fadeblack: still dissolve-like for FROM; black midpoint approximated by stronger fade
+            let a = if mode == 10 {
+                if p < 0.5 {
+                    1.0
+                } else {
+                    (1.0 - (p - 0.5) * 2.0).clamp(0.0, 1.0)
+                }
+            } else {
+                dissolve
+            };
+            (full_dst, full_src, a)
+        }
+        // wipe left: TO reveals from left — FROM occupies x in [p,1]
+        2 => {
+            let remain = (1.0 - p).max(0.0);
+            (
+                [dx + dw * p, dy, dw * remain, dh],
+                [su0 + sw * p, sv0, su1, sv1],
+                1.0,
+            )
+        }
+        // wipe right
+        3 => {
+            let remain = (1.0 - p).max(0.0);
+            (
+                [dx, dy, dw * remain, dh],
+                [su0, sv0, su0 + sw * remain, sv1],
+                1.0,
+            )
+        }
+        // wipe up
+        4 => {
+            let remain = (1.0 - p).max(0.0);
+            (
+                [dx, dy + dh * p, dw, dh * remain],
+                [su0, sv0 + sh * p, su1, sv1],
+                1.0,
+            )
+        }
+        // wipe down
+        5 => {
+            let remain = (1.0 - p).max(0.0);
+            (
+                [dx, dy, dw, dh * remain],
+                [su0, sv0, su1, sv0 + sh * remain],
+                1.0,
+            )
+        }
+        // slide left: FROM shifts left
+        6 => (
+            [dx - dw * p, dy, dw, dh],
+            full_src,
+            (1.0 - p).clamp(0.0, 1.0),
+        ),
+        // slide right
+        7 => (
+            [dx + dw * p, dy, dw, dh],
+            full_src,
+            (1.0 - p).clamp(0.0, 1.0),
+        ),
+        // circle open / cross zoom: approximate with dissolve until dedicated SDF port
+        8 | 9 => (full_dst, full_src, dissolve),
+        _ => (full_dst, full_src, dissolve),
+    }
+}
+
 /// Le moteur de composition. Chaque frame décodée arrive comme un `CVPixelBufferRef`
 /// IOSurface-backed (`mac_frames::CpuFrames::present` / VideoToolbox hwaccel), et
 /// `nv12_srvs` le convertit en deux `MTLTexture` zéro-copie via `CVMetalTextureCache`.
@@ -261,6 +345,10 @@ pub struct Compositor {
     scene: RefCell<Option<Scene>>,
     /// Last frame of the outgoing clip, mixed over the incoming clip (cross-dissolve).
     dissolve_hold: RefCell<Option<crate::regions::DissolveHold>>,
+    /// Live FROM frame pointer for true A/B transitions (usize of *const AVFrame; not owned).
+    transition_from: RefCell<Option<usize>>,
+    /// Transition Library mode (0=cut, 1=dissolve, …).
+    transition_mode: RefCell<u32>,
     cursor: RefCell<Option<crate::cursor::CursorTrack>>,
     cursor_time: RefCell<Option<f32>>,
     timeline_time: RefCell<Option<f32>>,
@@ -611,6 +699,8 @@ impl Compositor {
             render_h: rh,
             scene: RefCell::new(None),
             dissolve_hold: RefCell::new(None),
+            transition_from: RefCell::new(None),
+            transition_mode: RefCell::new(1),
             cursor: RefCell::new(None),
             cursor_time: RefCell::new(None),
             timeline_time: RefCell::new(None),
@@ -695,6 +785,24 @@ impl Compositor {
 
     pub fn clear_dissolve_hold(&self) {
         *self.dissolve_hold.borrow_mut() = None;
+    }
+
+    /// True A/B: bind a live FROM frame for this compose only (not owned; must stay valid
+    /// until compose_frame returns). Clears the frozen hold path when set.
+    pub fn set_transition_from_frame(&self, screen: *const AVFrame) {
+        *self.transition_from.borrow_mut() = if screen.is_null() {
+            None
+        } else {
+            Some(screen as usize)
+        };
+    }
+
+    pub fn clear_transition_from_frame(&self) {
+        *self.transition_from.borrow_mut() = None;
+    }
+
+    pub fn set_transition_mode(&self, mode: u32) {
+        *self.transition_mode.borrow_mut() = mode;
     }
 
     pub fn clear_cursor(&self) {
@@ -2101,17 +2209,28 @@ impl Compositor {
             }
         }
         let [su0, sv0, su1, sv1] = g.cut;
-        let dissolve = g.cut_fade;
+        let dissolve = g.cut_fade; // remaining FROM amount (1→0)
+        let progress = (1.0 - dissolve).clamp(0.0, 1.0); // TO amount 0→1
+        let mode = *self.transition_mode.borrow();
+        let from_ptr = self
+            .transition_from
+            .borrow()
+            .map(|p| p as *const AVFrame)
+            .filter(|p| !p.is_null());
         let hold = self.dissolve_hold.borrow();
-        let hold_tex = if dissolve > 0.02 {
-            hold.as_ref().and_then(|h| self.nv12_srvs(h.as_ptr()).ok())
+        // Prefer live A/B FROM; fall back to frozen hold for legacy path.
+        let from_tex = if dissolve > 0.02 {
+            if let Some(fp) = from_ptr {
+                self.nv12_srvs(fp).ok()
+            } else {
+                hold.as_ref().and_then(|h| self.nv12_srvs(h.as_ptr()).ok())
+            }
         } else {
             None
         };
         match tilt.as_ref() {
             None => {
-                // Current clip is always opaque so the wallpaper cannot show through
-                // the mix. The outgoing hold sits on top and fades out.
+                // Current clip (TO) always drawn opaque.
                 self.draw_video(
                     enc,
                     &LayerCB {
@@ -2129,24 +2248,31 @@ impl Compositor {
                     &sy,
                     &suv,
                 );
-                if let Some((hy, huv)) = hold_tex.as_ref() {
-                    self.draw_video(
-                        enc,
-                        &LayerCB {
-                            dst: g.s_dst,
-                            src: [su0, sv0, su1, sv1],
-                            quad_px: s_px,
-                            radius_px: g.s_radius,
-                            mode: 0.0,
-                            color: [0.0, 0.0, 0.0, dissolve],
-                            src_prev: [su0, sv0, su1, sv1],
-                            dst_prev: g.s_dst_prev,
-                            mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
-                            ..Default::default()
-                        },
-                        hy,
-                        huv,
-                    );
+                if let Some((fy, fuv)) = from_tex.as_ref() {
+                    let (from_dst, from_src, from_alpha) =
+                        ab_from_layer_geometry(mode, progress, dissolve, g.s_dst, [su0, sv0, su1, sv1]);
+                    if from_alpha > 0.02 && from_dst[2] > 1e-4 && from_dst[3] > 1e-4 {
+                        self.draw_video(
+                            enc,
+                            &LayerCB {
+                                dst: from_dst,
+                                src: from_src,
+                                quad_px: [
+                                    from_dst[2] * rw,
+                                    from_dst[3] * rh,
+                                ],
+                                radius_px: g.s_radius,
+                                mode: 0.0,
+                                color: [0.0, 0.0, 0.0, from_alpha],
+                                src_prev: from_src,
+                                dst_prev: from_dst,
+                                mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
+                                ..Default::default()
+                            },
+                            fy,
+                            fuv,
+                        );
+                    }
                 }
             }
             Some(quad) => self.draw_tilted_screen(

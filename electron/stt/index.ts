@@ -1,8 +1,8 @@
-import path from "node:path";
-import { app, type IpcMain } from "electron";
+import { type IpcMain } from "electron";
 import { planChunks } from "./chunking";
 import { extractMono16kPcm } from "./extractAudio";
 import { ensureModels, modelPaths } from "./modelManager";
+import { resolveSttModelsBaseDir } from "./modelsDir";
 import type {
 	SttPhraseSegment,
 	SttStatusEvent,
@@ -172,7 +172,9 @@ export class SttManager {
 
 	private getModelsDir(): string {
 		if (this.modelsBaseDir) return this.modelsBaseDir;
-		this.modelsBaseDir = path.join(app.getPath("userData"), "stt-models");
+		// Prefer env / Electron userData / discovered product cache. Never throw when
+		// `electron.app` is undefined (Vitest, early boot, non-Electron hosts).
+		this.modelsBaseDir = resolveSttModelsBaseDir();
 		return this.modelsBaseDir;
 	}
 

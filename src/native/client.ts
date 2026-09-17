@@ -255,6 +255,17 @@ export const nativeBridgeClient = {
 				action: "chat.run",
 				payload: { projectId, sessionId, message, document },
 			}),
+		applyPreviewRun: (payload: {
+			document: unknown;
+			editProposalV1: unknown;
+			selectedProposalId: string;
+			proposalDocumentFingerprint: string;
+		}): Promise<import("./contracts").AiEditionApplyPreviewRunResult> =>
+			requireNativeBridgeData({
+				domain: "aiEdition",
+				action: "applyPreview.run",
+				payload,
+			}),
 		chatUndoLastBatch: (projectId: string, sessionId: string) =>
 			requireNativeBridgeData<AiEditionChatResult>({
 				domain: "aiEdition",

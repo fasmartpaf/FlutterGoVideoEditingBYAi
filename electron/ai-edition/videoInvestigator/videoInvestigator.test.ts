@@ -413,10 +413,10 @@ describe("Master Video Investigator V1", () => {
 	});
 
 	it("18 — deterministic edit does not trigger expensive investigation", async () => {
-		expect(shouldRunInvestigator(classifyMediaContextNeeds("trim silences"))).toBe(false);
+		expect(shouldRunInvestigator(classifyMediaContextNeeds("Delete 3–5 seconds."))).toBe(false);
 		const set = await runMasterVideoInvestigatorV1({
-			userMessage: "trim silences",
-			needs: classifyMediaContextNeeds("trim silences"),
+			userMessage: "Delete 3–5 seconds.",
+			needs: classifyMediaContextNeeds("Delete 3–5 seconds."),
 			assetId: "a1",
 			sourceDurationSec: 20,
 			videoPath: null,
@@ -425,6 +425,21 @@ describe("Master Video Investigator V1", () => {
 		expect(set!.stopReason).toBe("deterministic_edit_skip");
 		expect(set!.metrics.toolCalls).toBe(0);
 		expect(set!.additionalFrames).toHaveLength(0);
+	});
+
+	it("18b — non-media skip uses media_not_required (not deterministic_edit_skip)", async () => {
+		const needs = classifyMediaContextNeeds("What does cropping do?");
+		expect(needs.visual).toBe(false);
+		expect(shouldRunInvestigator(needs)).toBe(false);
+		const set = await runMasterVideoInvestigatorV1({
+			userMessage: "What does cropping do?",
+			needs,
+			assetId: "a1",
+			sourceDurationSec: 20,
+			videoPath: null,
+			ffmpegPath: null,
+		});
+		expect(set!.stopReason).toBe("media_not_required");
 	});
 
 	it("21 — Case 2 shape: late uncertainty triggers targeted inspect without inventing Restart", async () => {

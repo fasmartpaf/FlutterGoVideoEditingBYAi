@@ -980,6 +980,11 @@ impl Compositor {
         *self.dissolve_hold.borrow_mut() = None;
     }
 
+    /// True A/B FROM frame — stub on Linux until wgpu dual-texture ports land.
+    pub fn set_transition_from_frame(&self, _screen: *const crate::ffi::AVFrame) {}
+    pub fn clear_transition_from_frame(&self) {}
+    pub fn set_transition_mode(&self, _mode: u32) {}
+
     pub fn clear_cursor(&self) {
         *self.cursor.borrow_mut() = None;
     }

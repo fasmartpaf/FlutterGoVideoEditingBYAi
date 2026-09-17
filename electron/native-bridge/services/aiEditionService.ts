@@ -1,5 +1,6 @@
 import { documentSchema } from "../../../src/lib/ai-edition/schema";
 import type {
+	AiEditionApplyPreviewRunResult,
 	AiEditionAssetResult,
 	AiEditionCaptionTranslateResult,
 	AiEditionChatBudget,
@@ -312,6 +313,20 @@ export class AiEditionService {
 		sink?: ChatEventSink,
 	): Promise<AiEditionChatResult> {
 		return this.options.runChat(projectId, sessionId, message, document, sink);
+	}
+
+	/**
+	 * UI Consent Surface V1 — mint consent + runConsentedApplyPreview.
+	 * Never executes tools from React; main-process only.
+	 */
+	async applyPreviewRun(payload: {
+		document: unknown;
+		editProposalV1: unknown;
+		selectedProposalId: string;
+		proposalDocumentFingerprint: string;
+	}): Promise<AiEditionApplyPreviewRunResult> {
+		const { runUiConsentedApply } = await import("../../ai-edition/uiConsent");
+		return runUiConsentedApply(payload);
 	}
 
 	chatUndoLastBatch(_projectId: string, _sessionId: string): AiEditionChatResult {

@@ -54,6 +54,55 @@ import {
 import { parseCssGradient, resolveLinearGradientAngle } from "@/lib/exporter/gradientParser";
 import type { CompositorClipInput } from "./contracts";
 
+/** Native transition implementation modes — keep in sync with Rust `TransitionMode`. */
+const NATIVE_TRANSITION_MODE: Record<string, number> = {
+	"native.cut": 0,
+	"native.ab_dissolve": 1,
+	"native.ab_wipe_left": 2,
+	"native.ab_wipe_right": 3,
+	"native.ab_wipe_up": 4,
+	"native.ab_wipe_down": 5,
+	"native.ab_slide_left": 6,
+	"native.ab_slide_right": 7,
+	"native.ab_circle_open": 8,
+	"native.ab_cross_zoom": 9,
+	"native.ab_fade_black": 10,
+};
+
+function emitIncomingTransition(
+	t: AxcutClip["incomingTransition"],
+): Pick<
+	CompositorClipInput,
+	"incomingFadeHalfSec" | "incomingTransitionMode" | "incomingTransitionId"
+> {
+	if (!t) return {};
+	const resolvedId =
+		t.transitionId ?? (t.kind === "cut" ? "openscreen.cut" : "openscreen.dissolve");
+	const cut = resolvedId === "openscreen.cut" || t.kind === "cut";
+	const durationSec = cut ? 0 : (t.durationSec ?? 0.35);
+	const implById: Record<string, string> = {
+		"openscreen.cut": "native.cut",
+		"openscreen.dissolve": "native.ab_dissolve",
+		"gl.fade": "native.ab_dissolve",
+		"gl.dissolve": "native.ab_dissolve",
+		"gl.wipeLeft": "native.ab_wipe_left",
+		"gl.wipeRight": "native.ab_wipe_right",
+		"gl.wipeUp": "native.ab_wipe_up",
+		"gl.wipeDown": "native.ab_wipe_down",
+		"gl.slideLeft": "native.ab_slide_left",
+		"gl.slideRight": "native.ab_slide_right",
+		"gl.circleOpen": "native.ab_circle_open",
+		"gl.crossZoom": "native.ab_cross_zoom",
+		"gl.fadeblack": "native.ab_fade_black",
+	};
+	const implKey = cut ? "native.cut" : (implById[resolvedId] ?? "native.ab_dissolve");
+	return {
+		incomingFadeHalfSec: durationSec,
+		incomingTransitionMode: NATIVE_TRANSITION_MODE[implKey] ?? (cut ? 0 : 1),
+		incomingTransitionId: resolvedId,
+	};
+}
+
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
 export type SceneBackground =
 	| { kind: "color"; color: string } // "#rrggbb"
@@ -714,8 +763,7 @@ export function buildSceneDescription(
 				sourceEndSec: resolveClipSourceEndSec(clip, asset),
 				webcamOffsetSec: camera.offsetSec,
 				hasAudio: true,
-				// A held segment has an empty source window and exists only for the frames it
-				// holds; every other clip holds nothing.
+				...emitIncomingTransition(clip.incomingTransition),
 			},
 		];
 	});
@@ -1063,7 +1111,7 @@ export function buildSceneDescription(
 			...(region.underTrim ? { underTrim: true } : {}),
 		})),
 		annotations: projectedAnnotations
-			.map((region) => {
+			.flatMap((region) => {
 				const style = region.style;
 				// Only captions carry a space; annotations must keep emitting the exact same keys
 				// they always have, so the field is omitted rather than sent as null/undefined.
@@ -1087,39 +1135,41 @@ export function buildSceneDescription(
 					zIndex: region.zIndex,
 				} as const;
 				if (region.type === "text") {
-					return {
-						...base,
-						text: {
-							// `content` first, and with `||` rather than `??`. The inspector's textarea
-							// writes to `content`; `textContent` is the parallel slot, which
-							// `addAnnotation` initialises to "". Since "" is neither null nor undefined,
-							// `textContent ?? content` returned that empty string for every annotation
-							// created since — so the compositor was handed nothing to draw and text
-							// vanished from the preview the moment the DOM overlay stopped painting it.
-							content: region.content || region.textContent || "",
-							color: style.color,
-							backgroundColor: style.backgroundColor,
-							fontSizeRel: annotationFontSizeFraction(style.fontSize),
-							fontFamily: style.fontFamily,
-							fontWeight: style.fontWeight,
-							fontStyle: style.fontStyle,
-							textDecoration: style.textDecoration,
-							textAlign: style.textAlign,
-							...(verticalAlign ? { verticalAlign } : {}),
-							animation: style.textAnimation ?? null,
+					return [
+						{
+							...base,
+							text: {
+								// `content` first, and with `||` rather than `??`. The inspector's textarea
+								// writes to `content`; `textContent` is the parallel slot, which
+								// `addAnnotation` initialises to "". Since "" is neither null nor undefined,
+								// `textContent ?? content` returned that empty string for every annotation
+								// created since — so the compositor was handed nothing to draw and text
+								// vanished from the preview the moment the DOM overlay stopped painting it.
+								content: region.content || region.textContent || "",
+								color: style.color,
+								backgroundColor: style.backgroundColor,
+								fontSizeRel: annotationFontSizeFraction(style.fontSize),
+								fontFamily: style.fontFamily,
+								fontWeight: style.fontWeight,
+								fontStyle: style.fontStyle,
+								textDecoration: style.textDecoration,
+								textAlign: style.textAlign,
+								...(verticalAlign ? { verticalAlign } : {}),
+								animation: style.textAnimation ?? null,
+							},
 						},
-					};
+					];
 				}
 				if (region.type === "image") {
 					// `content` first: that is the field the live overlay reads (it checks
 					// `content.startsWith("data:image")`), `imageContent` being the parallel slot
 					// older documents used. Reading them the other way round would render an image
 					// the preview isn't showing.
-					return { ...base, imagePath: region.content || region.imageContent || "" };
+					return [{ ...base, imagePath: region.content || region.imageContent || "" }];
 				}
 				if (region.type === "figure") {
 					const figure = region.figureData;
-					return {
+					const figureAnn = {
 						...base,
 						figure: {
 							direction: figure?.arrowDirection ?? "right",
@@ -1127,26 +1177,63 @@ export function buildSceneDescription(
 							strokeWidth: figure?.strokeWidth ?? 4,
 						},
 					};
+					// Stored figure label text was historically invisible (arrow-only paint).
+					// Emit a companion text plate beside the arrow so callout labels reach
+					// preview + export without a new document primitive.
+					const label = String(region.content || region.textContent || "").trim();
+					if (!label) return [figureAnn];
+					const lx = Math.min(0.82, Math.max(0.02, base.x - 0.1));
+					const ly = Math.min(0.88, Math.max(0.02, base.y - 0.07));
+					return [
+						figureAnn,
+						{
+							id: `${region.id}__label`,
+							startSec: base.startSec,
+							endSec: base.endSec,
+							clipIndex: base.clipIndex,
+							...(region.underTrim ? { underTrim: true as const } : {}),
+							kind: "text" as const,
+							x: lx,
+							y: ly,
+							w: 0.2,
+							h: 0.07,
+							zIndex: base.zIndex + 1,
+							text: {
+								content: label.slice(0, 48),
+								color: "#ffffff",
+								backgroundColor: "rgba(0,0,0,0.72)",
+								fontSizeRel: annotationFontSizeFraction(22),
+								fontFamily: style.fontFamily ?? "Inter",
+								fontWeight: "bold" as const,
+								fontStyle: "normal" as const,
+								textDecoration: "none" as const,
+								textAlign: "center" as const,
+								animation: "fade" as const,
+							},
+						},
+					];
 				}
 				const blur = region.blurData;
-				return {
-					...base,
-					blur: {
-						style: blur?.type ?? "mosaic",
-						shape: blur?.shape ?? "rectangle",
-						color: blur?.color ?? "white",
-						intensity: blur?.intensity ?? 12,
-						blockSize: blur?.blockSize ?? 12,
-						...(blur?.freehandPoints
-							? {
-									freehandPoints: blur.freehandPoints.map((p) => ({
-										x: p.x / 100,
-										y: p.y / 100,
-									})),
-								}
-							: {}),
+				return [
+					{
+						...base,
+						blur: {
+							style: blur?.type ?? "mosaic",
+							shape: blur?.shape ?? "rectangle",
+							color: blur?.color ?? "white",
+							intensity: blur?.intensity ?? 12,
+							blockSize: blur?.blockSize ?? 12,
+							...(blur?.freehandPoints
+								? {
+										freehandPoints: blur.freehandPoints.map((p) => ({
+											x: p.x / 100,
+											y: p.y / 100,
+										})),
+									}
+								: {}),
+						},
 					},
-				};
+				];
 			})
 			// Ascending zIndex so the compositor paints in order without sorting per frame.
 			.sort((a, b) => a.zIndex - b.zIndex),

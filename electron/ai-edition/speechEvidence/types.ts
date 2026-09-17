@@ -49,6 +49,8 @@ export interface SpeechEvidence {
 	timings: SpeechEvidenceTimings;
 	/** Human-safe reason when status is unavailable/failed/no_audio. */
 	reason?: string;
+	/** Internal diagnostics only — never surface raw codes to end users. */
+	failureReason?: import("./failureReason").SpeechFailureReason;
 }
 
 export interface PreparedSpeechEvidence {

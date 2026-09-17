@@ -559,6 +559,17 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								),
 							);
 						}
+						case "applyPreview.run": {
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.applyPreviewRun({
+									document: request.payload.document,
+									editProposalV1: request.payload.editProposalV1,
+									selectedProposalId: request.payload.selectedProposalId,
+									proposalDocumentFingerprint: request.payload.proposalDocumentFingerprint,
+								}),
+							);
+						}
 						case "chat.undoLastBatch":
 							return createSuccessResponse(
 								requestId,

@@ -55,7 +55,7 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import {
-	clipJoinTimes,
+	clipJoins,
 	filmstripCellCount,
 	filmstripSampleTimes,
 	posterTimeForSpan,
@@ -2311,15 +2311,35 @@ export function V4Timeline({
 									</div>
 								);
 							})}
-							{clipJoinTimes(clips).map((sec) => (
-								<div
-									key={`join-${sec}`}
-									aria-hidden
-									data-testid="clip-join-transition"
-									className={styles.tlJoin}
-									style={{ left: `${pctAt(sec)}%` }}
-								/>
-							))}
+							{clipJoins(clips).map((join) => {
+								const incoming = clips.find((c) => c.id === join.incomingClipId);
+								const t = incoming?.incomingTransition;
+								const isCut = !t || t.kind === "cut" || t.transitionId === "openscreen.cut";
+								const selected =
+									tl.selectedTransitionBoundary?.incomingClipId === join.incomingClipId;
+								const label =
+									t?.transitionId && !isCut
+										? t.transitionId.replace(/^gl\.|^openscreen\./, "")
+										: "cut";
+								return (
+									<button
+										key={`join-${join.incomingClipId}`}
+										type="button"
+										aria-label={`Transition at join: ${label}`}
+										title={`Transition: ${label}`}
+										data-testid="clip-join-transition"
+										data-incoming-clip-id={join.incomingClipId}
+										data-kind={isCut ? "cut" : "effect"}
+										data-active={selected ? "true" : undefined}
+										className={styles.tlJoin}
+										style={{ left: `${pctAt(join.programmeSec)}%` }}
+										onClick={(e) => {
+											e.stopPropagation();
+											tl.selectTransitionBoundary(join.incomingClipId);
+										}}
+									/>
+								);
+							})}
 							{dragOver ? (
 								<div aria-hidden className={styles.tlDropHint}>
 									{t("toolbar.dropToAdd")}

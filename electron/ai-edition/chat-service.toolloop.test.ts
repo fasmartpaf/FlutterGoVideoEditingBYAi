@@ -287,14 +287,22 @@ describe("runChat tool loop", () => {
 			summary: expect.stringMatching(/added trim/),
 		});
 
-		// ponytail: empty-result path. When the deep agent returns no text,
-		// runChat surfaces "Empty response from model." — this is the second
-		// major behavior we want a regression test for.
+		// Recovery 3: empty-result path returns typed failure with user-safe copy
+		// (not "Empty response from model" as the primary toast).
 		fixture.events.length = 0;
 		invokeMock.mockReset();
 		invokeMock.mockImplementationOnce(async (args) => {
 			args.sink.error("Upstream 404 404 Page not found");
-			return { text: "", document: args.document, mutated: false };
+			return {
+				text: "",
+				document: args.document,
+				mutated: false,
+				status: "provider_error",
+				failureReason: "unknown",
+				userMessage:
+					"I couldn't complete the AI analysis because the model service is temporarily unavailable. Your video and project were not changed.",
+				reason: "provider_error diagnostic",
+			};
 		});
 		const sinkErr = {
 			text: (delta: string) => fixture.events.push({ kind: "text", payload: delta }),
@@ -314,7 +322,9 @@ describe("runChat tool loop", () => {
 			sinkErr,
 		);
 		expect(errResult.success).toBe(false);
-		expect(errResult.error).toMatch(/Empty response/);
+		expect(errResult.error).toMatch(/temporarily unavailable|couldn't complete this analysis/i);
+		expect(errResult.status).toBe("provider_error");
+		expect(errResult.failureReason).toBe("unknown");
 		expect(fixture.events.map((e) => e.kind)).toEqual(["error"]);
 		expect(fixture.events[0].payload).toMatch(/Upstream 404/);
 

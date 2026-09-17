@@ -103,6 +103,9 @@ export interface PreparedTargetStory {
 	requested: boolean;
 	/** Instruction blob size for perf reporting. */
 	instructionChars: number;
+	/** V1 deterministic target story when Source Story V2 was available. */
+	targetV1?: import("./v1").TargetStoryV1;
+	providerId?: string;
 }
 
 /** Context required to validate a Target Story against Source Story. */

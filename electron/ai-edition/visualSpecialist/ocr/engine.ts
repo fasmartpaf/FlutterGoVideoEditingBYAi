@@ -7,16 +7,33 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OcrResult } from "../types";
+import { isTesseractAvailable, TesseractOcrEngine } from "../reuse/tesseractEngine";
+import type { OcrResult, OcrStatus } from "../types";
 
 export interface OcrEngine {
-	readonly id: "macos_vision" | "unavailable";
+	readonly id: "macos_vision" | "tesseract" | "unavailable";
 	recognize(imagePath: string): Promise<OcrResult>;
+}
+
+function withStatus(result: OcrResult): OcrResult {
+	if (result.status) return result;
+	let status: OcrStatus;
+	if (result.engine === "unavailable" || result.error?.includes("unavailable")) {
+		status = "unavailable";
+	} else if (result.error) {
+		status = "failed";
+	} else if (result.lines.length === 0) {
+		status = "no_text";
+	} else {
+		status = "available";
+	}
+	return { ...result, status };
 }
 
 function unavailable(imagePath: string, error?: string): OcrResult {
 	return {
 		engine: "unavailable",
+		status: "unavailable",
 		imagePath,
 		width: 0,
 		height: 0,
@@ -78,21 +95,41 @@ async function ensureMacosVisionBinary(): Promise<string | null> {
 
 async function compileSwift(src: string, out: string): Promise<string | null> {
 	await fs.mkdir(path.dirname(out), { recursive: true });
-	const code = await new Promise<number>((resolve, reject) => {
-		const child = spawn("swiftc", ["-O", "-o", out, src], {
-			stdio: ["ignore", "ignore", "pipe"],
+	const lock = `${out}.lock`;
+	const start = Date.now();
+	while (existsSync(lock) && Date.now() - start < 30_000) {
+		if (existsSync(out)) return out;
+		await new Promise((r) => setTimeout(r, 100));
+	}
+	try {
+		await fs.writeFile(lock, String(process.pid), { flag: "wx" });
+	} catch {
+		// Another process is compiling — wait for binary.
+		while (!existsSync(out) && Date.now() - start < 30_000) {
+			await new Promise((r) => setTimeout(r, 100));
+		}
+		return existsSync(out) ? out : null;
+	}
+	try {
+		if (existsSync(out)) return out;
+		const code = await new Promise<number>((resolve, reject) => {
+			const child = spawn("swiftc", ["-O", "-o", out, src], {
+				stdio: ["ignore", "ignore", "pipe"],
+			});
+			let err = "";
+			child.stderr?.on("data", (d) => {
+				err += String(d);
+			});
+			child.on("error", reject);
+			child.on("close", (c) => {
+				if (c !== 0) console.warn("[visual-specialist] swiftc failed", err.trim());
+				resolve(c ?? 1);
+			});
 		});
-		let err = "";
-		child.stderr?.on("data", (d) => {
-			err += String(d);
-		});
-		child.on("error", reject);
-		child.on("close", (c) => {
-			if (c !== 0) console.warn("[visual-specialist] swiftc failed", err.trim());
-			resolve(c ?? 1);
-		});
-	});
-	return code === 0 && existsSync(out) ? out : null;
+		return code === 0 && existsSync(out) ? out : null;
+	} finally {
+		await fs.unlink(lock).catch(() => undefined);
+	}
 }
 
 export class MacosVisionOcrEngine implements OcrEngine {
@@ -139,33 +176,35 @@ export class MacosVisionOcrEngine implements OcrEngine {
 					h?: number;
 				}>;
 			};
-			return {
+			const lines = (parsed.lines ?? [])
+				.filter((l) => typeof l.text === "string" && l.text.trim())
+				.map((l) => ({
+					text: String(l.text).trim(),
+					confidence: typeof l.confidence === "number" ? l.confidence : 0,
+					box:
+						typeof l.x === "number"
+							? {
+									x: l.x ?? 0,
+									y: l.y ?? 0,
+									w: l.w ?? 0,
+									h: l.h ?? 0,
+								}
+							: undefined,
+				}));
+			return withStatus({
 				engine: "macos_vision",
 				imagePath,
 				width: parsed.width ?? 0,
 				height: parsed.height ?? 0,
-				lines: (parsed.lines ?? [])
-					.filter((l) => typeof l.text === "string" && l.text.trim())
-					.map((l) => ({
-						text: String(l.text).trim(),
-						confidence: typeof l.confidence === "number" ? l.confidence : 0,
-						box:
-							typeof l.x === "number"
-								? {
-										x: l.x ?? 0,
-										y: l.y ?? 0,
-										w: l.w ?? 0,
-										h: l.h ?? 0,
-									}
-								: undefined,
-					})),
+				lines,
 				ms: Date.now() - t0,
-			};
+			});
 		} catch (err) {
-			return {
+			return withStatus({
 				...unavailable(imagePath, err instanceof Error ? err.message : String(err)),
+				status: "failed",
 				ms: Date.now() - t0,
-			};
+			});
 		}
 	}
 }
@@ -173,9 +212,9 @@ export class MacosVisionOcrEngine implements OcrEngine {
 export async function resolveOcrEngine(): Promise<OcrEngine> {
 	if (process.platform === "darwin") {
 		const eng = new MacosVisionOcrEngine();
-		// Probe binary once
 		const bin = await ensureMacosVisionBinary();
 		if (bin) return eng;
 	}
+	if (isTesseractAvailable()) return new TesseractOcrEngine();
 	return new UnavailableOcrEngine();
 }

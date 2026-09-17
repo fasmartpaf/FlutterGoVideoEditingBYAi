@@ -1401,6 +1401,11 @@ impl Compositor {
         *self.dissolve_hold.borrow_mut() = None;
     }
 
+    /// True A/B FROM frame — stub on Windows until D3D11 dual-texture ports land.
+    pub fn set_transition_from_frame(&self, _screen: *const crate::ffi::AVFrame) {}
+    pub fn clear_transition_from_frame(&self) {}
+    pub fn set_transition_mode(&self, _mode: u32) {}
+
     /// Copie de la scène courante (si présente) — utilisé par l'export multiclip pour lire les
     /// réglages curseur (thème/lissage/show) sans dupliquer le contrat de scène côté pipeline.
     pub fn scene_snapshot(&self) -> Option<Scene> {

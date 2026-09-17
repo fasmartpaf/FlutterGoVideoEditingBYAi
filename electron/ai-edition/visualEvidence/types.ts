@@ -108,6 +108,8 @@ export interface PreparedVisualEvidence {
 	attached: boolean;
 	/** Adjacent chronological change scores for the frames that were attached. */
 	changes?: VisualChange[];
+	/** Canonical probed duration used while sampling. */
+	sourceDurationSec?: number;
 }
 
 export const REASON_PRIORITY: Record<VisualEvidenceReason, number> = {

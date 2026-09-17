@@ -1,0 +1,99 @@
+{
+	"milestone": "AI_AUTONOMOUS_PROFESSIONAL_VISUAL_EDITING_V1",
+	"auditedAt": "2026-09-15",
+	"updatedAt": "2026-09-16",
+	"note": "Tool existence ≠ autonomous professional editing. Transition has no authorable timeline field.",
+	"skills": {
+		"ZOOM": {
+			"RENDER_PRIMITIVE_EXISTS": true,
+			"TIMELINE_REPRESENTATION_EXISTS": true,
+			"PREVIEW_SUPPORT": true,
+			"EXPORT_SUPPORT": true,
+			"OPERATION_TOOL_EXISTS": true,
+			"VERIFICATION_EXISTS": true,
+			"ROLLBACK_EXISTS": true,
+			"AUTONOMOUS_GENERATOR_EXISTS": true,
+			"DIRECTOR_CONSIDERATION_EXISTS": true,
+			"LIVE_EDITOR_SHIPPING_EXISTS": true,
+			"notes": "ProfessionalZoomIntentV1 expands enter→hold→exit; planBridge attaches intent; compositor eases zoom."
+		},
+		"SPEED": {
+			"RENDER_PRIMITIVE_EXISTS": true,
+			"TIMELINE_REPRESENTATION_EXISTS": true,
+			"PREVIEW_SUPPORT": true,
+			"EXPORT_SUPPORT": true,
+			"OPERATION_TOOL_EXISTS": true,
+			"VERIFICATION_EXISTS": true,
+			"ROLLBACK_EXISTS": true,
+			"AUTONOMOUS_GENERATOR_EXISTS": true,
+			"DIRECTOR_CONSIDERATION_EXISTS": true,
+			"LIVE_EDITOR_SHIPPING_EXISTS": true,
+			"notes": "1.25/1.5/2x on stable low-info spans; remapped after trim."
+		},
+		"TITLE": {
+			"RENDER_PRIMITIVE_EXISTS": true,
+			"TIMELINE_REPRESENTATION_EXISTS": true,
+			"PREVIEW_SUPPORT": true,
+			"EXPORT_SUPPORT": true,
+			"OPERATION_TOOL_EXISTS": true,
+			"VERIFICATION_EXISTS": true,
+			"ROLLBACK_EXISTS": true,
+			"AUTONOMOUS_GENERATOR_EXISTS": true,
+			"DIRECTOR_CONSIDERATION_EXISTS": true,
+			"LIVE_EDITOR_SHIPPING_EXISTS": true,
+			"notes": "addGraphic kind=title via verified Apply Preview + graphicVerify."
+		},
+		"CALLOUT": {
+			"RENDER_PRIMITIVE_EXISTS": true,
+			"TIMELINE_REPRESENTATION_EXISTS": true,
+			"PREVIEW_SUPPORT": true,
+			"EXPORT_SUPPORT": true,
+			"OPERATION_TOOL_EXISTS": true,
+			"VERIFICATION_EXISTS": true,
+			"ROLLBACK_EXISTS": true,
+			"AUTONOMOUS_GENERATOR_EXISTS": true,
+			"DIRECTOR_CONSIDERATION_EXISTS": true,
+			"LIVE_EDITOR_SHIPPING_EXISTS": true,
+			"notes": "Requires grounded click/dwell focal geometry; skipped when insufficient."
+		},
+		"ANNOTATION": {
+			"RENDER_PRIMITIVE_EXISTS": true,
+			"TIMELINE_REPRESENTATION_EXISTS": true,
+			"PREVIEW_SUPPORT": true,
+			"EXPORT_SUPPORT": true,
+			"OPERATION_TOOL_EXISTS": true,
+			"VERIFICATION_EXISTS": "via_addGraphic_family",
+			"ROLLBACK_EXISTS": true,
+			"AUTONOMOUS_GENERATOR_EXISTS": false,
+			"DIRECTOR_CONSIDERATION_EXISTS": false,
+			"LIVE_EDITOR_SHIPPING_EXISTS": false,
+			"notes": "Autonomous path uses addGraphic for title/callout."
+		},
+		"GRAPHIC": {
+			"RENDER_PRIMITIVE_EXISTS": true,
+			"TIMELINE_REPRESENTATION_EXISTS": true,
+			"PREVIEW_SUPPORT": true,
+			"EXPORT_SUPPORT": true,
+			"OPERATION_TOOL_EXISTS": true,
+			"VERIFICATION_EXISTS": true,
+			"ROLLBACK_EXISTS": true,
+			"AUTONOMOUS_GENERATOR_EXISTS": "title_callout",
+			"DIRECTOR_CONSIDERATION_EXISTS": true,
+			"LIVE_EDITOR_SHIPPING_EXISTS": true,
+			"notes": "Verified addGraphic family."
+		},
+		"TRANSITION": {
+			"RENDER_PRIMITIVE_EXISTS": "partial_auto_only",
+			"TIMELINE_REPRESENTATION_EXISTS": false,
+			"PREVIEW_SUPPORT": "auto_cut_dissolve_only",
+			"EXPORT_SUPPORT": "auto_cut_dissolve_only",
+			"OPERATION_TOOL_EXISTS": false,
+			"VERIFICATION_EXISTS": false,
+			"ROLLBACK_EXISTS": false,
+			"AUTONOMOUS_GENERATOR_EXISTS": false,
+			"DIRECTOR_CONSIDERATION_EXISTS": false,
+			"LIVE_EDITOR_SHIPPING_EXISTS": false,
+			"notes": "CUT_FADE_HALF_SEC=0.35s only. No authorable clip-transition. Honest FAIL for Director-controlled CUT/DISSOLVE."
+		}
+	}
+}

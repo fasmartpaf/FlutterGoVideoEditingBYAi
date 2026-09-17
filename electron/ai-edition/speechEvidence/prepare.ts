@@ -16,14 +16,12 @@ import { candidateBinaryPaths } from "../../stt/gpuDetector";
 import type { SttManager } from "../../stt/index";
 import type { MediaContextNeeds } from "../mediaContextNeeds";
 import { classifyMediaContextNeeds } from "../mediaContextNeeds";
-import {
-	assertSourceTimestampsWithinDuration,
-	ensureCanonicalSourceDuration,
-	type ProbedSourceDurations,
-} from "../sourceTiming";
+import { ensureCanonicalSourceDuration, type ProbedSourceDurations } from "../sourceTiming";
 import { buildSpeechCacheIdentity, readSpeechCache, writeSpeechCache } from "./cache";
+import { classifySpeechFailureReason, humanSafeSpeechFailureReason } from "./failureReason";
 import { axcutTranscriptFromSttResponse, speechEvidenceFromAxcutTranscript } from "./map";
 import { probeAudioStream } from "./probe";
+import { applySpeechStatusResolution } from "./resolveStatus";
 import type { PreparedSpeechEvidence, SpeechEvidence, SpeechEvidenceTimings } from "./types";
 
 function defaultSpeechCacheDir(): string {
@@ -92,22 +90,10 @@ function validateSpeechAgainstCanonical(
 	evidence: SpeechEvidence,
 	canonicalDurationSec: number,
 ): SpeechEvidence {
-	const errors = assertSourceTimestampsWithinDuration(
-		evidence.segments.map((s) => ({
-			start: s.startSourceTimeSec,
-			end: s.endSourceTimeSec,
-		})),
-		canonicalDurationSec,
-	);
-	if (errors.length === 0) {
-		return { ...evidence, sourceDurationSec: canonicalDurationSec };
-	}
-	return {
+	return applySpeechStatusResolution({
 		...evidence,
 		sourceDurationSec: canonicalDurationSec,
-		status: evidence.status === "available" ? "failed" : evidence.status,
-		reason: `speech timestamps outside canonical source duration: ${errors.slice(0, 3).join("; ")}`,
-	};
+	});
 }
 
 export interface PrepareSpeechEvidenceDeps {
@@ -290,6 +276,7 @@ export async function prepareSpeechEvidenceForTurn(
 				status: "unavailable",
 				audioStreamPresent: probe.present === true ? true : null,
 				timings: emptyTimings({ audioProbeMs }),
+				failureReason: "binary_missing",
 				reason: "transcription is currently unavailable in this runtime",
 			});
 			continue;
@@ -352,9 +339,9 @@ export async function prepareSpeechEvidenceForTurn(
 					cacheHit: false,
 				}),
 			});
-			if (sourceDurationSec != null) {
-				speech = validateSpeechAgainstCanonical(speech, sourceDurationSec);
-			}
+			speech = applySpeechStatusResolution(
+				sourceDurationSec != null ? { ...speech, sourceDurationSec } : speech,
+			);
 			evidence.push(speech);
 			aggregate.segmentCount += speech.segments.length;
 		} catch (err) {
@@ -370,6 +357,7 @@ export async function prepareSpeechEvidenceForTurn(
 				});
 				continue;
 			}
+			const failureReason = classifySpeechFailureReason(err);
 			evidence.push({
 				assetId,
 				sourceDurationSec,
@@ -377,7 +365,8 @@ export async function prepareSpeechEvidenceForTurn(
 				status: "failed",
 				audioStreamPresent: probe.present === true ? true : null,
 				timings: emptyTimings({ audioProbeMs }),
-				reason: err instanceof Error ? err.message : String(err),
+				failureReason,
+				reason: humanSafeSpeechFailureReason(failureReason),
 			});
 		}
 	}

@@ -15,6 +15,7 @@ import { writeClipboardText } from "@/lib/clipboardText";
 import { nativeBridgeClient } from "@/native/client";
 import type {
 	AiEditionChatEvent,
+	AiEditionChatResult,
 	AiEditionLlmConfig,
 	AiEditionLocalAgent,
 	AiEditionToolCallSummary,
@@ -27,6 +28,7 @@ import {
 } from "../../../electron/ai-edition/provider-registry";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
+import { EditReviewCardView } from "./EditReviewCard";
 import { LocalCliPopover } from "./LocalCliPopover";
 import { ChatHistoryModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -46,6 +48,8 @@ interface ChatDisplayMessage {
 	// above the answer. Ephemeral — only present for the turn that streamed it;
 	// reloading a session won't show past traces.
 	thinking?: string;
+	/** UI Consent Surface V1 — typed edit review (not parsed from prose). */
+	editReview?: AiEditionChatResult["editReview"];
 }
 
 // Quick-access model picker anchored to the composer's model pill — mirrors
@@ -703,7 +707,8 @@ export function ChatStripPanel() {
 			);
 			const assistant = result.assistantMessage;
 			if (result.success && assistant) {
-				if (result.document) {
+				const hasConsentableReview = result.editReview?.cards.some((c) => c.canApply) === true;
+				if (result.document && !hasConsentableReview) {
 					const applyEdits = async (options?: { ignoreConflict?: boolean }) => {
 						try {
 							return await applyDocument(options);
@@ -740,6 +745,10 @@ export function ChatStripPanel() {
 							},
 						});
 					}
+				} else if (hasConsentableReview) {
+					console.info("[ui-consent] proposal_shown", {
+						proposalIds: result.editReview?.cards.map((c) => c.proposalId),
+					});
 				}
 				setMessages((prev) => [
 					...prev,
@@ -753,6 +762,7 @@ export function ChatStripPanel() {
 						// default, click-to-expand) instead of vanishing. The
 						// live accumulator is cleared in `finally`.
 						thinking: thinkingText || undefined,
+						editReview: result.editReview,
 					},
 				]);
 				void refreshSessions(projectId);
@@ -1461,6 +1471,13 @@ export function ChatStripPanel() {
 										))}
 									</div>
 								) : null}
+								{m.editReview?.cards.map((card) => (
+									<EditReviewCardView
+										key={card.proposalId}
+										card={card}
+										editProposalV1={m.editReview?.editProposalV1}
+									/>
+								))}
 							</div>
 						))}
 						{busy ? (

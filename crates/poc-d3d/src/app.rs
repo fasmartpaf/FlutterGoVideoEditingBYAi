@@ -105,7 +105,7 @@ impl App {
     /// encore de sens avant le premier tick réel (cf. `Player::step`, sémantique de hold).
     unsafe fn init_first_frame(&mut self) {
         let cfg = self.cfgs[self.cur].clone();
-        let _ = self.player.step(&self.comp, &cfg, f64::INFINITY);
+        let _ = self.player.step(&self.comp, &cfg, f64::INFINITY, None, 0);
         let _ = self.render();
         self.update_ready_status();
         self.last = Instant::now();
@@ -132,7 +132,7 @@ impl App {
         loop {
             let before = self.player.screen_time_sec();
             let target = before + self.acc;
-            if !self.player.step(&self.comp, &cfg, target)? {
+            if !self.player.step(&self.comp, &cfg, target, None, 0)? {
                 break; // rien de dû pour l'instant : `self.acc` reste tel quel.
             }
             stepped = true;
@@ -182,7 +182,7 @@ impl App {
                     self.cur = sel as usize;
                     if !self.playing {
                         let cfg = self.cfgs[self.cur].clone();
-                        let _ = self.player.recompose(&self.comp, &cfg);
+                        let _ = self.player.recompose(&self.comp, &cfg, None, 0);
                         let _ = self.render();
                     }
                     self.update_ready_status();

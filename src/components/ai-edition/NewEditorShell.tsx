@@ -35,6 +35,7 @@ import {
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
+import { useEditReviewSeekBus } from "@/lib/ai-edition/store/useEditReviewSeekBus";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { isGeneratedAssetId } from "@/lib/ai-edition/timeline/clip-parts";
@@ -144,6 +145,10 @@ export function NewEditorShell() {
 			setChatOpen(true);
 		}
 	}, [pendingChatPrompt, chatOpen]);
+
+	const pendingReviewSeek = useEditReviewSeekBus((s) => s.pendingSec);
+	const _reviewSeekRequestId = useEditReviewSeekBus((s) => s.requestId);
+	const consumeReviewSeek = useEditReviewSeekBus((s) => s.consume);
 	const [chatWidthPx, setChatWidthPx] = useState(
 		() => Number(localStorage.getItem("os-editor-chat-width")) || 392,
 	);
@@ -479,6 +484,12 @@ export function NewEditorShell() {
 		},
 		[setCurrentTime],
 	);
+
+	useEffect(() => {
+		if (pendingReviewSeek == null) return;
+		handleSeek(pendingReviewSeek);
+		consumeReviewSeek();
+	}, [pendingReviewSeek, consumeReviewSeek, handleSeek]);
 
 	const handleTimeChange = useCallback(
 		(timeSec: number) => {

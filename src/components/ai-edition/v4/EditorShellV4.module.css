@@ -1947,7 +1947,44 @@
 	border: 1.5px solid color-mix(in srgb, var(--accent) 80%, #fff);
 	background: color-mix(in srgb, var(--bg) 35%, var(--accent));
 	box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent);
-	pointer-events: none;
+	pointer-events: auto;
+	cursor: pointer;
+	padding: 0;
+}
+.tlJoin[data-active="true"] {
+	background: var(--accent);
+	border-color: #fff;
+	box-shadow:
+		0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent),
+		0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.tlJoin[data-kind="effect"] {
+	background: color-mix(in srgb, var(--accent) 70%, #fbbf24);
+}
+.transitionGrid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+}
+.transitionCard {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 6px;
+	border-radius: 12px;
+	border: 1px solid var(--border);
+	background: var(--surface-1);
+	cursor: pointer;
+	text-align: left;
+	color: inherit;
+}
+.transitionCard[data-selected="true"] {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+}
+.transitionCardName {
+	font: 600 12px var(--font-display);
+	padding: 0 2px 2px;
 }
 .lanePillFilm {
 	position: absolute;

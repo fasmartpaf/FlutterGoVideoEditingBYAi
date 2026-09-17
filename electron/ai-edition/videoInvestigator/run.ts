@@ -1,8 +1,10 @@
 /**
- * Master Video Investigator V1 — bounded deterministic runner.
+ * Master Video Investigator V1 / V1.1 — bounded deterministic runner.
  * 0 investigator model calls. May extract additional frames for the existing agent turn.
+ * V1.1 adds role-policy planning (grounding → modality roles → verify → stop).
  */
 
+import type { ClaimPromotionSet } from "../claimPromotion/types";
 import type { MediaContextNeeds } from "../mediaContextNeeds";
 import type { SpeechEvidence } from "../speechEvidence/types";
 import {
@@ -14,6 +16,16 @@ import { defaultVisualFrameCacheDir, type ExtractFrameDeps } from "../visualEvid
 import type { VisualChange, VisualEvidenceFrame } from "../visualEvidence/types";
 import { buildInvestigatorInternalBriefing, truncateBriefing } from "./briefing";
 import { planInvestigation, shouldRunInvestigator } from "./plan";
+import {
+	classifyInvestigationIntents,
+	finalizeStopReason,
+	INVESTIGATOR_V1_1_PROVIDER_ID,
+	type InvestigationIntent,
+	planInvestigationV11,
+	type RoleBudgets,
+	type RolePolicyTrace,
+	shouldStopAfterAction,
+} from "./rolePolicy";
 import {
 	type InvestigatorToolContext,
 	toolCompareVisualStates,
@@ -51,6 +63,11 @@ export interface RunInvestigatorInput {
 	extractDeps?: Partial<ExtractFrameDeps>;
 	ffmpegPath?: string | null;
 	budgets?: Partial<InvestigationBudgets>;
+	/** Default v1 for backward compatibility; production uses v1.1. */
+	policyVersion?: "v1" | "v1.1";
+	/** Claim Promotion set for lazy scheduling (V1.1). */
+	claimPromotion?: ClaimPromotionSet | null;
+	roleBudgets?: Partial<RoleBudgets>;
 }
 
 function emptyMetrics(): InvestigationMetrics {
@@ -75,20 +92,60 @@ function emptyMetrics(): InvestigationMetrics {
 export async function runMasterVideoInvestigatorV1(
 	input: RunInvestigatorInput,
 ): Promise<InvestigationEvidenceSet | null> {
+	return runInvestigatorCore({ ...input, policyVersion: input.policyVersion ?? "v1" });
+}
+
+/** Provider identity CURRENT_OPENSCREEN_INVESTIGATOR_V1_1 */
+export async function runMasterVideoInvestigatorV1_1(
+	input: Omit<RunInvestigatorInput, "policyVersion">,
+): Promise<InvestigationEvidenceSet | null> {
+	return runInvestigatorCore({ ...input, policyVersion: "v1.1" });
+}
+
+async function runInvestigatorCore(
+	input: RunInvestigatorInput & { policyVersion: "v1" | "v1.1" },
+): Promise<InvestigationEvidenceSet | null> {
 	const tAll = Date.now();
 	const budgets: InvestigationBudgets = {
 		...DEFAULT_INVESTIGATION_BUDGETS,
 		...input.budgets,
 	};
+	const policyVersion = input.policyVersion;
 
-	if (!shouldRunInvestigator(input.needs)) {
+	const intentsPreview = classifyInvestigationIntents(input.userMessage, input.needs);
+	const shouldRun =
+		shouldRunInvestigator(input.needs) ||
+		(policyVersion === "v1.1" &&
+			input.needs.category !== "deterministicEdit" &&
+			intentsPreview.some(
+				(i) =>
+					i === "action_verification" ||
+					i === "visual_state" ||
+					i === "speech_content" ||
+					i === "temporary_ui" ||
+					i === "spoken_correction" ||
+					i === "contradiction_check" ||
+					i === "text_ui_reading" ||
+					i === "chronology" ||
+					i === "cursor_interaction",
+			));
+
+	if (!shouldRun) {
+		const stopReason =
+			input.needs.category === "deterministicEdit"
+				? "deterministic_edit_skip"
+				: "media_not_required";
+		const questionSummary =
+			stopReason === "deterministic_edit_skip"
+				? "Skipped — deterministic edit / no media investigation needed"
+				: "Skipped — media investigation not required for this request";
 		return {
 			version: 1,
 			assetId: input.assetId,
 			timebase: "SOURCE_MEDIA_TIME",
-			questionSummary: "Skipped — deterministic edit / no media investigation needed",
+			questionSummary,
 			focusRange: { startSourceTimeSec: 0, endSourceTimeSec: input.sourceDurationSec },
-			stopReason: "deterministic_edit_skip",
+			stopReason,
 			coverage: {
 				sourceDurationSec: input.sourceDurationSec,
 				rangesInspected: [],
@@ -100,9 +157,17 @@ export async function runMasterVideoInvestigatorV1(
 			observations: [],
 			claims: [],
 			toolTrace: [],
-			metrics: { ...emptyMetrics(), totalInvestigationMs: Date.now() - tAll },
+			metrics: {
+				...emptyMetrics(),
+				totalInvestigationMs: Date.now() - tAll,
+				policyVersion,
+			},
 			internalBriefing: "",
 			additionalFrames: [],
+			providerId:
+				policyVersion === "v1.1"
+					? INVESTIGATOR_V1_1_PROVIDER_ID
+					: "CURRENT_OPENSCREEN_INVESTIGATOR_V1",
 		};
 	}
 
@@ -143,19 +208,56 @@ export async function runMasterVideoInvestigatorV1(
 				...emptyMetrics(),
 				memoryQueryMs,
 				totalInvestigationMs: Date.now() - tAll,
+				policyVersion,
 			},
 			internalBriefing: "",
 			additionalFrames: [],
+			providerId:
+				policyVersion === "v1.1"
+					? INVESTIGATOR_V1_1_PROVIDER_ID
+					: "CURRENT_OPENSCREEN_INVESTIGATOR_V1",
 		};
 	}
 
 	const tPlan = Date.now();
-	const { focus, actions } = planInvestigation({
-		userMessage: input.userMessage,
-		store,
-		sourceDurationSec: input.sourceDurationSec,
-		needs: input.needs,
-	});
+	let focus: { startSourceTimeSec: number; endSourceTimeSec: number; questionSummary: string };
+	let actions: ReturnType<typeof planInvestigation>["actions"];
+	let rolePolicy: RolePolicyTrace | undefined;
+	let stopHint: "sufficient_after_plan" | "insufficient_after_plan" | "continue" = "continue";
+	let intents: InvestigationIntent[] = [];
+
+	if (policyVersion === "v1.1") {
+		const plan = planInvestigationV11({
+			userMessage: input.userMessage,
+			store,
+			sourceDurationSec: input.sourceDurationSec,
+			needs: input.needs,
+			claimPromotion: input.claimPromotion,
+			roleBudgets: input.roleBudgets,
+		});
+		focus = plan.focus;
+		actions = plan.actions;
+		stopHint = plan.stopHint;
+		intents = plan.intents;
+		rolePolicy = {
+			providerId: INVESTIGATOR_V1_1_PROVIDER_ID,
+			intents: plan.intents,
+			roleSequence: plan.roles,
+			transitions: plan.transitions,
+			rankedRangeIds: plan.ranked.map((r) => r.id),
+			lazyScheduledClaimIds: plan.lazyScheduledClaimIds,
+			skippedIrrelevant: plan.skippedIrrelevant,
+		};
+	} else {
+		const plan = planInvestigation({
+			userMessage: input.userMessage,
+			store,
+			sourceDurationSec: input.sourceDurationSec,
+			needs: input.needs,
+		});
+		focus = plan.focus;
+		actions = plan.actions;
+	}
 	const planningMs = Date.now() - tPlan;
 
 	const cacheDir = input.extractDeps?.cacheDir ?? (await defaultVisualFrameCacheDir());
@@ -192,6 +294,12 @@ export async function runMasterVideoInvestigatorV1(
 	const metrics = emptyMetrics();
 	metrics.memoryQueryMs = memoryQueryMs;
 	metrics.planningMs = planningMs;
+	metrics.policyVersion = policyVersion;
+	if (rolePolicy) {
+		metrics.rankedRangeCount = rolePolicy.rankedRangeIds.length;
+		metrics.lazyScheduledClaims = rolePolicy.lazyScheduledClaimIds.length;
+		metrics.skippedIrrelevantClaims = rolePolicy.skippedIrrelevant.length;
+	}
 
 	const rangeKeyCounts = new Map<string, number>();
 	let frameInspections = 0;
@@ -200,6 +308,7 @@ export async function runMasterVideoInvestigatorV1(
 	let compareCalls = 0;
 	let stopReason: InvestigationStopReason = "sufficient_evidence";
 	let stepsUsed = 0;
+	let earlyStop = false;
 
 	const tTools = Date.now();
 	for (const action of actions) {
@@ -571,17 +680,36 @@ export async function runMasterVideoInvestigatorV1(
 		}
 
 		metrics.toolCalls += 1;
+
+		if (policyVersion === "v1.1" && intents.length) {
+			const early = shouldStopAfterAction({
+				intents,
+				action,
+				observations,
+				toolCalls: metrics.toolCalls,
+				stopHint,
+				userMessage: input.userMessage,
+			});
+			if (early?.stop) {
+				earlyStop = true;
+				stopReason = early.reason;
+				if (rolePolicy) rolePolicy.stopReasonDetail = early.detail;
+				break;
+			}
+		}
 	}
 	metrics.toolExecutionMs = Date.now() - tTools;
 	metrics.stepsUsed = stepsUsed;
+	metrics.earlyStop = earlyStop;
 
 	if (actions.length === 0) stopReason = "no_uncertainty";
-	if (
-		stopReason !== "budget_exhausted" &&
-		observations.every((o) => o.kind === "ledger_events" || o.kind === "provenance")
-	) {
-		/* still ok — memory-only investigation */
-	}
+	stopReason = finalizeStopReason({
+		plannedStopHint: stopHint,
+		current: stopReason,
+		observations,
+		actionsPlanned: actions.length,
+		actionsRun: metrics.toolCalls,
+	});
 
 	const tVer = Date.now();
 	const claims = verifyInvestigationClaims({
@@ -619,6 +747,11 @@ export async function runMasterVideoInvestigatorV1(
 		toolTrace,
 		metrics,
 		additionalFrames,
+		...(rolePolicy ? { rolePolicy } : {}),
+		providerId:
+			policyVersion === "v1.1"
+				? INVESTIGATOR_V1_1_PROVIDER_ID
+				: "CURRENT_OPENSCREEN_INVESTIGATOR_V1",
 	};
 
 	const briefing = truncateBriefing(

@@ -116,4 +116,9 @@ export interface PreparedSourceStory {
 	promptSection: string;
 	/** True when this turn should ask the model for SOURCE_STORY JSON. */
 	requested: boolean;
+	/** V2 evidence-grounded story (deterministic). Absent when V2 not built. */
+	storyV2?: import("./v2").SourceStoryV2;
+	evidenceInput?: import("./v2").SourceStoryEvidenceInput;
+	/** Provider for this prepare path. */
+	providerId?: string;
 }

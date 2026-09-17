@@ -71,6 +71,12 @@ import {
 	MEDIA_EVIDENCE_NOTE,
 	type MediaEvidenceCapabilities,
 } from "./mediaEvidence";
+import { mutationAuthorityRefusal } from "./mutationAuthority";
+import {
+	legacyKindToTransitionId,
+	resolveTransitionId,
+	validateAndClampTransitionApply,
+} from "./transitionLibrary";
 
 export interface AgentToolExecution {
 	ok: boolean;
@@ -492,6 +498,20 @@ export const setClipCropArgs = z.object({
 	crop: clipCropRegionSchema.nullable(),
 });
 
+export const setClipIncomingTransitionArgs = z
+	.object({
+		clipId: z.string().min(1),
+		kind: z.enum(["cut", "dissolve"]).optional(),
+		/** Canonical Transition Registry id (preferred). */
+		transitionId: z.string().min(1).optional(),
+		/** Dissolve / transition window seconds; ignored for cut. Default 0.35. */
+		durationSec: z.number().min(0).max(2).optional(),
+		params: z.record(z.union([z.number(), z.boolean()])).optional(),
+	})
+	.refine((a) => Boolean(a.kind || a.transitionId), {
+		message: "kind or transitionId required",
+	});
+
 const textAnimationSchema = z.enum([
 	"none",
 	"fade",
@@ -760,6 +780,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"setClipRange",
 	"addClip",
 	"setClipCrop",
+	"setClipIncomingTransition",
 	"moveClip",
 	"replaceTimeline",
 	"addZoom",
@@ -841,6 +862,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"setClipRange",
 	"addClip",
 	"setClipCrop",
+	"setClipIncomingTransition",
 	"moveClip",
 	"replaceTimeline",
 	"addZoom",
@@ -1316,6 +1338,12 @@ export interface AgentToolOptions {
 	 * mirrors `config.allowAgentEdits !== false`.
 	 */
 	editsAllowed?: boolean;
+	/**
+	 * Single Mutation Authority V1 — when `proposal_only` or `read_only`,
+	 * mutating tools are refused even if `editsAllowed` is true.
+	 * `consented_apply` / `deterministic_edit` / omitted keep prior behavior.
+	 */
+	mutationMode?: import("./mutationAuthority").MutationMode;
 	/** Cursor telemetry resolved for THIS turn — see `CursorTelemetryContext`.
 	 *  Absent means the runtime has no telemetry reader wired at all, which the
 	 *  executor reports as "could not look", never as "there is none". */
@@ -1528,6 +1556,19 @@ export function executeAgentTool(
 	// Reads stay open on purpose. A model that cannot call getCurrentDocument or
 	// getTranscript cannot describe the edit it is asking permission for, and
 	// would answer "I have no tool for that" — false, and worse than silence.
+	//
+	// Single Mutation Authority V1: semantic/editorial (`proposal_only`) and
+	// non-edit (`read_only`) turns refuse mutations before the switch — even
+	// when Project edits are enabled. Prompt instructions alone are not enough.
+	const mutationMode = options?.mutationMode;
+	if (isMutatingTool(name) && (mutationMode === "proposal_only" || mutationMode === "read_only")) {
+		const payload = mutationAuthorityRefusal(name, args, mutationMode);
+		return {
+			ok: false,
+			resultJson: JSON.stringify(payload),
+			summary: payload.error,
+		};
+	}
 	if (options?.editsAllowed === false && isMutatingTool(name)) {
 		return consentRequired(name, args);
 	}
@@ -1981,6 +2022,65 @@ export function executeAgentTool(
 					after?.cropRegion != null
 						? `cropped ${clipId} to ${after.cropRegion.width}×${after.cropRegion.height} at (${after.cropRegion.x}, ${after.cropRegion.y})`
 						: `cleared crop on ${clipId}`,
+			};
+		}
+
+		case "setClipIncomingTransition": {
+			const parsed = setClipIncomingTransitionArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { clipId } = parsed.data;
+			const clip = document.timeline.clips.find((c) => c.id === clipId);
+			if (!clip) return failure(`Unknown clip: ${clipId}. ${clipRoster(document)}`);
+			const clipIndex = document.timeline.clips.findIndex((c) => c.id === clipId);
+			if (clipIndex <= 0) {
+				return failure("incoming transition requires a non-first clip (a join)");
+			}
+			// Resolve through the canonical Transition Registry.
+			const transitionId = resolveTransitionId({
+				transitionId: parsed.data.transitionId,
+				kind: parsed.data.kind ?? null,
+			});
+			const validated = validateAndClampTransitionApply({
+				transitionId,
+				durationSec: parsed.data.durationSec,
+				params: parsed.data.params ?? null,
+			});
+			if (!validated.ok) return failure(validated.reason);
+			const isCut = validated.transitionId === "openscreen.cut";
+			const durationSec = validated.durationSec;
+			const kind = isCut ? ("cut" as const) : ("dissolve" as const);
+			const params =
+				Object.keys(validated.params).length > 0 && !isCut ? validated.params : undefined;
+			const nextClips = document.timeline.clips.map((c) =>
+				c.id === clipId
+					? {
+							...c,
+							incomingTransition: {
+								kind,
+								transitionId: validated.transitionId,
+								...(isCut ? {} : { durationSec }),
+								...(params ? { params } : {}),
+							},
+						}
+					: c,
+			);
+			const next = {
+				...document,
+				timeline: { ...document.timeline, clips: nextClips },
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					clipId,
+					kind,
+					transitionId: validated.transitionId,
+					durationSec: isCut ? 0 : durationSec,
+					clamped: validated.clamped,
+					rejectedKeys: validated.rejectedKeys,
+					legacyKind: legacyKindToTransitionId(kind),
+				}),
+				summary: `set incoming ${validated.transitionId} on ${clipId}${isCut ? "" : ` (${durationSec}s)`}`,
 			};
 		}
 

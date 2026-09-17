@@ -27,6 +27,24 @@ export function filmstripCellCount(widthPx: number): number {
 	return Math.min(24, Math.max(1, Math.floor(widthPx / 56)));
 }
 
+/** Join marks with the incoming clip id (document authority for transitions). */
+export function clipJoins(
+	clips: ReadonlyArray<{
+		id: string;
+		timelineStartSec: number;
+		timelineEndSec: number;
+	}>,
+): Array<{ programmeSec: number; incomingClipId: string }> {
+	const joins: Array<{ programmeSec: number; incomingClipId: string }> = [];
+	for (let i = 1; i < clips.length; i++) {
+		const prev = clips[i - 1]!;
+		const next = clips[i]!;
+		if (Math.abs(next.timelineStartSec - prev.timelineEndSec) > 0.05) continue;
+		joins.push({ programmeSec: next.timelineStartSec, incomingClipId: next.id });
+	}
+	return joins;
+}
+
 /** Virtual-timeline instants of each clip join (incoming clip start). */
 export function clipJoinTimes(
 	clips: ReadonlyArray<{ timelineStartSec: number; timelineEndSec: number }>,

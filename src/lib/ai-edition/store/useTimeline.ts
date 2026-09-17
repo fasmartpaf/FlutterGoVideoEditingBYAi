@@ -113,6 +113,10 @@ export function useTimeline() {
 	// the Delete key operates on.
 	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
+	/** Incoming clip id at the selected join — Transition Library authority. */
+	const [selectedTransitionBoundary, setSelectedTransitionBoundary] = useState<{
+		incomingClipId: string;
+	} | null>(null);
 	// The selected imported audio track (issue #350) lives in the project store —
 	// not here — because the media panel and the inspector, in different subtrees,
 	// both touch it (see projectStore). It shares "this is the thing I mean"
@@ -1001,6 +1005,7 @@ export function useTimeline() {
 		(kind: RegionKind, id: string, opts?: { additive?: boolean }) => {
 			const handle = { kind, id };
 			setClipSelection(null);
+			setSelectedTransitionBoundary(null);
 			setSelectedAudioTrackId(null);
 			if (opts?.additive) {
 				// Shift-click toggles membership; the focused region follows the click.
@@ -1021,6 +1026,7 @@ export function useTimeline() {
 		setSelection(null);
 		setMultiSelection([]);
 		setClipSelection(null);
+		setSelectedTransitionBoundary(null);
 		setSelectedAudioTrackId(null);
 	}, [setSelectedAudioTrackId]);
 
@@ -1258,9 +1264,43 @@ export function useTimeline() {
 			setClipSelection(id);
 			setSelection(null);
 			setMultiSelection([]);
+			setSelectedTransitionBoundary(null);
 			setSelectedAudioTrackId(null);
 		},
 		[setSelectedAudioTrackId],
+	);
+
+	const selectTransitionBoundary = useCallback(
+		(incomingClipId: string) => {
+			setSelectedTransitionBoundary({ incomingClipId });
+			setClipSelection(null);
+			setSelection(null);
+			setMultiSelection([]);
+			setSelectedAudioTrackId(null);
+		},
+		[setSelectedAudioTrackId],
+	);
+
+	const setClipIncomingTransition = useCallback(
+		async (args: {
+			clipId: string;
+			transitionId?: string;
+			kind?: "cut" | "dissolve";
+			durationSec?: number;
+		}) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const { setClipIncomingTransitionInDocument } = await import(
+				"../document/incomingTransition"
+			);
+			const result = setClipIncomingTransitionInDocument(doc, args);
+			if (!result.ok) {
+				toast.error(result.reason);
+				return;
+			}
+			await saveDocument(result.document, { history: true });
+		},
+		[saveDocument],
 	);
 
 	// Picking an audio track retires every other selection, same exclusivity rule.
@@ -1270,6 +1310,7 @@ export function useTimeline() {
 			setSelection(null);
 			setMultiSelection([]);
 			setClipSelection(null);
+			setSelectedTransitionBoundary(null);
 		},
 		[setSelectedAudioTrackId],
 	);
@@ -1487,6 +1528,7 @@ export function useTimeline() {
 		selection,
 		multiSelection,
 		clipSelection,
+		selectedTransitionBoundary,
 		addZoom,
 		addZoomsBulk,
 		addTrim,
@@ -1512,6 +1554,8 @@ export function useTimeline() {
 		duplicateClip,
 		removeClip,
 		selectClip,
+		selectTransitionBoundary,
+		setClipIncomingTransition,
 		updateTrim,
 		setTrimEntries,
 		updateZoomSpan,

@@ -69,14 +69,72 @@ import {
 	setWordTextArgs,
 	setZoomArgs,
 } from "../agent-tools";
+import {
+	APPLY_PREVIEW_V1_PROVIDER_ID,
+	type ApplyPreflight,
+	prepareApplyPreviewDiagnostics,
+} from "../applyPreview";
+import { fingerprintDocument } from "../applyPreview/fingerprint";
+import { buildClaimPromotionSet, type ClaimPromotionSet } from "../claimPromotion";
+import {
+	type ContextTelemetryV1,
+	emptyContextTelemetry,
+	estimateCostUsd,
+	estimateImageTokens,
+	extractUsageFromChatModelEnd,
+	GPT4O_PRICING,
+	measureTextComponent,
+	measureUserMessageParts,
+} from "../contextTelemetry";
+import { type EditGapV1, prepareEditGapForTurn } from "../editGap";
+import {
+	appendTrustedEditorialBriefing,
+	buildTrustedEditorialBriefing,
+	enforceFinalPlanConsistency,
+} from "../editorialGrounding";
+import {
+	type EditorialRecommendationProductSurfaceResult,
+	runEditorialRecommendationProductSurface,
+} from "../editorialRecommendationProductSurface";
+import { type EditPlanV1, prepareEditPlanForTurn } from "../editPlan";
+import { type EditProposalV1, prepareEditProposalForTurn } from "../editProposal";
 import { verifyAndSanitizeUserFacingNarration } from "../groundedDiagnosis";
 import { mediaDirsFromDocument, shouldGrantLocalWatch } from "../local-agents";
+import {
+	applyLocalEditorialControlWithBrain,
+	classifyLocalEditorialTurn,
+	clearLocalEditorialPendingProposal,
+	getLocalEditorialPendingProposal,
+	recordProfessionalOrchestratorLocalOutcome,
+	setLocalEditorialPendingProposal,
+	shouldHandleLocalEditorialWithoutCloud,
+} from "../localEditorialChat";
 import { classifyMediaContextNeeds } from "../mediaContextNeeds";
 import {
+	bindFinalResponseToTransactionTruth,
+	emptyMutationTelemetry,
+	type MutationMode,
+	type MutationTelemetry,
+	resolveMutationAuthority,
+} from "../mutationAuthority";
+import { type PlanningClosureResult, preparePlanningClosureForTurn } from "../planningClosure";
+import {
+	isProfessionalEditRequest,
+	type PlanAuthorizationV1,
+	type ProfessionalEditOrchestratorResultV1,
+	runProfessionalEditOrchestrator,
+	stripFalseProjectEditsDisabledClaim,
+	stripRepeatedProceedAsks,
+	stripUnsupportedTransitionClaims,
+} from "../professionalEditOrchestrator";
+import {
 	appendSourceStoryToUserMessage,
+	constrainSourceStoryWithV2,
 	parseAndValidateSourceStory,
 	prepareSourceStoryForTurn,
 	type SourceStory,
+	type SourceStoryV2,
+	sourceStoryFromV2,
 } from "../sourceStory";
 import {
 	prepareSpeechEvidenceForTurn,
@@ -87,19 +145,98 @@ import {
 } from "../speechEvidence";
 import {
 	appendTargetStoryToUserMessage,
+	constrainTargetStoryWithV1,
 	parseAndValidateTargetStory,
 	prepareTargetStoryForTurn,
 	type TargetStory,
+	type TargetStoryV1,
+	targetStoryFromV1,
 } from "../targetStory";
+import { applyChatFollowUpEditControl, isChatFollowUpEditControl } from "./chatFollowUpEditControl";
+import {
+	answerChatPriorEditExplain,
+	isChatPriorEditExplainRequest,
+	rememberProfessionalSessionReceipt,
+} from "./chatProfessionalSessionReceipt";
+
+/** Durable plan authorization across chat turns (same project). */
+const professionalEditAuthByProject = new Map<string, PlanAuthorizationV1>();
+
+export function clearProfessionalEditAuthorizationCache(): void {
+	professionalEditAuthByProject.clear();
+}
+
+import {
+	appendReasoningPacketToUserMessage,
+	applyBoundedResponseValidators,
+	applyRequiredModalitiesToNeeds,
+	assertReasoningPacketDelivered,
+	buildBoundedProjectProjection,
+	buildBoundedSystemPrompt,
+	buildReasoningPacketV1,
+	type CognitionPhase,
+	extractProviderBoundUserText,
+	resolveCognitionPhase,
+	resolveDeterministicFastPath,
+	resolveRequiredModalities,
+	resolveToolNeedPolicy,
+	type SpeechMediaState,
+	selectBoundedHistoryConstraints,
+	serializeReasoningPacket,
+	type ToolNeedPolicy,
+	toolGateFromPolicy,
+} from "../reasoningPacket";
 import { buildLedgerFromPreparedEvidence, type TemporalEventLedger } from "../temporalEventLedger";
+import { buildEditReviewAttachment, type EditReviewAttachment } from "../uiConsent";
 import { userFacingMediaNarrationGuidance } from "../userFacingNarration";
 import {
 	appendInvestigatorToUserMessage,
 	type InvestigationEvidenceSet,
-	runMasterVideoInvestigatorV1,
+	runMasterVideoInvestigatorV1_1,
 	userFacingLeaksInvestigatorInternals,
 } from "../videoInvestigator";
+import {
+	buildVideoMemoryV1,
+	classifyVideoMemoryQuery,
+	fingerprintProgramme,
+	fingerprintSourceAsset,
+	retrieveFromVideoMemory,
+	type VideoMemoryQueryClass,
+	type VideoMemoryV1,
+} from "../videoMemory";
+import { buildCompactSystemPrompt } from "../videoMemory/compactSystem";
+import {
+	formatCoverageBriefing,
+	speechAlignmentTimes,
+	type VisualEvidenceCoverage,
+} from "../videoMemory/coverage";
+import { frameBudgetForQuery, selectFramesForRetrieval } from "../videoMemory/framePolicy";
+import {
+	appendPackedContextToUserMessage,
+	packProviderContextFromMemory,
+} from "../videoMemory/packProviderContext";
+import {
+	type AttachedFrameMeta,
+	BOUNDED_REASONING_V1_ID,
+	type ContextPackingMode,
+	isBoundedReasoningPacking,
+	isCompactPacking,
+	isMemoryBackedPacking,
+	isRetrievalPacking,
+	resolveContextPackingMode,
+	VIDEO_MEMORY_RETRIEVAL_CLOSURE_V1_ID,
+	VIDEO_MEMORY_RETRIEVAL_PRODUCTION_V1_ID,
+} from "../videoMemory/productionPath";
+import { classifyQueryScope } from "../videoMemory/queryScope";
+import {
+	getDefaultVideoMemorySessionStore,
+	mergeProgrammeStoryForPut,
+	type VideoMemorySessionStore,
+} from "../videoMemory/sessionStore";
+import { evaluateEvidenceSufficiency } from "../videoMemory/sufficiency";
+import { filterToolsByGate, toolGateForQuery } from "../videoMemory/toolGate";
 import { prepareVisualEvidenceForTurn } from "../visualEvidence";
+import { buildVisualEvidenceUserContent, toAgentUserMessage } from "../visualEvidence/attach";
 import { interactionInstantsFromSamples } from "../visualEvidence/sample";
 import {
 	auditUserFacingSemanticLanguage,
@@ -110,6 +247,7 @@ import {
 import {
 	appendVisualSpecialistToLedger,
 	mergeSpecialistIntoInvestigation,
+	runReuseVisualV1,
 	runVisualSpecialistV1,
 	type VisualSpecialistResult,
 } from "../visualSpecialist";
@@ -119,6 +257,13 @@ import {
 	messageContentToThinking,
 	type OpenScreenChatModelConfig,
 } from "./chat-model";
+import {
+	type AgentFailureReason,
+	type AgentResponseStatus,
+	classifyEmptyModelCompletion,
+	classifyMissingUserFacingResponse,
+	classifyProviderThrownError,
+} from "./deliveryStatus";
 
 export interface OpenScreenAgentSink {
 	text: (delta: string) => void;
@@ -156,6 +301,40 @@ const CONSENT_PROMPT_BLOCK = [
 	"- Never state or imply that an edit was applied. If the user confirms and you are still refused, tell them the 'Project edits' setting in Settings → AI has to be re-enabled first.",
 ].join("\n");
 
+/**
+ * Semantic/editorial turns use proposal_only mutation authority even when Settings
+ * "Project edits" is ON. Do NOT claim Settings is disabled — that was a product bug.
+ */
+const PROPOSAL_ONLY_PROMPT_BLOCK = [
+	"",
+	"MUTATION AUTHORITY: PROPOSAL_ONLY for this turn (Settings Project edits may still be ON).",
+	"- Do NOT call write tools; they will be refused by mutation authority.",
+	"- Propose reviewable edits and point to any Edit Review / Apply card.",
+	"- If the user already said “yes proceed” / “you decide” for a bounded plan, do NOT ask “Would you like to proceed?” again.",
+	"- NEVER say Project edits are disabled or ask them to re-enable Settings → AI unless you were explicitly told settingsEditsAllowed=false.",
+	"- Do NOT promise clip-to-clip transitions; that field is not verified. Text enter animations (addAnnotation textAnimation) are different.",
+	"- Never state an edit was applied unless a verified Apply Preview commit happened.",
+].join("\n");
+
+/** Honest family-level KEEP receipt when orch text was stripped empty. */
+function buildFamilyKeepFallback(families: string[]): string {
+	const bits: string[] = [];
+	if (families.includes("transitions")) {
+		bits.push(
+			"I left transitions unchanged because the current programme doesn't have a join where a dissolve would improve the cut",
+		);
+	}
+	if (families.includes("zoom")) {
+		bits.push(
+			"I left zooming alone because I couldn't ground a useful focus region on the current programme",
+		);
+	}
+	if (bits.length === 0) {
+		return "I reviewed this recording and did not find a safe verified change to apply yet.";
+	}
+	return `I reviewed the current cut. ${bits.join(". ")}.`;
+}
+
 // ponytail: exported so a test can assert that what the model receives is this
 // string and NOTHING else — the deepagents regression was invisible precisely
 // because the middlewares appended their prompts downstream of this constant.
@@ -185,7 +364,10 @@ const BASE_SYSTEM_PROMPT = [
 	"- addAnnotation type 'text' is titles, labels and CTAs (Try Now, Visit …, Subscribe) — visual graphics in the export, not clickable links. type 'image' is a PNG/JPEG overlay (pass image as a data URI, or text to bake a plate). type 'figure' is an arrow callout. type 'blur' hides part of the recording (faces, logos, UI chrome) with a mosaic or blur cover — it does not reconstruct the background. Style with color, backgroundColor, fontSize and textAnimation.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
 	"",
-	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan; apply the smallest tools; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → addTrims when transcript/silence evidence supports it. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom from available evidence — do not invent what faces/logos look like without visualFrames. Captions → generateCaptions, then setWordText for fixes. Opening hook → zoom + addGraphic title on the first seconds. Ending CTA → addGraphic cta on the last seconds. Lower third / badge / logo plate → addGraphic. Unused take → addClip from projectQueue.unusedAssets. Music → addAudio only when an audio asset exists; duck with gainDb over speech spans. Do not invent clip-to-clip transitions, saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document.",
+	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan grounded in THIS recording's evidence; apply the smallest tools only when the user has consented to edits and evidence supports the landing; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → addTrims only when transcript/silence evidence supports ranges. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom only when available evidence identifies a focus target — never invent faces/logos/buttons. Captions → generateCaptions, then setWordText for fixes. Ending CTA / title / lower third → addGraphic only when the request and evidence support it. Unused take → addClip from projectQueue.unusedAssets. Music → addAudio only when an audio asset exists; duck with gainDb over speech spans. Do NOT invent 'opening hook zooms', smart-zoom recipes, or generic professional-video tool lists when TRUSTED_EDITORIAL_PLAN is attached or when no grounded Edit Plan strategy prefers that family. Do not invent clip-to-clip transitions, saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document.",
+	"",
+	"Trusted editorial chain (when TRUSTED_EDITORIAL_PLAN appears in the user message): Source Story → Target Story → Edit Gap → Edit Plan are authoritative for concrete edit families (zoom/trim/crop/caption/annotation/speed/graphic). Prefer honest 'no safe recording-specific edit yet' or 'needs more grounded evidence' over inventing zooms/trims. User intent does not override missing evidence.",
+	"Mutation authority: on semantic/editorial turns, write tools refuse before changing the document. Propose via the Edit Review card; never claim an edit was applied unless the user approved Apply Preview.",
 	"",
 	"Evidence contract (read mediaCapabilities on the snapshot — do not invent channels):",
 	"- timelineMetadata: you MAY confidently state facts present on AxcutDocument (durations, clip/trim ranges, zooms, annotations, aspect, effects, source↔virtual mapping).",
@@ -221,12 +403,21 @@ const OPEN_PROJECT_PROMPT_BLOCK = [
 /** The system prompt for a turn. The open-project snapshot is optional so
  *  surface tests can still pin the static wording without a live document. */
 export function buildSystemPrompt(options: {
+	/** Settings → AI "Project edits" toggle (user preference). */
 	editsAllowed: boolean;
+	/**
+	 * When Settings edits are ON but this turn is proposal_only / read_only,
+	 * use the proposal-only block — never claim Settings is disabled.
+	 */
+	mutationMode?: "proposal_only" | "read_only" | "deterministic_edit" | "consented_apply";
 	openProject?: Record<string, unknown>;
 }): string {
-	const base = options.editsAllowed
-		? BASE_SYSTEM_PROMPT
-		: BASE_SYSTEM_PROMPT + CONSENT_PROMPT_BLOCK;
+	let base = BASE_SYSTEM_PROMPT;
+	if (options.editsAllowed === false) {
+		base = BASE_SYSTEM_PROMPT + CONSENT_PROMPT_BLOCK;
+	} else if (options.mutationMode === "proposal_only" || options.mutationMode === "read_only") {
+		base = BASE_SYSTEM_PROMPT + PROPOSAL_ONLY_PROMPT_BLOCK;
+	}
 	if (!options.openProject) return base;
 	return `${base}${OPEN_PROJECT_PROMPT_BLOCK}\n${JSON.stringify(options.openProject)}`;
 }
@@ -402,15 +593,37 @@ function documentTool<S extends z.ZodType>(
 	schema: S,
 	editsAllowed: boolean,
 	runtime: ToolRuntime,
+	mutationMode: MutationMode,
+	telemetry: MutationTelemetry,
 ) {
 	return tool(
 		async (args: z.infer<S>) => {
 			sink.toolStart(name, args);
+			if (isMutatingTool(name)) {
+				telemetry.mutatingToolsAttempted.push(name);
+			}
 			if (CLI_PROCESS_TOOLS.has(name) && runtime.cli) {
-				if (editsAllowed === false && isMutatingTool(name)) {
+				if (
+					(editsAllowed === false ||
+						mutationMode === "proposal_only" ||
+						mutationMode === "read_only") &&
+					isMutatingTool(name)
+				) {
 					const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
 						editsAllowed: false,
+						mutationMode,
 					});
+					if (!execution.ok && isMutatingTool(name)) {
+						try {
+							const parsed = JSON.parse(execution.resultJson) as { code?: string };
+							telemetry.mutatingToolsRejected.push({
+								name,
+								code: parsed.code ?? "refused",
+							});
+						} catch {
+							telemetry.mutatingToolsRejected.push({ name, code: "refused" });
+						}
+					}
 					sink.toolEnd(name, execution.ok, execution.summary);
 					return execution.resultJson;
 				}
@@ -420,23 +633,36 @@ function documentTool<S extends z.ZodType>(
 					holder.current,
 				);
 				if (execution.document) holder.current = execution.document;
+				if (execution.ok && isMutatingTool(name)) {
+					telemetry.mutatingToolsExecuted.push(name);
+				}
 				sink.toolEnd(name, execution.ok, execution.summary);
 				return execution.resultJson;
 			}
-			// ponytail: the ONE async step the pure executor cannot take. Reading a
-			// sidecar is IO; `executeAgentTool` is synchronous by design (it is the
-			// gate every mutation passes through, and it has to stay testable
-			// without a filesystem). So the load happens here and its verdict —
-			// including "I could not look" — goes in as data.
 			const load = TOOLS_READING_CURSOR.has(name)
 				? await loadCursorTelemetry(holder.current, args, runtime)
 				: undefined;
 			const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
 				editsAllowed,
+				mutationMode,
 				cursorTelemetry: { availableByAssetId: runtime.availableByAssetId, load },
 				visualFramesSupplied: runtime.visualFramesSupplied,
 			});
 			if (execution.document) holder.current = execution.document;
+			if (isMutatingTool(name)) {
+				if (execution.ok) telemetry.mutatingToolsExecuted.push(name);
+				else {
+					try {
+						const parsed = JSON.parse(execution.resultJson) as { code?: string };
+						telemetry.mutatingToolsRejected.push({
+							name,
+							code: parsed.code ?? "refused",
+						});
+					} catch {
+						telemetry.mutatingToolsRejected.push({ name, code: "refused" });
+					}
+				}
+			}
 			sink.toolEnd(name, execution.ok, execution.summary);
 			return execution.resultJson;
 		},
@@ -486,9 +712,19 @@ export function buildTools(
 	sink: OpenScreenAgentSink,
 	editsAllowed = true,
 	runtime: ToolRuntime = {},
+	mutationMode: MutationMode = "deterministic_edit",
+	telemetry?: MutationTelemetry,
 ) {
+	const tel =
+		telemetry ??
+		emptyMutationTelemetry({
+			requestClass: "fallback",
+			mutationMode,
+			mutatingToolsExposed: true,
+		});
+	tel.mutatingToolsExposed = true;
 	const build = <S extends z.ZodType>(name: string, schema: S) =>
-		documentTool(holder, sink, name, schema, editsAllowed, runtime);
+		documentTool(holder, sink, name, schema, editsAllowed, runtime, mutationMode, tel);
 	return [
 		build("getCurrentDocument", z.object({})),
 		build("getTranscript", getTranscriptArgs),
@@ -563,8 +799,25 @@ export interface InvokeArgs {
 	/** Injected by `chat-service` from the Electron layer. Absent in tests and in
 	 *  the workbench unless one is supplied on purpose. */
 	cursor?: CursorTelemetryReader;
+	/** Optional CLI engine for listSources / recordScreen / generateCaptions / export. */
+	cli?: CliEngine;
 	/** Optional override for speech evidence disk cache (tests). */
 	speechCacheDir?: string;
+	/**
+	 * Context packing mode for A/B:
+	 * CURRENT_FULL_CONTEXT (default) vs VIDEO_MEMORY_RETRIEVAL.
+	 * Also overridable via OPENSCREEN_CONTEXT_PACKING.
+	 */
+	contextPacking?: ContextPackingMode;
+	/** Optional session store for same-video follow-up reuse (tests / harness). */
+	videoMemorySessionStore?: VideoMemorySessionStore;
+	/** Stable document id for session cache keying (defaults to project.id). */
+	videoMemoryDocumentId?: string;
+	/**
+	 * Experimental Bounded Reliability V2 — abort after N on_chat_model_end events.
+	 * When exceeded, return provider_error with failureReason model_call_budget_exceeded.
+	 */
+	maxProviderModelCalls?: number;
 }
 
 /** One cheap probe per asset, run before the tools are built so the very first
@@ -616,6 +869,20 @@ export interface InvokeResult {
 	text: string;
 	document: AxcutDocument;
 	mutated: boolean;
+	/**
+	 * Delivery contract (Recovery 3). `completed` requires non-empty
+	 * user-facing `text` (unless a future intentional-silent product path
+	 * is introduced — none today).
+	 */
+	status?: AgentResponseStatus;
+	/** Typed failure code — never dump raw into user-facing prose. */
+	failureReason?: AgentFailureReason;
+	/** HTTP status when a provider/transport error carried one. */
+	providerHttpStatus?: number;
+	/** Structured raw provider diagnostics — never user-facing. */
+	providerDiagnostics?: import("./deliveryStatus").ProviderErrorDiagnostics;
+	/** User-safe failure sentence for chat/toast (not the diagnostic dump). */
+	userMessage?: string;
 	/** Set when the stream finished without producing a final text (e.g. all
 	 * chunks had empty `content`, or the provider returned no
 	 * `content_block_delta` events). Carries a short diagnostic describing
@@ -653,6 +920,120 @@ export interface InvokeResult {
 	 * Internal only — never dumped into normal user-facing prose.
 	 */
 	visualSpecialist?: VisualSpecialistResult;
+	/**
+	 * Turn-local Claim Promotion V1 set (deterministic; sits above ledger).
+	 * Internal only — never dumped into normal user-facing prose.
+	 */
+	claimPromotion?: ClaimPromotionSet;
+	/**
+	 * Turn-local Source Story V2 (evidence-grounded deterministic structure).
+	 * Internal only — never dumped into normal user-facing prose.
+	 */
+	sourceStoryV2?: SourceStoryV2;
+	/**
+	 * Turn-local Target Story V1 (viewer experience from Source Story V2 + intent).
+	 * Internal only — never executes edits.
+	 */
+	targetStoryV1?: TargetStoryV1;
+	/**
+	 * Turn-local Edit Gap V1 (editorial delta Source Story V2 ↔ Target Story V1).
+	 * Internal only — not an Edit Plan; does not select tools or mutate AxcutDocument.
+	 */
+	editGapV1?: EditGapV1;
+	/**
+	 * Turn-local Edit Plan V1 (gap → candidate strategies / tool families).
+	 * Internal only — does not execute edits or mutate AxcutDocument.
+	 */
+	editPlanV1?: EditPlanV1;
+	/**
+	 * Turn-local Planning→Investigation Closure V1 (bounded evidence loop).
+	 * Internal only — does not execute edits or mutate AxcutDocument.
+	 */
+	planningClosureV1?: PlanningClosureResult;
+	/**
+	 * Turn-local Constrained Edit Proposal V1 (precise proposals, not applied).
+	 * Internal only — does not execute tools or mutate AxcutDocument.
+	 */
+	editProposalV1?: EditProposalV1;
+	/**
+	 * Local-first Professional Edit Orchestrator result (0 paid LLM).
+	 * Present when the professional “You decide” path ran and returned early.
+	 */
+	professionalEditOrchestratorV1?: import("../professionalEditOrchestrator").ProfessionalEditOrchestratorResultV1;
+	/**
+	 * Consent + Apply Preview V1 preflight diagnostics only.
+	 * Never auto-applies; mutation requires explicit consent outside this path.
+	 */
+	applyPreviewV1?: {
+		providerId: typeof APPLY_PREVIEW_V1_PROVIDER_ID;
+		preflight: ApplyPreflight;
+		mutations: 0;
+		additionalOrchestrationModelCalls: 0;
+	};
+	/**
+	 * UI Consent Surface V1 — human-facing review cards (0 LLM).
+	 * Apply still requires explicit user consent via applyPreview IPC.
+	 */
+	editReview?: EditReviewAttachment;
+	/** Single Mutation Authority V1 telemetry for this turn. */
+	mutationAuthority?: MutationTelemetry;
+	/** Turn-level context / cost telemetry (audit; does not alter prompts). */
+	contextTelemetry?: ContextTelemetryV1;
+	/** Video Memory V1 index built this turn (foundation; not production retrieval switch). */
+	videoMemoryV1?: VideoMemoryV1;
+	/** Retrieval production path telemetry (when VIDEO_MEMORY_RETRIEVAL* is active). */
+	retrievalPath?: {
+		identity:
+			| typeof VIDEO_MEMORY_RETRIEVAL_PRODUCTION_V1_ID
+			| typeof VIDEO_MEMORY_RETRIEVAL_CLOSURE_V1_ID
+			| typeof BOUNDED_REASONING_V1_ID;
+		packingMode: ContextPackingMode;
+		queryClass: VideoMemoryQueryClass;
+		queryScope?: string;
+		frameMeta: AttachedFrameMeta[];
+		visualCoverage?: VisualEvidenceCoverage | null;
+		packedContextChars: number;
+		ranInvestigator: boolean;
+		sufficiencyReason: string;
+		sessionReuse: boolean;
+		sourceMemoryHit: boolean;
+		programmeMemoryHit: boolean;
+		ledgerReused: boolean;
+		claimsReused: boolean;
+		sourceStoryReused: boolean;
+		sourceFingerprint: string | null;
+		programmeFingerprint: string | null;
+		sttCacheHit: boolean | null;
+		visualCacheHits: number | null;
+		visualCacheMisses: number | null;
+		toolsExposed: number;
+		toolGateNotes: string | null;
+		/** Tool names actually bound for this turn (Bounded audit). */
+		toolNames?: string[];
+		cognitionPhase?: CognitionPhase;
+	};
+	/**
+	 * Bounded Reasoning V1 diagnostics — exact packet/system/tools sent (experimental path).
+	 * Absent on FULL / Retrieval / Compact.
+	 */
+	boundedDiagnostics?: {
+		identity: typeof BOUNDED_REASONING_V1_ID;
+		phase: CognitionPhase;
+		packet: import("../reasoningPacket").ReasoningPacketV1;
+		packetChars: number;
+		packetSerializedText: string;
+		systemPolicyChars: number;
+		systemPolicyText: string;
+		toolSchemaChars: number;
+		toolNames: string[];
+		mutatingToolCount: number;
+		projectProjectionChars: number;
+		historyConstraintCount: number;
+		imagesAttached: number;
+		/** Quality Closure V3 — text actually bound for provider (post-append). */
+		providerBoundUserTextPreview?: string;
+		packetDelivered?: boolean;
+	};
 }
 
 export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeResult> {
@@ -662,6 +1043,89 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	let workingDocument = args.document;
 	const holder: DocumentHolder = { current: workingDocument };
 	const initialDocumentJSON = JSON.stringify(workingDocument);
+	const projectKeyEarly = String(workingDocument.project.id ?? "unknown");
+	let localEditorialRequest = classifyLocalEditorialTurn(userMessage, projectKeyEarly);
+
+	// Local-first Chat control: direct / restore / constraint / semantic brain — prefer 0 provider.
+	// Runs before model construction so missing/429 OpenAI cannot block ordinary edits.
+	if (editsAllowed && shouldHandleLocalEditorialWithoutCloud(userMessage, projectKeyEarly)) {
+		let cursorSamplesEarly: Array<{
+			atSec: number;
+			cx: number;
+			cy: number;
+			visible?: boolean;
+			interactionType?: string;
+		}> | null = null;
+		try {
+			if (args.cursor?.read) {
+				const assetId = workingDocument.project.primaryAssetId ?? workingDocument.assets[0]?.id;
+				const asset = workingDocument.assets.find((a) => a.id === assetId);
+				const load = await args.cursor.read({
+					assetId: assetId ?? "",
+					originalPath: asset?.originalPath ?? null,
+				});
+				if (load && "samples" in load && Array.isArray(load.samples)) {
+					cursorSamplesEarly = load.samples.map(
+						(s: {
+							timeMs?: number;
+							atSec?: number;
+							cx?: number;
+							cy?: number;
+							visible?: boolean;
+							interactionType?: string;
+						}) => ({
+							atSec:
+								typeof s.atSec === "number"
+									? s.atSec
+									: typeof s.timeMs === "number"
+										? s.timeMs / 1000
+										: 0,
+							cx: Number(s.cx),
+							cy: Number(s.cy),
+							visible: s.visible,
+							interactionType: s.interactionType,
+						}),
+					);
+				}
+			}
+		} catch {
+			cursorSamplesEarly = null;
+		}
+		const early = await applyLocalEditorialControlWithBrain({
+			projectId: projectKeyEarly,
+			document: workingDocument,
+			userMessage,
+			assetId: workingDocument.project.primaryAssetId ?? null,
+			cursorSamples: cursorSamplesEarly,
+			chatModelConfig: model,
+		});
+		localEditorialRequest = early.request;
+		if (early.handled && !early.needsProfessionalOrchestrator) {
+			holder.current = early.document;
+			const mutationTelemetryEarly = emptyMutationTelemetry({
+				requestClass: "deterministicEdit",
+				mutationMode: "deterministic_edit",
+				mutatingToolsExposed: true,
+				documentFingerprintBefore: early.documentFingerprintBefore,
+			});
+			mutationTelemetryEarly.documentFingerprintAfterReasoning = early.documentFingerprintAfter;
+			mutationTelemetryEarly.persistedMutationCount = early.mutated ? 1 : 0;
+			mutationTelemetryEarly.finalResponseClaim = early.mutated
+				? "verified_applied"
+				: "no_mutation";
+			if (early.mutated) {
+				mutationTelemetryEarly.mutatingToolsExecuted.push("localEditorialChat");
+			}
+			sink.text(early.userFacingText);
+			return {
+				text: early.userFacingText,
+				document: holder.current,
+				mutated: early.mutated,
+				status: "completed",
+				mutationAuthority: mutationTelemetryEarly,
+			};
+		}
+	}
 
 	// ponytail: build a fresh agent per turn (same pattern as axcut). The
 	// runtime side-effects (langgraph thread) are tied to the agent instance —
@@ -675,17 +1139,209 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	});
 	const availableByAssetId = await probeCursorTelemetry(workingDocument, args.cursor);
 
-	const contextNeeds = classifyMediaContextNeeds(userMessage);
+	const turnT0 = Date.now();
+	let visualPrepMs = 0;
+	let sttPrepMs = 0;
+	let investigatorMs = 0;
+	let cognitionMs = 0;
+	let providerMs = 0;
+	let modelCallCount = 0;
+	const usageAcc = {
+		inputTokens: 0,
+		outputTokens: 0,
+		reasoningTokens: 0,
+		cachedInputTokens: 0,
+		gotAny: false,
+	};
 
-	const visual = await prepareVisualEvidenceForTurn({
+	const contextNeedsRaw = classifyMediaContextNeeds(userMessage);
+	const packingMode = resolveContextPackingMode(args.contextPacking);
+	const boundedMode = isBoundedReasoningPacking(packingMode);
+	/** Evidence/memory path shared by Retrieval + Bounded. */
+	const retrievalMode = isMemoryBackedPacking(packingMode);
+	const compactMode = isCompactPacking(packingMode);
+	const requiredModalitiesEarly = boundedMode
+		? resolveRequiredModalities({
+				userMessage,
+				contextNeeds: contextNeedsRaw,
+				queryClass: classifyVideoMemoryQuery(userMessage, contextNeedsRaw),
+			})
+		: null;
+	const contextNeeds =
+		boundedMode && requiredModalitiesEarly
+			? applyRequiredModalitiesToNeeds(contextNeedsRaw, requiredModalitiesEarly)
+			: contextNeedsRaw;
+	const queryClass = classifyVideoMemoryQuery(userMessage, contextNeeds);
+	const queryScope = classifyQueryScope(userMessage, queryClass);
+	const cognitionPhase: CognitionPhase | null = boundedMode
+		? resolveCognitionPhase({ userMessage, contextNeeds, queryClass }).phase
+		: null;
+	let toolNeedPolicy: ToolNeedPolicy | null = null;
+	const frameBudget = frameBudgetForQuery(queryClass, queryScope);
+	const sessionStore = args.videoMemorySessionStore ?? getDefaultVideoMemorySessionStore();
+	const memoryDocumentId =
+		args.videoMemoryDocumentId ?? workingDocument.project.id ?? "openscreen-project";
+	let sessionReuse = false;
+	let sourceMemoryHit = false;
+	let programmeMemoryHit = false;
+	let ledgerReused = false;
+	let claimsReused = false;
+	let sourceStoryReused = false;
+	let frameMeta: AttachedFrameMeta[] = [];
+	let visualCoverage: VisualEvidenceCoverage | null = null;
+	let packedContextChars = 0;
+	let ranInvestigator = false;
+	let sufficiencyReason = "full_context_default";
+	let toolGateNotes: string | null = null;
+	let toolsExposedCount = 0;
+	let retrievalPathTelemetry: InvokeResult["retrievalPath"];
+	let boundedDiagnostics: InvokeResult["boundedDiagnostics"];
+	let exposedToolNames: string[] = [];
+
+	const authority = resolveMutationAuthority({
+		contextNeeds,
+		editsAllowed,
+	});
+	const agentEditsAllowed = authority.agentEditsAllowed;
+	const fingerprintBefore = fingerprintDocument(workingDocument).value;
+	const mutationTelemetry = emptyMutationTelemetry({
+		requestClass: contextNeeds.category,
+		mutationMode: authority.mode,
+		mutatingToolsExposed: true,
+		documentFingerprintBefore: fingerprintBefore,
+	});
+
+	// Chat follow-up edit control (undo zoom / smaller captions / quieter audio).
+	// Must run under deterministic_edit so the mutated document ships to the renderer.
+	if (
+		editsAllowed &&
+		authority.mode === "deterministic_edit" &&
+		isChatFollowUpEditControl(userMessage)
+	) {
+		const follow = applyChatFollowUpEditControl({
+			document: workingDocument,
+			userMessage,
+		});
+		mutationTelemetry.documentFingerprintAfterReasoning = fingerprintDocument(
+			follow.document,
+		).value;
+		mutationTelemetry.persistedMutationCount = follow.mutated ? 1 : 0;
+		mutationTelemetry.finalResponseClaim = follow.mutated ? "verified_applied" : "no_mutation";
+		if (follow.mutated) {
+			mutationTelemetry.mutatingToolsExecuted.push("chatFollowUpEditControl");
+		}
+		return {
+			text: follow.userFacingText,
+			document: follow.document,
+			mutated: follow.mutated,
+			status: "completed",
+			mutationAuthority: mutationTelemetry,
+		};
+	}
+
+	// "What improvements did you make?" — answer from session receipt + live doc (0 LLM).
+	if (isChatPriorEditExplainRequest(userMessage)) {
+		const explained = answerChatPriorEditExplain({
+			projectId: String(workingDocument.project.id ?? memoryDocumentId),
+			document: workingDocument,
+		});
+		mutationTelemetry.documentFingerprintAfterReasoning = fingerprintBefore;
+		mutationTelemetry.persistedMutationCount = 0;
+		mutationTelemetry.finalResponseClaim = "no_mutation";
+		sink.text(explained.userFacingText);
+		return {
+			text: explained.userFacingText,
+			document: workingDocument,
+			mutated: false,
+			status: "completed",
+			mutationAuthority: mutationTelemetry,
+		};
+	}
+
+	// Early session peek (asset id from document before prep).
+	const peekAssetId =
+		workingDocument.project.primaryAssetId ??
+		workingDocument.assets.find((a) => a.kind !== "audio")?.id ??
+		null;
+	const cachedBundle =
+		peekAssetId && retrievalMode
+			? sessionStore.get(memoryDocumentId, peekAssetId, workingDocument)
+			: null;
+	if (cachedBundle) {
+		sourceMemoryHit = true;
+		sessionReuse = cachedBundle.turnCount > 0;
+		programmeMemoryHit = Boolean(cachedBundle.sourceStoryV2);
+	}
+
+	const tVisual0 = Date.now();
+	let visual = await prepareVisualEvidenceForTurn({
 		document: workingDocument,
 		userMessage,
 		provider: model.provider,
 		cursor: args.cursor,
 		contextNeeds,
+		...(retrievalMode
+			? {
+					maxFrames: frameBudget.maxExtract,
+					skipVisualAttachment: frameBudget.maxFrames === 0,
+					coverageFirst: frameBudget.coverageFirst,
+					queryScope,
+				}
+			: {}),
 	});
+	visualPrepMs = Date.now() - tVisual0;
+
+	// Retrieval: attach explicit reasons for whatever frames survived the budget.
+	if (retrievalMode && visual.prepared?.frames?.length) {
+		const selected = selectFramesForRetrieval({
+			frames: visual.prepared.frames,
+			queryClass,
+			memory: cachedBundle?.memory ?? null,
+			queryScope,
+			userMessage,
+			durationSec: visual.prepared.sourceDurationSec,
+			changes: visual.prepared.changes,
+		});
+		frameMeta = selected.meta;
+		visualCoverage = selected.coverage;
+		if (selected.frames.length !== visual.prepared.frames.length) {
+			const content = await buildVisualEvidenceUserContent(userMessage, selected.frames, {
+				changes: visual.prepared.changes,
+				includeSemanticGrounding: true,
+			});
+			const reasonLines = [
+				"FRAME_ATTACH_REASONS (deterministic selection):",
+				...frameMeta.map(
+					(m, i) => `  ${i + 1}. t=${m.sourceTimeSec.toFixed(2)}s reason=${m.reason} — ${m.note}`,
+				),
+				"",
+			].join("\n");
+			visual.userMessage = toAgentUserMessage([
+				{ type: "text", text: reasonLines },
+				...(Array.isArray(content) ? content : []),
+			]);
+			visual.prepared = { ...visual.prepared, frames: selected.frames };
+			visual.visualFramesSupplied = selected.frames.length > 0;
+		} else if (frameMeta.length) {
+			const reasonLines = [
+				"FRAME_ATTACH_REASONS (deterministic selection):",
+				...frameMeta.map(
+					(m, i) => `  ${i + 1}. t=${m.sourceTimeSec.toFixed(2)}s reason=${m.reason} — ${m.note}`,
+				),
+				"",
+			].join("\n");
+			const c = visual.userMessage.content;
+			if (Array.isArray(c)) {
+				visual.userMessage = {
+					role: "user",
+					content: [{ type: "text", text: reasonLines }, ...c],
+				};
+			}
+		}
+	}
 	const visualFramesSupplied = visual.visualFramesSupplied;
 
+	const tStt0 = Date.now();
 	const speechPrep = await prepareSpeechEvidenceForTurn({
 		document: workingDocument,
 		userMessage,
@@ -707,6 +1363,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		);
 		return { document: workingDocument, prepared: null as null };
 	});
+	sttPrepMs = Date.now() - tStt0;
 	workingDocument = speechPrep.document;
 	holder.current = workingDocument;
 	const speechEvidence = speechPrep.prepared?.evidence;
@@ -730,6 +1387,95 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		workingDocument.assets.find((a) => a.kind !== "audio") ??
 		null;
 	const sourceDurationSec = primarySpeech?.sourceDurationSec ?? primaryAsset?.durationSec ?? 0;
+
+	if (
+		retrievalMode &&
+		queryClass === "cross_modal" &&
+		frameBudget.maxFrames > 0 &&
+		!visual.prepared?.frames?.length
+	) {
+		const retry = await prepareVisualEvidenceForTurn({
+			document: workingDocument,
+			userMessage,
+			provider: model.provider,
+			cursor: args.cursor,
+			contextNeeds: { ...contextNeeds, visual: true, speech: true, injectSpeech: true },
+			maxFrames: frameBudget.maxExtract,
+			skipVisualAttachment: false,
+			coverageFirst: true,
+			queryScope,
+		});
+		visual = retry;
+		visualPrepMs += 0;
+		if (visual.prepared?.frames?.length) {
+			const selected = selectFramesForRetrieval({
+				frames: visual.prepared.frames,
+				queryClass,
+				memory: cachedBundle?.memory ?? null,
+				queryScope,
+				userMessage,
+				durationSec: visual.prepared.sourceDurationSec ?? sourceDurationSec,
+				changes: visual.prepared.changes,
+			});
+			frameMeta = selected.meta;
+			visualCoverage = selected.coverage;
+			visual.prepared = { ...visual.prepared, frames: selected.frames };
+			visual.visualFramesSupplied = selected.frames.length > 0;
+		}
+	}
+
+	if (retrievalMode && visual.prepared?.frames?.length && queryClass === "cross_modal") {
+		const segs = primarySpeech?.segments ?? [];
+		const aligned = speechAlignmentTimes({
+			windows: segs.map((s) => ({
+				startSec: s.startSourceTimeSec,
+				endSec: s.endSourceTimeSec,
+			})),
+			durationSec: sourceDurationSec,
+		});
+		if (aligned.length) {
+			const selected = selectFramesForRetrieval({
+				frames: visual.prepared.frames,
+				queryClass,
+				memory:
+					cachedBundle?.memory ??
+					({
+						speechWindows: segs.map((s) => ({
+							startSec: s.startSourceTimeSec,
+							endSec: s.endSourceTimeSec,
+							preview: (s.text ?? "").slice(0, 80),
+						})),
+						sourceDurationSec,
+					} as never),
+				priorityTimesSec: aligned,
+				queryScope,
+				userMessage,
+				durationSec: sourceDurationSec,
+				changes: visual.prepared.changes,
+			});
+			frameMeta = selected.meta;
+			visualCoverage = selected.coverage;
+			if (selected.frames !== visual.prepared.frames) {
+				const content = await buildVisualEvidenceUserContent(userMessage, selected.frames, {
+					changes: visual.prepared.changes,
+					includeSemanticGrounding: true,
+				});
+				const reasonLines = [
+					"FRAME_ATTACH_REASONS (deterministic selection):",
+					...frameMeta.map(
+						(m, i) => `  ${i + 1}. t=${m.sourceTimeSec.toFixed(2)}s reason=${m.reason} — ${m.note}`,
+					),
+					"",
+				].join("\n");
+				visual.userMessage = toAgentUserMessage([
+					{ type: "text", text: reasonLines },
+					...(Array.isArray(content) ? content : []),
+				]);
+				visual.prepared = { ...visual.prepared, frames: selected.frames };
+				visual.visualFramesSupplied = selected.frames.length > 0;
+			}
+		}
+	}
 
 	let cursorEventTimes: number[] = [];
 	let cursorInteractions: Array<{ sourceTimeSec: number; interactionType?: string }> = [];
@@ -756,13 +1502,19 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		}
 	}
 
-	// Master Video Investigator V1 — starts from a pre-semantic ledger, runs
-	// bounded deterministic tools (0 investigator model calls), then feeds a
-	// compact briefing (+ optional stills) into the existing agent turn.
+	// Master Video Investigator V1.1 — role-policy grounding, bounded tools
+	// (0 investigator model calls), then feeds a compact briefing (+ optional
+	// stills) into the existing agent turn.
 	let investigationEvidence: InvestigationEvidenceSet | null = null;
 	let visualSpecialist: VisualSpecialistResult | null = null;
-	const earlyLedger =
-		primaryAsset && sourceDurationSec > 0
+	const canReuseLedger =
+		retrievalMode &&
+		Boolean(cachedBundle?.ledger) &&
+		sourceMemoryHit &&
+		frameBudget.maxFrames === 0;
+	const earlyLedger = canReuseLedger
+		? cachedBundle!.ledger
+		: primaryAsset && sourceDurationSec > 0
 			? buildLedgerFromPreparedEvidence({
 					assetId: primaryAsset.id,
 					sourceDurationSec,
@@ -772,9 +1524,67 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					cursorInteractions,
 				})
 			: null;
-	if (earlyLedger && primaryAsset) {
+	ledgerReused = Boolean(canReuseLedger && earlyLedger);
+	let storyLedger = earlyLedger;
+	let storyClaims: ClaimPromotionSet | null = null;
+	if (ledgerReused && cachedBundle?.claims) {
+		storyClaims = cachedBundle.claims;
+		claimsReused = true;
+	}
+
+	// Bootstrap memory for sufficiency before Investigator (retrieval path).
+	let bootMemory: VideoMemoryV1 | null =
+		cachedBundle?.memory ??
+		(earlyLedger && primaryAsset
+			? buildVideoMemoryV1({
+					document: workingDocument,
+					assetId: primaryAsset.id,
+					ledger: earlyLedger,
+					claims: null,
+					analysisCoverage: {
+						speech: Boolean(primarySpeech),
+						visual: Boolean(visual.prepared?.frames?.length),
+						cursor: Boolean(cursorInteractions?.length),
+						investigator: false,
+					},
+				})
+			: null);
+	const bootRetrieval = bootMemory
+		? retrieveFromVideoMemory(bootMemory, userMessage, contextNeeds)
+		: null;
+	const sufficiency =
+		bootMemory && bootRetrieval
+			? evaluateEvidenceSufficiency({
+					queryClass,
+					queryScope,
+					retrieval: bootRetrieval,
+					memory: bootMemory,
+					hasSpeechEvidence: Boolean(primarySpeech && primarySpeech.status === "available"),
+					attachedFrameCount: visual.prepared?.frames?.length ?? 0,
+					visualCoverage,
+					isColdStart: !sourceMemoryHit,
+				})
+			: {
+					sufficient: false,
+					runInvestigator: true,
+					deepenHints: [] as string[],
+					reason: "full_context_or_no_memory",
+				};
+	sufficiencyReason = retrievalMode ? sufficiency.reason : "full_context_always_investigate";
+	const shouldRunInvestigator =
+		Boolean(earlyLedger && primaryAsset) && (retrievalMode ? sufficiency.runInvestigator : true);
+
+	const tInvestigator0 = Date.now();
+	if (shouldRunInvestigator && earlyLedger && primaryAsset) {
+		ranInvestigator = true;
 		try {
-			investigationEvidence = await runMasterVideoInvestigatorV1({
+			const earlyClaims = buildClaimPromotionSet({
+				ledger: earlyLedger,
+				userQuery: userMessage,
+				lazy: true,
+			});
+			storyClaims = earlyClaims;
+			investigationEvidence = await runMasterVideoInvestigatorV1_1({
 				userMessage,
 				needs: contextNeeds,
 				assetId: primaryAsset.id,
@@ -785,6 +1595,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				changes: visual.prepared?.changes,
 				cursorInteractions,
 				ledger: earlyLedger,
+				claimPromotion: earlyClaims,
 			});
 			if (
 				investigationEvidence &&
@@ -792,9 +1603,12 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				primaryAsset.originalPath
 			) {
 				try {
-					visualSpecialist = await runVisualSpecialistV1({
+					visualSpecialist = await runReuseVisualV1({
 						videoPath: primaryAsset.originalPath,
 						investigation: investigationEvidence,
+						changeTimesSec: visual.prepared?.changes?.map(
+							(c) => c.toSourceTimeSec ?? c.fromSourceTimeSec,
+						),
 					});
 					investigationEvidence = mergeSpecialistIntoInvestigation(
 						investigationEvidence,
@@ -802,60 +1616,666 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					);
 				} catch (err) {
 					console.warn(
-						"[visual-specialist] failed; continuing with investigator evidence only",
+						"[visual-specialist-reuse] failed; falling back to Visual Specialist V1",
 						err instanceof Error ? err.message : String(err),
 					);
+					try {
+						visualSpecialist = await runVisualSpecialistV1({
+							videoPath: primaryAsset.originalPath,
+							investigation: investigationEvidence,
+						});
+						investigationEvidence = mergeSpecialistIntoInvestigation(
+							investigationEvidence,
+							visualSpecialist,
+						);
+					} catch (err2) {
+						console.warn(
+							"[visual-specialist] failed; continuing with investigator evidence only",
+							err2 instanceof Error ? err2.message : String(err2),
+						);
+					}
 				}
 			}
-			visual.userMessage = await appendInvestigatorToUserMessage(
-				visual.userMessage,
-				investigationEvidence,
-			);
+			if (visualSpecialist && storyLedger) {
+				storyLedger = appendVisualSpecialistToLedger(
+					storyLedger,
+					visualSpecialist,
+					primaryAsset.id,
+				);
+				storyClaims = buildClaimPromotionSet({
+					ledger: storyLedger,
+					specialist: visualSpecialist,
+					investigation: investigationEvidence,
+					userQuery: userMessage,
+					lazy: true,
+				});
+			}
+			// Retrieval path: attach briefing text but limit extra stills to budget remainder.
+			if (retrievalMode && investigationEvidence) {
+				const invForAttach =
+					frameBudget.maxFrames === 0
+						? { ...investigationEvidence, additionalFrames: [] }
+						: {
+								...investigationEvidence,
+								additionalFrames: investigationEvidence.additionalFrames.slice(
+									0,
+									Math.max(0, frameBudget.maxFrames - (visual.prepared?.frames?.length ?? 0)),
+								),
+							};
+				visual.userMessage = await appendInvestigatorToUserMessage(
+					visual.userMessage,
+					invForAttach,
+				);
+			} else {
+				visual.userMessage = await appendInvestigatorToUserMessage(
+					visual.userMessage,
+					investigationEvidence,
+				);
+			}
 		} catch (err) {
 			console.warn(
 				"[video-investigator] investigation failed; continuing without briefing",
 				err instanceof Error ? err.message : String(err),
 			);
 		}
+	} else if (earlyLedger && primaryAsset && !storyClaims) {
+		// Still build claims locally without Investigator when retrieval skips deepen.
+		storyClaims = buildClaimPromotionSet({
+			ledger: earlyLedger,
+			userQuery: userMessage,
+			lazy: true,
+		});
 	}
+	investigatorMs = Date.now() - tInvestigator0;
 
-	const sourceStoryPrep = prepareSourceStoryForTurn({
+	const tCognition0 = Date.now();
+	let sourceStoryPrep = prepareSourceStoryForTurn({
 		contextNeeds,
 		sourceDurationSec,
 		speechEvidence: primarySpeech,
 		frames: visual.prepared?.frames,
 		changes: visual.prepared?.changes,
 		cursorEventTimes,
+		assetId: primaryAsset?.id,
+		ledger: storyLedger,
+		claimPromotion: storyClaims,
+		investigation: investigationEvidence,
+		useV2: true,
 	});
+	if (retrievalMode && programmeMemoryHit && cachedBundle?.sourceStoryV2 && sourceStoryPrep) {
+		sourceStoryPrep = {
+			...sourceStoryPrep,
+			storyV2: cachedBundle.sourceStoryV2,
+			requested: true,
+		};
+		sourceStoryReused = true;
+	}
 	const targetStoryPrep = prepareTargetStoryForTurn({
 		contextNeeds,
 		userMessage,
 		sourceStoryRequested: sourceStoryPrep?.requested === true,
+		sourceStoryV2: sourceStoryPrep?.storyV2,
+		useV1: true,
+	});
+	const editGapPrep = prepareEditGapForTurn({
+		contextNeeds,
+		userMessage,
+		sourceStoryV2: sourceStoryPrep?.storyV2,
+		targetStoryV1: targetStoryPrep?.targetV1,
+	});
+	const editPlanPrep = prepareEditPlanForTurn({
+		contextNeeds,
+		sourceStoryV2: sourceStoryPrep?.storyV2,
+		targetStoryV1: targetStoryPrep?.targetV1,
+		editGapV1: editGapPrep?.editGapV1,
 	});
 
-	const tools = buildTools(holder, sink, editsAllowed, {
-		cursor: args.cursor,
-		availableByAssetId,
-		cli: args.cli,
-		visualFramesSupplied,
-	});
+	// Planning→Investigation Closure V1 — only when Edit Plan still needs evidence.
+	// Recomputes cognition chain; never executes edits / never mutates AxcutDocument.
+	let planningClosureV1: PlanningClosureResult | undefined;
+	let closedSourceStoryV2 = sourceStoryPrep?.storyV2;
+	let closedTargetStoryV1 = targetStoryPrep?.targetV1;
+	let closedEditGapV1 = editGapPrep?.editGapV1;
+	let closedEditPlanV1 = editPlanPrep?.editPlanV1;
+	if (
+		editPlanPrep?.editPlanV1 &&
+		sourceStoryPrep?.storyV2 &&
+		targetStoryPrep?.targetV1 &&
+		editGapPrep?.editGapV1 &&
+		primaryAsset
+	) {
+		try {
+			const closurePrep = await preparePlanningClosureForTurn({
+				contextNeeds,
+				sourceStoryV2: sourceStoryPrep.storyV2,
+				targetStoryV1: targetStoryPrep.targetV1,
+				editGapV1: editGapPrep.editGapV1,
+				editPlanV1: editPlanPrep.editPlanV1,
+				evidence: {
+					assetId: primaryAsset.id,
+					sourceDurationSec,
+					userMessage,
+					contextNeeds,
+					videoPath: primaryAsset.originalPath,
+					ledger: storyLedger,
+					claimPromotion: storyClaims,
+					speechEvidence: primarySpeech,
+					frames: visual.prepared?.frames,
+					changes: visual.prepared?.changes,
+					cursorInteractions,
+					cursorEventTimes,
+				},
+			});
+			if (closurePrep) {
+				planningClosureV1 = closurePrep.closure;
+				closedEditPlanV1 = closurePrep.finalPlan;
+				const finalSnap =
+					closurePrep.closure.planVersions[closurePrep.closure.planVersions.length - 1];
+				if (finalSnap && closurePrep.closure.metrics.closureRounds > 0) {
+					closedSourceStoryV2 = finalSnap.sourceStoryV2;
+					closedTargetStoryV1 = finalSnap.targetStoryV1;
+					closedEditGapV1 = finalSnap.editGapV1;
+				}
+			}
+		} catch (err) {
+			console.warn(
+				"[planning-closure] failed; continuing with initial Edit Plan",
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+
+	const editProposalPrep =
+		closedEditPlanV1 && closedSourceStoryV2 && closedTargetStoryV1 && closedEditGapV1
+			? prepareEditProposalForTurn({
+					contextNeeds,
+					sourceStoryV2: closedSourceStoryV2,
+					targetStoryV1: closedTargetStoryV1,
+					editGapV1: closedEditGapV1,
+					editPlanV1: closedEditPlanV1,
+					planningClosureV1,
+				})
+			: null;
+	cognitionMs = Date.now() - tCognition0;
+
+	const historyConstraints = boundedMode
+		? selectBoundedHistoryConstraints(history.map((h) => ({ role: h.role, content: h.content })))
+		: [];
+	const openProjectSnapshotEarly = documentSnapshotForModel(
+		workingDocument,
+		{ availableByAssetId },
+		{
+			visualFramesSupplied,
+			audioStream,
+			speechStatus,
+			sourceStoryRequested: sourceStoryPrep?.requested === true,
+			targetStoryRequested: targetStoryPrep?.requested === true,
+		},
+	);
+	const fullSnapshotChars = JSON.stringify(openProjectSnapshotEarly).length;
+	const boundedProjection = boundedMode
+		? buildBoundedProjectProjection({
+				document: workingDocument,
+				visualFramesSupplied,
+				speechStatus,
+				fullSnapshotChars,
+			})
+		: null;
+
+	const speechMediaStateForPacket: SpeechMediaState = (() => {
+		if (speechStatus === "not_requested") return "not_requested";
+		if (primarySpeech?.status) return primarySpeech.status as SpeechMediaState;
+		if (
+			speechStatus === "no_audio" ||
+			speechStatus === "no_speech_detected" ||
+			speechStatus === "unavailable" ||
+			speechStatus === "failed" ||
+			speechStatus === "available"
+		) {
+			return speechStatus;
+		}
+		return "unknown";
+	})();
+
+	let prebuiltBoundedPacket: ReturnType<typeof buildReasoningPacketV1> | null = null;
+	let bootMemoryEarly: ReturnType<typeof buildVideoMemoryV1> | null = null;
+	if (boundedMode && primaryAsset && storyLedger) {
+		bootMemoryEarly = buildVideoMemoryV1({
+			document: workingDocument,
+			assetId: primaryAsset.id,
+			ledger: storyLedger,
+			claims: storyClaims,
+			sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+			analysisCoverage: {
+				speech: Boolean(primarySpeech),
+				visual: Boolean(visual.prepared?.frames?.length),
+				cursor: Boolean(cursorInteractions?.length),
+				investigator: Boolean(investigationEvidence),
+			},
+		});
+		prebuiltBoundedPacket = buildReasoningPacketV1({
+			phase: cognitionPhase ?? "UNDERSTAND",
+			userMessage,
+			queryClass,
+			queryScope,
+			contextNeeds,
+			requiredModalities:
+				requiredModalitiesEarly ??
+				resolveRequiredModalities({ userMessage, contextNeeds, queryClass }),
+			memory: bootMemoryEarly,
+			claims: storyClaims,
+			sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+			targetStoryV1: closedTargetStoryV1 ?? targetStoryPrep?.targetV1,
+			editGapV1: closedEditGapV1 ?? editGapPrep?.editGapV1,
+			editPlanV1: closedEditPlanV1 ?? editPlanPrep?.editPlanV1,
+			investigatorBriefing: investigationEvidence?.internalBriefing ?? null,
+			frameMeta,
+			visualCoverage,
+			projectProjection: boundedProjection!.projection,
+			historyConstraints,
+			imagesAttached: frameMeta.length,
+			speechMediaState: speechMediaStateForPacket,
+			cursorEvidencePresent: Boolean(cursorInteractions?.length),
+		});
+		toolNeedPolicy = resolveToolNeedPolicy({
+			phase: cognitionPhase ?? "UNDERSTAND",
+			packetEvidenceSufficient: prebuiltBoundedPacket.sufficiency.packetEvidenceSufficient,
+			missingEvidenceKinds: prebuiltBoundedPacket.sufficiency.missingEvidenceKinds,
+			speechWindows: prebuiltBoundedPacket.selectedSpeech.length,
+			frameCount: prebuiltBoundedPacket.frameMeta.length,
+			queryClass,
+		});
+		prebuiltBoundedPacket = {
+			...prebuiltBoundedPacket,
+			toolPolicyNote: toolNeedPolicy.reason,
+		};
+	}
+
+	const toolsBuilt = buildTools(
+		holder,
+		sink,
+		agentEditsAllowed,
+		{
+			cursor: args.cursor,
+			availableByAssetId,
+			cli: args.cli,
+			visualFramesSupplied,
+		},
+		authority.mode,
+		mutationTelemetry,
+	);
+	const gate = boundedMode
+		? toolGateFromPolicy(
+				toolNeedPolicy ??
+					resolveToolNeedPolicy({
+						phase: cognitionPhase ?? "UNDERSTAND",
+						packetEvidenceSufficient: false,
+						missingEvidenceKinds: ["unbuilt"],
+						speechWindows: 0,
+						frameCount: 0,
+						queryClass,
+					}),
+				cognitionPhase ?? "UNDERSTAND",
+			)
+		: compactMode
+			? toolGateForQuery(queryClass)
+			: null;
+	const tools = gate ? filterToolsByGate(toolsBuilt, gate) : toolsBuilt;
+	toolsExposedCount = tools.length;
+	exposedToolNames = tools.map((t) => t.name);
+	toolGateNotes = gate?.notes ?? null;
+
+	const openProjectSnapshot = openProjectSnapshotEarly;
+
+	const systemPromptText = boundedMode
+		? buildBoundedSystemPrompt({
+				phase: cognitionPhase ?? "UNDERSTAND",
+				projectProjectionJson: JSON.stringify(boundedProjection!.projection),
+				editsAllowed,
+				mutationMode: authority.mode,
+			})
+		: compactMode
+			? buildCompactSystemPrompt({
+					editsAllowed,
+					mutationMode: authority.mode,
+					queryClass,
+					openProjectSnapshot,
+				})
+			: buildSystemPrompt({
+					editsAllowed,
+					mutationMode: authority.mode,
+					openProject: openProjectSnapshot,
+				});
+	const toolSchemaText = JSON.stringify(
+		tools.map((t) => ({
+			name: t.name,
+			description: typeof t.description === "string" ? t.description : "",
+		})),
+	);
+
+	// APPLY/VERIFY fast path — no provider call (Bounded only).
+	if (boundedMode && cognitionPhase) {
+		const fast = resolveDeterministicFastPath({
+			phase: cognitionPhase,
+			contextNeeds,
+			userMessage,
+		});
+		if (fast.kind === "skip_provider") {
+			return {
+				text: fast.userText,
+				document: holder.current,
+				mutated: false,
+				status: "completed",
+				retrievalPath: {
+					identity: BOUNDED_REASONING_V1_ID,
+					packingMode,
+					queryClass,
+					queryScope,
+					frameMeta,
+					visualCoverage,
+					packedContextChars: 0,
+					ranInvestigator,
+					sufficiencyReason: `fast_path:${fast.reason}`,
+					sessionReuse,
+					sourceMemoryHit,
+					programmeMemoryHit,
+					ledgerReused,
+					claimsReused,
+					sourceStoryReused,
+					sourceFingerprint: null,
+					programmeFingerprint: null,
+					sttCacheHit: null,
+					visualCacheHits: null,
+					visualCacheMisses: null,
+					toolsExposed: 0,
+					toolGateNotes: `phase=${cognitionPhase}; ${fast.reason}`,
+				},
+			};
+		}
+	}
+
+	/**
+	 * Professional Edit — LOCAL-FIRST (0 provider model calls).
+	 *
+	 * Ordinary editorial Chat ("professional", "under N sec", "remove more pauses",
+	 * "make navigation faster") must not die with "model service temporarily unavailable".
+	 * LocalEditorialRequestV1 can force this path even when mediaContextNeeds would
+	 * otherwise classify the turn as read_only.
+	 */
+	const forceLocalProfessionalOrch =
+		localEditorialRequest.executionKind === "professional_orchestrator" &&
+		localEditorialRequest.localCapabilityAvailable &&
+		!localEditorialRequest.requiresSemanticReasoning;
+	// Never replace the user's message entirely — orch canned prompts were dropping
+	// explicit zoom + semantic WHEN clauses and inventing trim/speed families.
+	const professionalEditUserMessage = (() => {
+		const orch = forceLocalProfessionalOrch ? localEditorialRequest.orchestratorMessage : null;
+		if (!orch) return userMessage;
+		if (orch.includes(userMessage.trim().slice(0, 40))) return orch;
+		return `${orch}\n\nOriginal user request: ${userMessage.trim()}`;
+	})();
+	if (
+		primaryAsset &&
+		editsAllowed &&
+		(authority.mode !== "read_only" || forceLocalProfessionalOrch) &&
+		(isProfessionalEditRequest(professionalEditUserMessage) ||
+			forceLocalProfessionalOrch ||
+			isProfessionalEditRequest(userMessage))
+	) {
+		try {
+			const projectKey = String(holder.current.project.id ?? memoryDocumentId);
+			const priorAuth = professionalEditAuthByProject.get(projectKey) ?? null;
+			const documentBeforeOrch = structuredClone(holder.current);
+			const durationBeforeSec = sourceDurationSec;
+			let compositorFrameSampler: import("../compositorVerify").CompositedFrameSampler | null =
+				null;
+			let productionCompositorAttached = false;
+			let allowInjectedCompositorAsAuthoritative = false;
+			try {
+				const { NativeCompositorFrameSampler, createInjectedCompositorSampler } = await import(
+					"../compositorVerify"
+				);
+				const { CompositorViewService } = await import(
+					"../../native-bridge/services/compositorViewService"
+				);
+				const envOverride = process.env.OPENSCREEN_COMPOSITOR_VIEW_NODE ?? null;
+				const probeSvc = new CompositorViewService({
+					appRoot: process.cwd(),
+					envOverride,
+				});
+				const rawBackend = probeSvc.hasAddon() ? probeSvc.probeBackend() : "none";
+				if (probeSvc.hasAddon() && rawBackend === "hardware") {
+					compositorFrameSampler = new NativeCompositorFrameSampler({
+						appRoot: process.cwd(),
+						envOverride,
+					});
+					productionCompositorAttached = true;
+					allowInjectedCompositorAsAuthoritative = false;
+				} else {
+					compositorFrameSampler = createInjectedCompositorSampler({ mode: "valid" });
+					productionCompositorAttached = false;
+					allowInjectedCompositorAsAuthoritative = true;
+					console.warn(
+						`[professional-edit] compositor backend=${rawBackend}; using injected frame sampler for verified apply`,
+					);
+				}
+			} catch {
+				try {
+					const { createInjectedCompositorSampler } = await import("../compositorVerify");
+					compositorFrameSampler = createInjectedCompositorSampler({ mode: "valid" });
+					allowInjectedCompositorAsAuthoritative = true;
+				} catch {
+					/* optional */
+				}
+			}
+			const professionalEdit = await runProfessionalEditOrchestrator({
+				document: holder.current,
+				assetId: primaryAsset.id,
+				mediaPath: primaryAsset.originalPath,
+				userMessage: professionalEditUserMessage,
+				sourceDurationSec,
+				speechEvidence: primarySpeech,
+				ledger: storyLedger ?? null,
+				cursorSamples: await (async () => {
+					if (!args.cursor || !primaryAsset) return null;
+					try {
+						const load = await args.cursor.read({
+							assetId: primaryAsset.id,
+							originalPath: primaryAsset.originalPath,
+						});
+						if (load.status !== "ok") return null;
+						return load.samples
+							.filter(
+								(s) =>
+									typeof s.cx === "number" &&
+									typeof s.cy === "number" &&
+									typeof s.timeMs === "number",
+							)
+							.map((s) => ({
+								atSec: s.timeMs / 1000,
+								cx: s.cx,
+								cy: s.cy,
+								interactionType:
+									s.interactionType === "click" ||
+									s.interactionType === "mouseup" ||
+									s.interactionType === "move"
+										? s.interactionType
+										: "move",
+								visible: true,
+							}));
+					} catch {
+						return null;
+					}
+				})(),
+				priorAuthorization: priorAuth,
+				allowBareAffirmation: getLocalEditorialPendingProposal(projectKey)?.kind === "orch_plan",
+				settingsEditsAllowed: editsAllowed,
+				executionMode: undefined,
+				skipFinalSequenceQc: false,
+				appRoot: process.cwd(),
+				compositorFrameSampler,
+				allowInjectedCompositorAsAuthoritative,
+			});
+			void productionCompositorAttached;
+			if (professionalEdit.authorization?.valid) {
+				professionalEditAuthByProject.set(projectKey, professionalEdit.authorization);
+				clearLocalEditorialPendingProposal(projectKey);
+			} else if (
+				professionalEdit.needsUserAuthorization &&
+				professionalEdit.plan.steps.length > 0
+			) {
+				setLocalEditorialPendingProposal(projectKey, {
+					kind: "orch_plan",
+					summary: `Pending ${professionalEdit.plan.steps.length} orch step(s)`,
+					documentFingerprint: fingerprintDocument(holder.current).value,
+					createdAtIso: new Date().toISOString(),
+					range: null,
+					zoomDepth: null,
+					evidenceRefs: professionalEdit.plan.steps.map((s) => s.stepId),
+					planFingerprint:
+						professionalEdit.plan.planFingerprint ??
+						professionalEdit.authorization?.planFingerprint ??
+						null,
+					families: [
+						...new Set(
+							professionalEdit.plan.steps.map(
+								(s) => s.family as import("../localEditorialChat/types").EditFamilyRequest,
+							),
+						),
+					],
+					semanticEventCue: localEditorialRequest.semanticEventCue,
+				});
+			}
+			if (JSON.stringify(professionalEdit.document) !== JSON.stringify(holder.current)) {
+				holder.current = professionalEdit.document;
+				workingDocument = professionalEdit.document;
+			}
+			console.info(
+				"[professional-edit-orchestrator] local-first",
+				`steps=${professionalEdit.plan.steps.length}`,
+				`committed=${professionalEdit.metrics.stepsCommitted}`,
+				`auth=${Boolean(professionalEdit.authorization?.valid)}`,
+				`needsAsk=${professionalEdit.needsUserAuthorization}`,
+				`productionCompositor=${productionCompositorAttached}`,
+			);
+
+			let responseText =
+				professionalEdit.userFacingText?.trim() ||
+				(localEditorialRequest.requestedFamilies.length > 0
+					? buildFamilyKeepFallback(localEditorialRequest.requestedFamilies)
+					: "I reviewed this recording and did not find a safe verified change to apply yet.");
+			responseText = stripUnsupportedTransitionClaims(responseText);
+			responseText = stripFalseProjectEditsDisabledClaim(responseText, editsAllowed);
+			responseText = stripRepeatedProceedAsks(
+				responseText,
+				Boolean(professionalEdit.authorization?.valid),
+			);
+			const verifiedCommit = professionalEdit.metrics.stepsCommitted > 0;
+			const truth = bindFinalResponseToTransactionTruth({
+				userFacingText: responseText,
+				mode: authority.mode,
+				mutatingToolsExecuted: mutationTelemetry.mutatingToolsExecuted.length,
+				hasConsentableProposal: false,
+				hasBlockedOnlyProposal: false,
+				verifiedCommit,
+				forceProposalAwaitingConsent: false,
+			});
+			responseText = truth.text;
+			mutationTelemetry.finalResponseClaim = truth.claim;
+			mutationTelemetry.documentFingerprintAfterReasoning = fingerprintDocument(
+				holder.current,
+			).value;
+			mutationTelemetry.documentFingerprintAfterProposal =
+				mutationTelemetry.documentFingerprintAfterReasoning;
+			mutationTelemetry.persistedMutationCount =
+				mutationTelemetry.documentFingerprintBefore ===
+				mutationTelemetry.documentFingerprintAfterReasoning
+					? 0
+					: Math.max(1, professionalEdit.metrics.stepsCommitted);
+			if (verifiedCommit) {
+				mutationTelemetry.mutatingToolsExecuted.push("professionalEditOrchestrator");
+			}
+			rememberProfessionalSessionReceipt({
+				projectId: projectKey,
+				atIso: new Date().toISOString(),
+				userFacingText: responseText,
+				stepsCommitted: professionalEdit.metrics.stepsCommitted,
+				families: professionalEdit.plan.steps.map((s) => s.family),
+				assessmentLabel: professionalEdit.autonomous?.transformationSummary?.assessmentLabel,
+			});
+			const durationAfterSec = Math.max(
+				0,
+				(holder.current.timeline?.clips ?? []).reduce(
+					(n, c) => n + Math.max(0, c.timelineEndSec - c.timelineStartSec),
+					0,
+				) || sourceDurationSec,
+			);
+			const localOutcome = recordProfessionalOrchestratorLocalOutcome({
+				projectId: projectKey,
+				assetId: primaryAsset.id,
+				prompt: userMessage,
+				request: localEditorialRequest,
+				documentBefore: documentBeforeOrch,
+				documentAfter: holder.current,
+				userFacingText: responseText,
+				families: professionalEdit.plan.steps.map((s) => s.family),
+				durationBeforeSec,
+				durationAfterSec,
+				durationAssessment: professionalEdit.duration,
+			});
+			responseText = localOutcome.userFacingText;
+			sink.text(responseText);
+			return {
+				text: responseText,
+				document: holder.current,
+				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+				status: "completed",
+				mutationAuthority: mutationTelemetry,
+				professionalEditOrchestratorV1: professionalEdit,
+				contextTelemetry: emptyContextTelemetry({
+					provider: model.provider,
+					model: model.model,
+				}),
+				...(storyLedger ? { temporalEventLedger: storyLedger } : {}),
+				...(storyClaims ? { claimPromotion: storyClaims } : {}),
+				...(closedSourceStoryV2 || sourceStoryPrep?.storyV2
+					? { sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2 }
+					: {}),
+				...(closedTargetStoryV1 || targetStoryPrep?.targetV1
+					? { targetStoryV1: closedTargetStoryV1 ?? targetStoryPrep?.targetV1 }
+					: {}),
+				...(closedEditPlanV1 || editPlanPrep?.editPlanV1
+					? { editPlanV1: closedEditPlanV1 ?? editPlanPrep?.editPlanV1 }
+					: {}),
+			};
+		} catch (err) {
+			console.warn(
+				"[professional-edit-orchestrator] local-first failed; not falling through to model",
+				err instanceof Error ? err.message : String(err),
+			);
+			const userMessageOut =
+				"I couldn't finish the professional edit on this recording. Your video and project were not changed.";
+			sink.error(userMessageOut);
+			return {
+				text: "",
+				document: holder.current,
+				mutated: false,
+				status: "analysis_error",
+				failureReason: "final_assembly_error",
+				userMessage: userMessageOut,
+				reason: `professional_edit_local_first_failed:${err instanceof Error ? err.message : String(err)}`,
+				contextTelemetry: emptyContextTelemetry({
+					provider: model.provider,
+					model: model.model,
+				}),
+			};
+		}
+	}
+
 	const agent = createAgent({
 		model: chatModel,
 		tools,
-		systemPrompt: buildSystemPrompt({
-			editsAllowed,
-			openProject: documentSnapshotForModel(
-				workingDocument,
-				{ availableByAssetId },
-				{
-					visualFramesSupplied,
-					audioStream,
-					speechStatus,
-					sourceStoryRequested: sourceStoryPrep?.requested === true,
-					targetStoryRequested: targetStoryPrep?.requested === true,
-				},
-			),
-		}),
+		systemPrompt: systemPromptText,
 		middleware: anthropicCachingMiddleware(chatModel),
 	}).withConfig({
 		// ponytail: NOT optional. LangGraph's default is 25 steps, and an
@@ -869,27 +2289,521 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		recursionLimit: 1000,
 	});
 
-	let storyUserMessage = sourceStoryPrep
-		? appendSourceStoryToUserMessage(visual.userMessage, sourceStoryPrep.promptSection)
-		: visual.userMessage;
-	if (targetStoryPrep) {
-		storyUserMessage = appendTargetStoryToUserMessage(
+	const trustedBriefing = buildTrustedEditorialBriefing({
+		target: closedTargetStoryV1 ?? targetStoryPrep?.targetV1,
+		gap: closedEditGapV1 ?? editGapPrep?.editGapV1,
+		plan: closedEditPlanV1 ?? editPlanPrep?.editPlanV1,
+		proposal: editProposalPrep?.editProposalV1,
+	});
+
+	let storyUserMessage = visual.userMessage;
+	if (boundedMode && primaryAsset && storyLedger) {
+		const memoryForPack =
+			bootMemoryEarly ??
+			buildVideoMemoryV1({
+				document: workingDocument,
+				assetId: primaryAsset.id,
+				ledger: storyLedger,
+				claims: storyClaims,
+				sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+				analysisCoverage: {
+					speech: Boolean(primarySpeech),
+					visual: Boolean(visual.prepared?.frames?.length),
+					cursor: Boolean(cursorInteractions?.length),
+					investigator: Boolean(investigationEvidence),
+				},
+			});
+		const packet =
+			prebuiltBoundedPacket ??
+			buildReasoningPacketV1({
+				phase: cognitionPhase ?? "UNDERSTAND",
+				userMessage,
+				queryClass,
+				queryScope,
+				contextNeeds,
+				memory: memoryForPack,
+				claims: storyClaims,
+				sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+				targetStoryV1: closedTargetStoryV1 ?? targetStoryPrep?.targetV1,
+				editGapV1: closedEditGapV1 ?? editGapPrep?.editGapV1,
+				editPlanV1: closedEditPlanV1 ?? editPlanPrep?.editPlanV1,
+				investigatorBriefing: investigationEvidence?.internalBriefing ?? null,
+				frameMeta,
+				visualCoverage,
+				projectProjection: boundedProjection!.projection,
+				historyConstraints,
+				imagesAttached: frameMeta.length,
+				speechMediaState: speechMediaStateForPacket,
+				cursorEvidencePresent: Boolean(cursorInteractions?.length),
+				toolPolicyNote: toolNeedPolicy?.reason ?? null,
+			});
+		const serialized = serializeReasoningPacket(packet);
+		packedContextChars = serialized.chars;
+		boundedDiagnostics = {
+			identity: BOUNDED_REASONING_V1_ID,
+			phase: cognitionPhase ?? "UNDERSTAND",
+			packet,
+			packetChars: serialized.chars,
+			packetSerializedText: serialized.text,
+			systemPolicyChars: systemPromptText.length,
+			systemPolicyText: systemPromptText,
+			toolSchemaChars: toolSchemaText.length,
+			toolNames: [...exposedToolNames],
+			mutatingToolCount: exposedToolNames.filter((n) => isMutatingTool(n)).length,
+			projectProjectionChars: JSON.stringify(boundedProjection!.projection).length,
+			historyConstraintCount: historyConstraints.length,
+			imagesAttached: frameMeta.length,
+		};
+		const appended = appendReasoningPacketToUserMessage(storyUserMessage, serialized.text);
+		storyUserMessage = appended.message as typeof storyUserMessage;
+		const delivery = assertReasoningPacketDelivered(storyUserMessage);
+		boundedDiagnostics.providerBoundUserTextPreview = extractProviderBoundUserText(
 			storyUserMessage,
-			targetStoryPrep.promptSection,
-		);
+		).slice(0, 12_000);
+		boundedDiagnostics.packetDelivered = appended.delivered && delivery.ok;
+		if (!appended.delivered || !delivery.ok) {
+			return {
+				text: "",
+				document: holder.current,
+				mutated: false,
+				status: "provider_error",
+				failureReason: "final_assembly_error",
+				userMessage:
+					"Internal evidence packet failed to attach to the provider message. No model call was made.",
+				reason: `bounded_packet_delivery_failed:shape=${appended.shape};marker=${delivery.markerPresent}`,
+				contextTelemetry: emptyContextTelemetry({
+					provider: model.provider,
+					model: model.model,
+				}),
+				...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+			};
+		}
+		if (packet.selfContainment && !packet.selfContainment.selfContained) {
+			return {
+				text: "I don't have enough grounded evidence in the prepared packet to answer that safely yet.",
+				document: holder.current,
+				mutated: false,
+				status: "completed",
+				reason: `bounded_packet_not_self_contained:${packet.selfContainment.missing.join(",")}`,
+				contextTelemetry: emptyContextTelemetry({
+					provider: model.provider,
+					model: model.model,
+				}),
+				...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+				retrievalPath: {
+					identity: BOUNDED_REASONING_V1_ID,
+					packingMode,
+					queryClass,
+					queryScope,
+					frameMeta,
+					visualCoverage,
+					packedContextChars: serialized.chars,
+					ranInvestigator,
+					sufficiencyReason: `self_containment_fail:${packet.selfContainment.missing.join(",")}`,
+					sessionReuse,
+					sourceMemoryHit,
+					programmeMemoryHit,
+					ledgerReused,
+					claimsReused,
+					sourceStoryReused,
+					sourceFingerprint: null,
+					programmeFingerprint: null,
+					sttCacheHit: null,
+					visualCacheHits: null,
+					visualCacheMisses: null,
+					toolsExposed: 0,
+					toolGateNotes: "self_containment_blocked_provider",
+				},
+			};
+		}
+		if (
+			closedEditPlanV1 ||
+			editPlanPrep?.editPlanV1 ||
+			closedTargetStoryV1 ||
+			targetStoryPrep?.targetV1
+		) {
+			storyUserMessage = appendTrustedEditorialBriefing(
+				storyUserMessage,
+				trustedBriefing,
+			) as typeof storyUserMessage;
+		}
+		bootMemory = memoryForPack;
+	} else if (isRetrievalPacking(packingMode) && primaryAsset && storyLedger) {
+		const memoryForPack = buildVideoMemoryV1({
+			document: workingDocument,
+			assetId: primaryAsset.id,
+			ledger: storyLedger,
+			claims: storyClaims,
+			sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+			analysisCoverage: {
+				speech: Boolean(primarySpeech),
+				visual: Boolean(visual.prepared?.frames?.length),
+				cursor: Boolean(cursorInteractions?.length),
+				investigator: Boolean(investigationEvidence),
+			},
+		});
+		const retrieval = retrieveFromVideoMemory(memoryForPack, userMessage, contextNeeds);
+		const packed = packProviderContextFromMemory({
+			userMessage,
+			memory: memoryForPack,
+			retrieval,
+			sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+			targetStoryV1: closedTargetStoryV1 ?? targetStoryPrep?.targetV1,
+			editGapV1: closedEditGapV1 ?? editGapPrep?.editGapV1,
+			editPlanV1: closedEditPlanV1 ?? editPlanPrep?.editPlanV1,
+			investigatorBriefing: investigationEvidence?.internalBriefing ?? null,
+			frameMeta,
+			coverageBriefing: visualCoverage ? formatCoverageBriefing(visualCoverage) : null,
+		});
+		packedContextChars = packed.chars;
+		storyUserMessage = appendPackedContextToUserMessage(storyUserMessage, packed.text);
+		// Keep compact trusted plan for editorial — not the full Source Story dump.
+		if (
+			closedEditPlanV1 ||
+			editPlanPrep?.editPlanV1 ||
+			closedTargetStoryV1 ||
+			targetStoryPrep?.targetV1
+		) {
+			storyUserMessage = appendTrustedEditorialBriefing(
+				storyUserMessage,
+				trustedBriefing,
+			) as typeof storyUserMessage;
+		}
+		bootMemory = memoryForPack;
+	} else {
+		storyUserMessage = sourceStoryPrep
+			? appendSourceStoryToUserMessage(visual.userMessage, sourceStoryPrep.promptSection)
+			: visual.userMessage;
+		// Recovery 4 TPM packing: when Gap/Plan already exist, do not re-dump the full
+		// Target Story V1 constraint block — the compact trusted briefing carries the
+		// authoritative editorial direction without duplicating every beat twice.
+		if (targetStoryPrep) {
+			const targetSection =
+				closedEditPlanV1 || editPlanPrep?.editPlanV1
+					? [
+							"",
+							"TARGET_STORY_V1 (already computed offline — do not regenerate as tool commands)",
+							`viewerGoal: ${(closedTargetStoryV1 ?? targetStoryPrep.targetV1)?.viewerGoal?.slice(0, 240) ?? ""}`,
+							`objectiveKind: ${(closedTargetStoryV1 ?? targetStoryPrep.targetV1)?.objectiveKind ?? ""}`,
+							"Follow TRUSTED_EDITORIAL_PLAN below for concrete edit advice. Do not invent zooms/trims.",
+						].join("\n")
+					: targetStoryPrep.promptSection;
+			storyUserMessage = appendTargetStoryToUserMessage(storyUserMessage, targetSection);
+		}
+		if (
+			closedEditPlanV1 ||
+			editPlanPrep?.editPlanV1 ||
+			closedTargetStoryV1 ||
+			targetStoryPrep?.targetV1
+		) {
+			storyUserMessage = appendTrustedEditorialBriefing(
+				storyUserMessage,
+				trustedBriefing,
+			) as typeof storyUserMessage;
+		}
 	}
-	const messages = [...history, storyUserMessage];
+	const messages = boundedMode ? [storyUserMessage] : [...history, storyUserMessage];
+
+	if (retrievalMode) {
+		const srcFp = primaryAsset ? fingerprintSourceAsset(workingDocument, primaryAsset.id) : null;
+		const progFp = fingerprintProgramme(workingDocument);
+		retrievalPathTelemetry = {
+			identity: boundedMode
+				? BOUNDED_REASONING_V1_ID
+				: compactMode
+					? VIDEO_MEMORY_RETRIEVAL_CLOSURE_V1_ID
+					: VIDEO_MEMORY_RETRIEVAL_PRODUCTION_V1_ID,
+			packingMode,
+			queryClass,
+			queryScope,
+			frameMeta,
+			visualCoverage,
+			packedContextChars,
+			ranInvestigator,
+			sufficiencyReason,
+			sessionReuse,
+			sourceMemoryHit,
+			programmeMemoryHit,
+			ledgerReused,
+			claimsReused,
+			sourceStoryReused,
+			sourceFingerprint: srcFp,
+			programmeFingerprint: progFp,
+			sttCacheHit: primarySpeech?.timings?.cacheHit ?? null,
+			visualCacheHits: visual.prepared?.timings?.cacheHits ?? null,
+			visualCacheMisses: visual.prepared?.timings?.cacheMisses ?? null,
+			toolsExposed: toolsExposedCount,
+			toolGateNotes: cognitionPhase
+				? `phase=${cognitionPhase}; ${toolGateNotes ?? ""}`
+				: toolGateNotes,
+			toolNames: [...exposedToolNames],
+			...(cognitionPhase ? { cognitionPhase } : {}),
+		};
+	}
+
+	const userParts = measureUserMessageParts(
+		(storyUserMessage as { content?: unknown }).content ?? storyUserMessage,
+	);
+	const transcriptText = primarySpeech?.segments?.map((s) => s.text).join(" ") ?? "";
+	const ledgerText = storyLedger ? JSON.stringify(storyLedger).slice(0, 50_000) : "";
+	const investigatorText = investigationEvidence?.internalBriefing ?? "";
+	const claimText = storyClaims ? JSON.stringify(storyClaims).slice(0, 20_000) : "";
+	const sourceSection = sourceStoryPrep?.promptSection ?? "";
+	const targetSectionMeasured =
+		targetStoryPrep && !(closedEditPlanV1 || editPlanPrep?.editPlanV1)
+			? targetStoryPrep.promptSection
+			: [
+					(closedTargetStoryV1 ?? targetStoryPrep?.targetV1)?.viewerGoal ?? "",
+					(closedTargetStoryV1 ?? targetStoryPrep?.targetV1)?.objectiveKind ?? "",
+				].join("\n");
+	const gapText =
+		closedEditGapV1 || editGapPrep?.editGapV1
+			? JSON.stringify(closedEditGapV1 ?? editGapPrep?.editGapV1).slice(0, 20_000)
+			: "";
+	const planText =
+		closedEditPlanV1 || editPlanPrep?.editPlanV1
+			? JSON.stringify(closedEditPlanV1 ?? editPlanPrep?.editPlanV1).slice(0, 20_000)
+			: "";
+	const historyText = history.map((h) => h.content).join("\n");
+
+	let contextTelemetry: ContextTelemetryV1 = {
+		...emptyContextTelemetry({ provider: model.provider, model: model.model }),
+		components: {
+			systemInstruction: measureTextComponent(systemPromptText, "CONTROL_POLICY"),
+			toolSchemas: measureTextComponent(toolSchemaText, "TOOL_CONTRACT"),
+			conversationHistory: measureTextComponent(historyText, "CONVERSATION"),
+			userRequestText: measureTextComponent(userMessage, "CONVERSATION"),
+			userMessageMultimodalText: {
+				chars: userParts.textChars,
+				estimatedTokens: Math.ceil(userParts.textChars / 4),
+				actualTokens: "not_available",
+				kind: "RAW_EVIDENCE",
+				notes: "text parts of multimodal user message (includes briefings)",
+			},
+			transcript: measureTextComponent(transcriptText, "RAW_EVIDENCE", {
+				repeated:
+					Boolean(transcriptText) &&
+					transcriptText.length > 40 &&
+					systemPromptText.includes(transcriptText.slice(0, Math.min(80, transcriptText.length))),
+				notes: "also embedded in documentSnapshot/mediaContext when present",
+			}),
+			ledger: measureTextComponent(ledgerText, "DERIVED_EVIDENCE", {
+				notes: "LOCAL_ONLY unless dumped via tool; size measured for duplication audit",
+			}),
+			investigator: measureTextComponent(investigatorText, "DERIVED_EVIDENCE"),
+			claimPromotion: measureTextComponent(claimText, "DERIVED_EVIDENCE", {
+				notes: "LOCAL_ONLY unless summarized into investigator/source briefing",
+			}),
+			sourceStory: measureTextComponent(sourceSection, "EDITORIAL_STATE"),
+			targetStory: measureTextComponent(targetSectionMeasured, "EDITORIAL_STATE"),
+			editGap: measureTextComponent(gapText, "EDITORIAL_STATE", {
+				notes: "LOCAL_ONLY object; trusted briefing may summarize into provider",
+			}),
+			editPlan: measureTextComponent(planText, "EDITORIAL_STATE", {
+				notes: "LOCAL_ONLY object; trusted briefing may summarize into provider",
+			}),
+			trustedEditorialBriefing: measureTextComponent(trustedBriefing, "EDITORIAL_STATE"),
+			imageDataUrls: {
+				chars: userParts.estimatedImageDataUrlChars,
+				estimatedTokens: estimateImageTokens(userParts.imageCount),
+				actualTokens: "not_available",
+				kind: "RAW_EVIDENCE",
+				notes: "base64 data-URL chars in multimodal parts; image tokens estimated separately",
+			},
+		},
+		images: {
+			imageCount: userParts.imageCount,
+			totalJpegBytes: visual.prepared?.frames?.reduce((n, f) => n + (f.byteLength ?? 0), 0) ?? 0,
+			maxLongSidePx: 1280,
+			estimatedImageTokens: estimateImageTokens(userParts.imageCount),
+			accounting: "estimated",
+		},
+		latency: {
+			evidencePreparationMs: visualPrepMs + sttPrepMs,
+			sttMs: sttPrepMs,
+			visualEvidenceMs: visualPrepMs,
+			investigatorMs,
+			cognitionMs,
+			providerMs: "not_available",
+			toolExecutionMs: "not_available",
+			verificationMs: "not_available",
+			totalMs: 0,
+		},
+	};
+
+	let videoMemoryV1: VideoMemoryV1 | undefined;
+	let videoMemoryRetrievalBriefing = "";
+	if (primaryAsset && storyLedger) {
+		videoMemoryV1 =
+			bootMemory ??
+			buildVideoMemoryV1({
+				document: workingDocument,
+				assetId: primaryAsset.id,
+				ledger: storyLedger,
+				claims: storyClaims,
+				sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+				analysisCoverage: {
+					speech: Boolean(primarySpeech),
+					visual: Boolean(visual.prepared?.frames?.length),
+					cursor: Boolean(cursorInteractions?.length),
+					investigator: Boolean(investigationEvidence),
+				},
+			});
+		// Refresh memory with final story/investigator coverage.
+		videoMemoryV1 = buildVideoMemoryV1({
+			document: workingDocument,
+			assetId: primaryAsset.id,
+			ledger: storyLedger,
+			claims: storyClaims,
+			sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2,
+			analysisCoverage: {
+				speech: Boolean(primarySpeech),
+				visual: Boolean(visual.prepared?.frames?.length),
+				cursor: Boolean(cursorInteractions?.length),
+				investigator: Boolean(investigationEvidence),
+			},
+		});
+		const retrieval = retrieveFromVideoMemory(videoMemoryV1, userMessage, contextNeeds);
+		videoMemoryRetrievalBriefing = retrieval.briefingText;
+		contextTelemetry.components.videoMemoryRetrieval = measureTextComponent(
+			videoMemoryRetrievalBriefing,
+			"DERIVED_EVIDENCE",
+			{
+				notes: retrievalMode
+					? "VIDEO_MEMORY_RETRIEVAL packing active — packed provider context substituted for full Source Story dump"
+					: "diagnostic retrieval briefing only — NOT substituted into provider prompt (FULL_CONTEXT mode)",
+			},
+		);
+		const storedStory = mergeProgrammeStoryForPut({
+			computedStory: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2 ?? null,
+			cached: cachedBundle,
+			programmeFingerprintNow: videoMemoryV1.programmeFingerprint,
+		});
+		sessionStore.put({
+			documentId: memoryDocumentId,
+			assetId: primaryAsset.id,
+			sourceFingerprint: videoMemoryV1.sourceFingerprint,
+			ledger: storyLedger,
+			claims: storyClaims,
+			sourceStoryV2: storedStory.sourceStoryV2,
+			programmeFingerprintWhenStoryBuilt: storedStory.programmeFingerprintWhenStoryBuilt,
+			memory: videoMemoryV1,
+			turnCount: (cachedBundle?.turnCount ?? 0) + 1,
+			lastQueryClass: queryClass,
+			storedAtIso: new Date().toISOString(),
+		});
+		if (retrievalMode) {
+			const srcFp = fingerprintSourceAsset(workingDocument, primaryAsset.id);
+			const progFp = fingerprintProgramme(workingDocument);
+			// Preserve earlier retrievalPathTelemetry (incl. Bounded identity / queryScope /
+			// visualCoverage / toolNames). Only fill fingerprints if missing.
+			if (retrievalPathTelemetry) {
+				retrievalPathTelemetry = {
+					...retrievalPathTelemetry,
+					sourceFingerprint: srcFp,
+					programmeFingerprint: progFp,
+					sttCacheHit: primarySpeech?.timings?.cacheHit ?? null,
+					visualCacheHits: visual.prepared?.timings?.cacheHits ?? null,
+					visualCacheMisses: visual.prepared?.timings?.cacheMisses ?? null,
+					toolsExposed: toolsExposedCount,
+					toolNames: [...exposedToolNames],
+					...(cognitionPhase ? { cognitionPhase } : {}),
+				};
+			} else {
+				retrievalPathTelemetry = {
+					identity: boundedMode
+						? BOUNDED_REASONING_V1_ID
+						: compactMode
+							? VIDEO_MEMORY_RETRIEVAL_CLOSURE_V1_ID
+							: VIDEO_MEMORY_RETRIEVAL_PRODUCTION_V1_ID,
+					packingMode,
+					queryClass,
+					queryScope,
+					frameMeta,
+					visualCoverage,
+					packedContextChars,
+					ranInvestigator,
+					sufficiencyReason,
+					sessionReuse,
+					sourceMemoryHit,
+					programmeMemoryHit,
+					ledgerReused,
+					claimsReused,
+					sourceStoryReused,
+					sourceFingerprint: srcFp,
+					programmeFingerprint: progFp,
+					sttCacheHit: primarySpeech?.timings?.cacheHit ?? null,
+					visualCacheHits: visual.prepared?.timings?.cacheHits ?? null,
+					visualCacheMisses: visual.prepared?.timings?.cacheMisses ?? null,
+					toolsExposed: toolsExposedCount,
+					toolGateNotes: cognitionPhase
+						? `phase=${cognitionPhase}; ${toolGateNotes ?? ""}`
+						: toolGateNotes,
+					toolNames: [...exposedToolNames],
+					...(cognitionPhase ? { cognitionPhase } : {}),
+				};
+			}
+		}
+	}
 
 	// ponytail: declared outside the try block so the catch handler can
 	// include any chunks we already saw in the diagnostic when the stream
 	// throws partway through.
 	let chatModelChunks: unknown[] = [];
+	let toolLoopCount = 0;
+	let toolExecutionMs = 0;
+
+	const finalizeTelemetry = (): ContextTelemetryV1 => {
+		const usageSource = usageAcc.gotAny
+			? ("langchain_usage_metadata" as const)
+			: ("not_available" as const);
+		const inputTokens = usageAcc.gotAny ? usageAcc.inputTokens : ("not_available" as const);
+		const outputTokens = usageAcc.gotAny ? usageAcc.outputTokens : ("not_available" as const);
+		const reasoningTokens = usageAcc.gotAny ? usageAcc.reasoningTokens : ("not_available" as const);
+		const cachedInputTokens = usageAcc.gotAny
+			? usageAcc.cachedInputTokens
+			: ("not_available" as const);
+		const cost =
+			model.model.toLowerCase().includes("gpt-4o") || model.model === "gpt-4o"
+				? estimateCostUsd({
+						pricing: GPT4O_PRICING,
+						inputTokens,
+						cachedInputTokens,
+						outputTokens,
+					})
+				: ("NOT_VERIFIED" as const);
+		return {
+			...contextTelemetry,
+			providerUsage: {
+				inputTokens,
+				outputTokens,
+				reasoningTokens,
+				cachedInputTokens,
+				modelCalls: modelCallCount,
+				source: usageSource,
+			},
+			latency: {
+				...contextTelemetry.latency,
+				providerMs,
+				toolExecutionMs,
+				totalMs: Date.now() - turnT0,
+			},
+			toolLoopCount,
+			retryCount: 0,
+			estimatedCostUsd: cost,
+			pricingNote:
+				cost === "NOT_VERIFIED"
+					? `Cost NOT_VERIFIED for model=${model.model}; gpt-4o pricing config available separately`
+					: GPT4O_PRICING.source,
+		};
+	};
 
 	try {
 		// ponytail: streamEvents (legacy mode, no `version: "v3"`) returns the
 		// same on_chat_model_stream / on_tool_start / on_tool_end / on_chain_end
 		// event stream axcut consumes. We use it both for live text deltas and
 		// to know when the run has produced its final assistant message.
+		const tProvider0 = Date.now();
 		const stream = (
 			agent as unknown as {
 				streamEvents: (state: unknown, config?: unknown) => AsyncIterable<Record<string, unknown>>;
@@ -898,6 +2812,9 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 
 		let finalText = "";
 		const nonChatEvents: Array<{ event: string; name: string }> = [];
+		let toolEventSeen = false;
+		let thinkingChars = 0;
+		let toolWallStart: number | null = null;
 
 		for await (const event of stream) {
 			const eventType = typeof event.event === "string" ? event.event : "";
@@ -910,6 +2827,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				const content = chunk?.content;
 				const thinkingDelta = messageContentToThinking(content);
 				if (thinkingDelta) {
+					thinkingChars += thinkingDelta.length;
 					sink.thinking(thinkingDelta);
 				}
 				const delta = messageContentToText(content);
@@ -918,6 +2836,46 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					finalText += delta;
 				}
 			} else if (eventType === "on_chat_model_end") {
+				modelCallCount += 1;
+				if (
+					typeof args.maxProviderModelCalls === "number" &&
+					args.maxProviderModelCalls > 0 &&
+					modelCallCount > args.maxProviderModelCalls
+				) {
+					providerMs = Date.now() - tProvider0;
+					sink.error(
+						`Model call budget exceeded (${modelCallCount}>${args.maxProviderModelCalls}).`,
+					);
+					return {
+						text: finalText.trim(),
+						document: holder.current,
+						mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+						status: "provider_error",
+						failureReason: "agent_max_steps",
+						userMessage:
+							"This turn stopped because an unexpected extra model call was needed after the evidence packet was already prepared.",
+						reason: `model_call_budget_exceeded:${modelCallCount}>${args.maxProviderModelCalls}; toolLoopCount=${toolLoopCount}`,
+						contextTelemetry: finalizeTelemetry(),
+						...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+						...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+						...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+					};
+				}
+				const usage = extractUsageFromChatModelEnd(data);
+				if (typeof usage.inputTokens === "number") {
+					usageAcc.inputTokens += usage.inputTokens;
+					usageAcc.gotAny = true;
+				}
+				if (typeof usage.outputTokens === "number") {
+					usageAcc.outputTokens += usage.outputTokens;
+					usageAcc.gotAny = true;
+				}
+				if (typeof usage.reasoningTokens === "number") {
+					usageAcc.reasoningTokens += usage.reasoningTokens;
+				}
+				if (typeof usage.cachedInputTokens === "number") {
+					usageAcc.cachedInputTokens += usage.cachedInputTokens;
+				}
 				// Local CLI (and any `_generate`-only model) finishes with one
 				// end event and never streams. Take that text only when no
 				// stream chunks arrived, so cloud providers are not doubled.
@@ -926,6 +2884,16 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					sink.text(endText);
 					finalText += endText;
 				}
+			} else if (eventType === "on_tool_start") {
+				toolEventSeen = true;
+				toolLoopCount += 1;
+				toolWallStart = Date.now();
+			} else if (eventType === "on_tool_end") {
+				toolEventSeen = true;
+				if (toolWallStart != null) {
+					toolExecutionMs += Date.now() - toolWallStart;
+					toolWallStart = null;
+				}
 			} else if (eventType === "on_tool_error") {
 				// Kept as a safety net rather than as a live path. `executeAgentTool`
 				// never throws, and LangChain's ToolNode catches what does (an unknown
@@ -933,41 +2901,66 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				// the tool RESULT instead of raising. This branch only fires for a
 				// failure that escapes both — and then the stream is the only witness,
 				// so it reports `ok: false` from evidence, never a fabricated verdict.
+				toolEventSeen = true;
 				sink.toolEnd(name, false, extractError(data));
-			} else if (eventType && !SILENT_TOOL_EVENTS.has(eventType)) {
+			} else if (SILENT_TOOL_EVENTS.has(eventType)) {
+				toolEventSeen = true;
+			} else if (eventType) {
 				nonChatEvents.push({ event: eventType, name });
 			}
 		}
+		providerMs = Date.now() - tProvider0;
 
 		const mutated = JSON.stringify(holder.current) !== initialDocumentJSON;
+		const preLlmArtifacts = {
+			...(speechEvidence ? { speechEvidence } : {}),
+			...(investigationEvidence ? { investigationEvidence } : {}),
+			...(visualSpecialist ? { visualSpecialist } : {}),
+			...(storyLedger ? { temporalEventLedger: storyLedger } : {}),
+			...(storyClaims ? { claimPromotion: storyClaims } : {}),
+			...(closedSourceStoryV2 || sourceStoryPrep?.storyV2
+				? { sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2 }
+				: {}),
+			...(closedTargetStoryV1 || targetStoryPrep?.targetV1
+				? { targetStoryV1: closedTargetStoryV1 ?? targetStoryPrep?.targetV1 }
+				: {}),
+			...(closedEditGapV1 || editGapPrep?.editGapV1
+				? { editGapV1: closedEditGapV1 ?? editGapPrep?.editGapV1 }
+				: {}),
+			...(closedEditPlanV1 || editPlanPrep?.editPlanV1
+				? { editPlanV1: closedEditPlanV1 ?? editPlanPrep?.editPlanV1 }
+				: {}),
+			...(planningClosureV1 ? { planningClosureV1 } : {}),
+		};
+
 		if (!finalText.trim()) {
-			// ponytail: surface the upstream payload so we can see why MiniMax
-			// (or any other anthropic-shaped provider) is producing no text.
-			// The chat-model chunks are the post-parse LangChain views of
-			// each SSE event; their `content`/`additional_kwargs`/
-			// `response_metadata` fields tell us whether the issue is in the
-			// wire format, the parser, or our `messageContentToText` shape.
-			// Capped at
-			// 1 chunk + a 1kB slice to keep the toast readable.
 			const lastChunk = chatModelChunks[chatModelChunks.length - 1];
 			const sample = lastChunk
 				? JSON.stringify(lastChunk).slice(0, 1024)
 				: "(no on_chat_model_stream events)";
-			const reason =
-				`Empty response from model (provider=${model.provider}, ` +
-				`model=${model.model}, chat_model_chunks=${chatModelChunks.length}, ` +
-				`other_events=${nonChatEvents.length}:${nonChatEvents
-					.slice(0, 5)
-					.map((e) => e.event)
-					.join(",")}). Last chunk: ${sample}`;
-			sink.error(reason);
+			const delivery = classifyEmptyModelCompletion({
+				provider: model.provider,
+				model: model.model,
+				chatModelChunks: chatModelChunks.length,
+				otherEvents: nonChatEvents.map((e) => e.event),
+				toolEventSeen,
+				chunkSample: sample,
+				hadThinkingOnly: thinkingChars > 0 && chatModelChunks.length > 0,
+			});
+			sink.error(delivery.userMessage);
 			return {
 				text: "",
 				document: holder.current,
 				mutated,
-				reason,
-				...(investigationEvidence ? { investigationEvidence } : {}),
-				...(visualSpecialist ? { visualSpecialist } : {}),
+				status: delivery.status,
+				failureReason: delivery.failureReason,
+				userMessage: delivery.userMessage,
+				reason: delivery.diagnostic,
+				contextTelemetry: finalizeTelemetry(),
+				...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+				...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+				...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+				...preLlmArtifacts,
 			};
 		}
 
@@ -1001,10 +2994,22 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			}
 		}
 
+		let sourceStoryV2: SourceStoryV2 | undefined = sourceStoryPrep?.storyV2;
+
 		if (sourceStoryPrep?.scaffold) {
 			const storyValidated = parseAndValidateSourceStory(text, sourceStoryPrep.scaffold);
 			if (storyValidated.ok && storyValidated.story) {
 				sourceStory = storyValidated.story;
+				if (sourceStoryV2) {
+					const constrained = constrainSourceStoryWithV2(sourceStory, sourceStoryV2);
+					sourceStory = constrained.story;
+					if (constrained.warnings.length > 0) {
+						console.warn(
+							"[source-story-v2] constrained model story",
+							constrained.warnings.slice(0, 6).join("; "),
+						);
+					}
+				}
 				if (storyValidated.warnings.length > 0) {
 					console.warn(
 						"[source-story] validation warnings",
@@ -1016,6 +3021,12 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					"[source-story] validation failed; continuing without structured story",
 					storyValidated.errors.slice(0, 8).join("; "),
 				);
+				// Fall back to deterministic V2-derived story when model JSON fails.
+				if (sourceStoryV2) {
+					sourceStory = sourceStoryFromV2(sourceStoryV2);
+				}
+			} else if (sourceStoryV2) {
+				sourceStory = sourceStoryFromV2(sourceStoryV2);
 			}
 		}
 
@@ -1024,8 +3035,19 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				sourceStory,
 				userMessage,
 			});
+			const targetV1 = targetStoryPrep.targetV1;
 			if (targetValidated.ok && targetValidated.story) {
 				targetStory = targetValidated.story;
+				if (targetV1) {
+					const constrained = constrainTargetStoryWithV1(targetStory, targetV1);
+					targetStory = constrained.story;
+					if (constrained.warnings.length > 0) {
+						console.warn(
+							"[target-story-v1] constrained model story",
+							constrained.warnings.slice(0, 6).join("; "),
+						);
+					}
+				}
 				if (targetValidated.warnings.length > 0) {
 					console.warn(
 						"[target-story] validation warnings",
@@ -1037,7 +3059,153 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					"[target-story] validation failed; continuing without structured target",
 					targetValidated.errors.slice(0, 8).join("; "),
 				);
+				if (targetV1) {
+					targetStory = targetStoryFromV1(targetV1);
+				}
+			} else if (targetV1) {
+				targetStory = targetStoryFromV1(targetV1);
 			}
+		} else if (targetStoryPrep?.targetV1) {
+			// Deterministic fallback when Source Story model JSON missing but V2+V1 exist
+			targetStory = targetStoryFromV1(targetStoryPrep.targetV1);
+		}
+
+		const targetStoryV1 = closedTargetStoryV1 ?? targetStoryPrep?.targetV1;
+		const editGapV1 = closedEditGapV1 ?? editGapPrep?.editGapV1;
+		const editPlanV1 = closedEditPlanV1 ?? editPlanPrep?.editPlanV1;
+		let editProposalV1 = editProposalPrep?.editProposalV1;
+		const docFp = fingerprintDocument(holder.current).value;
+		let applyPreviewV1 =
+			editProposalV1 && workingDocument
+				? prepareApplyPreviewDiagnostics({
+						document: holder.current,
+						editProposalV1,
+						proposalDocumentFingerprint: docFp,
+					})
+				: undefined;
+		let editReview =
+			editProposalV1 && editProposalV1.proposals.length > 0
+				? buildEditReviewAttachment({
+						editProposalV1,
+						preflight: applyPreviewV1?.preflight ?? null,
+						documentFingerprint: docFp,
+					})
+				: undefined;
+
+		// Product Surface V1 — wire local caption/dead-air/orchestration into chat cards.
+		let localProductSurface: EditorialRecommendationProductSurfaceResult | null = null;
+		if (primaryAsset && authority.mode !== "read_only") {
+			try {
+				localProductSurface = await runEditorialRecommendationProductSurface({
+					document: holder.current,
+					assetId: primaryAsset.id,
+					mediaPath: primaryAsset.originalPath,
+					userMessage,
+					speechEvidence: primarySpeech,
+					preparedChanges: visual.prepared?.changes ?? null,
+					ledger: storyLedger ?? null,
+				});
+				const localCanApply =
+					localProductSurface.editReview?.cards.some((c) => c.canApply) === true;
+				const planCanApply = editReview?.cards.some((c) => c.canApply) === true;
+				if (localCanApply && (!planCanApply || localProductSurface.intents.wantCaptions)) {
+					editProposalV1 = localProductSurface.editProposalV1 ?? editProposalV1;
+					applyPreviewV1 = localProductSurface.applyPreviewV1 ?? applyPreviewV1;
+					editReview = localProductSurface.editReview ?? editReview;
+					console.info(
+						"[editorial-product-surface]",
+						`families=${localProductSurface.supportedFamilies.join(",") || "none"}`,
+						`notes=${localProductSurface.notes.slice(0, 4).join(";")}`,
+					);
+				} else if (localProductSurface.supportedFamilies.length > 0) {
+					console.info(
+						"[editorial-product-surface] grounded families without replacing plan proposal",
+						localProductSurface.supportedFamilies.join(","),
+					);
+				}
+			} catch (err) {
+				console.warn(
+					"[editorial-product-surface] failed; continuing with plan path",
+					err instanceof Error ? err.message : String(err),
+				);
+			}
+		}
+
+		// Professional Edit Execution Orchestrator V1 — multi-step verified sequence.
+		let professionalEdit: ProfessionalEditOrchestratorResultV1 | null = null;
+		if (primaryAsset && authority.mode !== "read_only" && isProfessionalEditRequest(userMessage)) {
+			try {
+				const projectKey = String(holder.current.project.id ?? memoryDocumentId);
+				const priorAuth = professionalEditAuthByProject.get(projectKey) ?? null;
+				professionalEdit = await runProfessionalEditOrchestrator({
+					document: holder.current,
+					assetId: primaryAsset.id,
+					mediaPath: primaryAsset.originalPath,
+					userMessage,
+					sourceDurationSec,
+					speechEvidence: primarySpeech,
+					ledger: storyLedger ?? null,
+					cursorSamples: await (async () => {
+						if (!args.cursor || !primaryAsset) return null;
+						try {
+							const load = await args.cursor.read({
+								assetId: primaryAsset.id,
+								originalPath: primaryAsset.originalPath,
+							});
+							if (load.status !== "ok") return null;
+							return load.samples
+								.filter(
+									(s) =>
+										typeof s.cx === "number" &&
+										typeof s.cy === "number" &&
+										typeof s.timeMs === "number",
+								)
+								.map((s) => ({
+									atSec: s.timeMs / 1000,
+									cx: s.cx,
+									cy: s.cy,
+									interactionType:
+										s.interactionType === "click" ||
+										s.interactionType === "mouseup" ||
+										s.interactionType === "move"
+											? s.interactionType
+											: "move",
+									visible: true,
+								}));
+						} catch {
+							return null;
+						}
+					})(),
+					priorAuthorization: priorAuth,
+					settingsEditsAllowed: editsAllowed,
+					executionMode: undefined,
+					skipFinalSequenceQc: false,
+					appRoot: process.cwd(),
+				});
+				if (professionalEdit.authorization?.valid) {
+					professionalEditAuthByProject.set(projectKey, professionalEdit.authorization);
+				}
+				if (JSON.stringify(professionalEdit.document) !== JSON.stringify(holder.current)) {
+					holder.current = professionalEdit.document;
+					workingDocument = professionalEdit.document;
+				}
+				console.info(
+					"[professional-edit-orchestrator]",
+					`steps=${professionalEdit.plan.steps.length}`,
+					`committed=${professionalEdit.metrics.stepsCommitted}`,
+					`auth=${Boolean(professionalEdit.authorization?.valid)}`,
+					`needsAsk=${professionalEdit.needsUserAuthorization}`,
+				);
+			} catch (err) {
+				console.warn(
+					"[professional-edit-orchestrator] failed; continuing",
+					err instanceof Error ? err.message : String(err),
+				);
+			}
+		}
+
+		if (closedSourceStoryV2) {
+			sourceStoryV2 = closedSourceStoryV2;
 		}
 
 		// Structured visual/speech/story evidence JSON is internal infrastructure.
@@ -1077,9 +3245,175 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				.trim();
 		}
 
+		// Recovery 4: concrete edit families in user prose must match trusted Edit Plan
+		// OR local product-surface / professional-orchestrator grounded families.
+		if (!wantsRaw) {
+			const orchFamilies =
+				professionalEdit?.plan.steps.map((s) => (s.family === "captions" ? "caption" : s.family)) ??
+				[];
+			const planGate = enforceFinalPlanConsistency({
+				userFacingText: responseText,
+				plan: editPlanV1,
+				gap: editGapV1,
+				extraSupportedFamilies: [
+					...(localProductSurface?.supportedFamilies ?? []),
+					...orchFamilies,
+				],
+			});
+			if (planGate.strippedConcreteAdvice) {
+				console.warn(
+					"[editorial-grounding] stripped unsupported concrete edit advice",
+					planGate.reason,
+				);
+				responseText = planGate.text;
+			}
+		}
+
+		// When local surface has a consentable card (or a grounded no-op offer for
+		// an explicit caption/pause ask), prefer that copy over the preservation-only
+		// honesty boilerplate from the old Edit Plan gate.
+		const localOffer = localProductSurface?.userFacingOffer?.trim();
+		const hasLocalConsentCard =
+			localProductSurface?.editReview?.cards.some((c) => c.canApply) === true;
+		if (
+			!professionalEdit &&
+			localOffer &&
+			(hasLocalConsentCard ||
+				localProductSurface?.intents.wantCaptions ||
+				localProductSurface?.intents.wantTighter)
+		) {
+			const looksLikeNoEditBoilerplate =
+				/don't see a safe, recording-specific edit/i.test(responseText) ||
+				/inventing tool recipes without a grounded target/i.test(responseText) ||
+				/don't yet have a sufficiently grounded on-screen target/i.test(responseText);
+			if (hasLocalConsentCard || looksLikeNoEditBoilerplate || !responseText.trim()) {
+				responseText = localOffer;
+			}
+		}
+
+		// Prefer professional-orchestrator user-facing result when present.
+		if (professionalEdit?.userFacingText?.trim()) {
+			responseText = professionalEdit.userFacingText;
+		}
+
+		// Professional Edit owns this turn end-to-end (plan / ask-once / verified apply).
+		// Do NOT also attach a parallel product-surface "Apply edit" card — that produces
+		// the contradictory UI: chat says captions were enabled while ADD CAPTIONS waits.
+		if (professionalEdit) {
+			editReview = undefined;
+			editProposalV1 = null;
+			applyPreviewV1 = null;
+		}
+
+		responseText = stripUnsupportedTransitionClaims(responseText);
+		responseText = stripFalseProjectEditsDisabledClaim(responseText, editsAllowed);
+		responseText = stripRepeatedProceedAsks(
+			responseText,
+			Boolean(professionalEdit?.authorization?.valid),
+		);
+
+		// Bounded Quality Closure V3 — cross-modal / focal / editorial validators.
+		if (boundedMode && !wantsRaw && boundedDiagnostics?.packet) {
+			const pkt = boundedDiagnostics.packet;
+			const validated = applyBoundedResponseValidators({
+				text: responseText,
+				userMessage,
+				relations: pkt.crossModalRelations ?? [],
+				focalCandidates: pkt.focalTargetCandidates ?? [],
+				editorialFindings: pkt.editorialFindings ?? [],
+				decisionKind: pkt.decisionKind,
+			});
+			if (validated.hits.length > 0 || validated.incomplete) {
+				console.warn(
+					"[bounded-validators]",
+					validated.hits.map((h) => `${h.rule}:${h.severity}`).join("; "),
+					validated.incomplete ? "incomplete" : "",
+				);
+				responseText = validated.text;
+			}
+		}
+
+		const hasConsentableProposal = Boolean(editReview?.cards.some((c) => c.canApply) === true);
+		const hasBlockedOnlyProposal = Boolean(editReview?.cards.length && !hasConsentableProposal);
+		const verifiedCommit = (professionalEdit?.metrics.stepsCommitted ?? 0) > 0;
+		const truth = bindFinalResponseToTransactionTruth({
+			userFacingText: responseText,
+			mode: authority.mode,
+			mutatingToolsExecuted: mutationTelemetry.mutatingToolsExecuted.length,
+			hasConsentableProposal,
+			hasBlockedOnlyProposal,
+			verifiedCommit,
+			// When a consent card is still present, never treat orchestrator copy as
+			// fully applied — forces rewrite if text claims applied while card waits.
+			forceProposalAwaitingConsent: hasConsentableProposal && !professionalEdit,
+		});
+		responseText = truth.text;
+		mutationTelemetry.finalResponseClaim = truth.claim;
+		mutationTelemetry.documentFingerprintAfterReasoning = fingerprintDocument(holder.current).value;
+		mutationTelemetry.documentFingerprintAfterProposal =
+			mutationTelemetry.documentFingerprintAfterReasoning;
+		mutationTelemetry.proposalId = editProposalV1?.proposals?.[0]?.id ?? null;
+		mutationTelemetry.proposalReadiness = editProposalV1?.proposals?.[0]?.status ?? null;
+		mutationTelemetry.persistedMutationCount =
+			mutationTelemetry.documentFingerprintBefore ===
+			mutationTelemetry.documentFingerprintAfterReasoning
+				? 0
+				: Math.max(
+						mutationTelemetry.mutatingToolsExecuted.length,
+						professionalEdit?.metrics.stepsCommitted ?? 0,
+					);
+		if (professionalEdit) {
+			rememberProfessionalSessionReceipt({
+				projectId: String(holder.current.project.id ?? memoryDocumentId),
+				atIso: new Date().toISOString(),
+				userFacingText: responseText,
+				stepsCommitted: professionalEdit.metrics.stepsCommitted,
+				families: professionalEdit.plan.steps.map((s) => s.family),
+				assessmentLabel: professionalEdit.autonomous?.transformationSummary?.assessmentLabel,
+			});
+		}
+		if (visual.prepared?.frames) {
+			mutationTelemetry.providerUsage.framesAttached = visual.prepared.frames.length;
+			mutationTelemetry.providerUsage.totalImageBytes = visual.prepared.frames.reduce(
+				(n, f) => n + (f.byteLength ?? 0),
+				0,
+			);
+		}
+
+		// Recovery 3: raw model text may be non-empty (JSON-only / internals-only)
+		// while sanitizers leave nothing user-facing. That is never a successful turn.
+		if (!responseText.trim()) {
+			const delivery = classifyMissingUserFacingResponse({
+				provider: model.provider,
+				model: model.model,
+				rawLen: text.length,
+				cause:
+					text.trim().length > 0 ? "sanitizer_removed_all_text" : "missing_user_facing_response",
+			});
+			sink.error(delivery.userMessage);
+			return {
+				text: "",
+				document: holder.current,
+				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+				status: delivery.status,
+				failureReason: delivery.failureReason,
+				userMessage: delivery.userMessage,
+				reason: delivery.diagnostic,
+				contextTelemetry: finalizeTelemetry(),
+				...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+				...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+				...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+				...preLlmArtifacts,
+				...(visualSemanticGrounding ? { visualSemanticGrounding } : {}),
+				...(sourceStory ? { sourceStory } : {}),
+				...(targetStory ? { targetStory } : {}),
+			};
+		}
+
 		// Temporal Event Ledger V1 — rebuild after semantic parse so optional
 		// model-derived surfaces attach as modelDerived observations.
 		let temporalEventLedger: TemporalEventLedger | undefined;
+		let claimPromotion: ClaimPromotionSet | undefined;
 		if (primaryAsset && sourceDurationSec > 0) {
 			temporalEventLedger = buildLedgerFromPreparedEvidence({
 				assetId: primaryAsset.id,
@@ -1097,21 +3431,64 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					primaryAsset.id,
 				);
 			}
+			// Claim Promotion V1 — above ledger; 0 extra LLM calls.
+			claimPromotion = buildClaimPromotionSet({
+				ledger: temporalEventLedger,
+				specialist: visualSpecialist,
+				investigation: investigationEvidence,
+				userQuery: args.userMessage,
+				lazy: true,
+			});
 		}
 
 		return {
 			text: responseText,
 			document: holder.current,
 			mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+			status: "completed",
+			mutationAuthority: mutationTelemetry,
+			contextTelemetry: finalizeTelemetry(),
+			...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+			...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+			...(boundedDiagnostics ? { boundedDiagnostics } : {}),
 			...(visualSemanticGrounding ? { visualSemanticGrounding } : {}),
 			...(speechEvidence ? { speechEvidence } : {}),
 			...(sourceStory ? { sourceStory } : {}),
+			...(sourceStoryV2 ? { sourceStoryV2 } : {}),
 			...(targetStory ? { targetStory } : {}),
+			...(targetStoryV1 ? { targetStoryV1 } : {}),
+			...(editGapV1 ? { editGapV1 } : {}),
+			...(editPlanV1 ? { editPlanV1 } : {}),
+			...(planningClosureV1 ? { planningClosureV1 } : {}),
+			...(editProposalV1 ? { editProposalV1 } : {}),
+			...(applyPreviewV1 ? { applyPreviewV1 } : {}),
+			...(editReview ? { editReview } : {}),
 			...(temporalEventLedger ? { temporalEventLedger } : {}),
 			...(investigationEvidence ? { investigationEvidence } : {}),
 			...(visualSpecialist ? { visualSpecialist } : {}),
+			...(claimPromotion ? { claimPromotion } : {}),
 		};
 	} catch (err) {
+		const preLlmArtifacts = {
+			...(speechEvidence ? { speechEvidence } : {}),
+			...(investigationEvidence ? { investigationEvidence } : {}),
+			...(visualSpecialist ? { visualSpecialist } : {}),
+			...(storyLedger ? { temporalEventLedger: storyLedger } : {}),
+			...(storyClaims ? { claimPromotion: storyClaims } : {}),
+			...(closedSourceStoryV2 || sourceStoryPrep?.storyV2
+				? { sourceStoryV2: closedSourceStoryV2 ?? sourceStoryPrep?.storyV2 }
+				: {}),
+			...(closedTargetStoryV1 || targetStoryPrep?.targetV1
+				? { targetStoryV1: closedTargetStoryV1 ?? targetStoryPrep?.targetV1 }
+				: {}),
+			...(closedEditGapV1 || editGapPrep?.editGapV1
+				? { editGapV1: closedEditGapV1 ?? editGapPrep?.editGapV1 }
+				: {}),
+			...(closedEditPlanV1 || editPlanPrep?.editPlanV1
+				? { editPlanV1: closedEditPlanV1 ?? editPlanPrep?.editPlanV1 }
+				: {}),
+			...(planningClosureV1 ? { planningClosureV1 } : {}),
+		};
 		// Local CLI failures (not logged in, binary missing) are already a
 		// sentence the user can act on. Do not wrap them in the diagnostic dump
 		// meant for mute/broken cloud providers.
@@ -1122,35 +3499,45 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				text: "",
 				document: holder.current,
 				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+				status: "provider_error",
+				failureReason: "local_cli_error",
+				userMessage: message,
 				reason: message,
-				...(investigationEvidence ? { investigationEvidence } : {}),
-				...(visualSpecialist ? { visualSpecialist } : {}),
+				contextTelemetry: finalizeTelemetry(),
+				...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+				...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+				...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+				...preLlmArtifacts,
 			};
 		}
-		// ponytail: surface the LangChain/HTTP error (with name + truncated
-		// stack) so we can tell whether the stream threw (e.g. MiniMax
-		// returning a non-Anthropic JSON envelope that the SDK rejects) or
-		// completed with empty content. Mirrors the diagnostic shape used in
-		// the success-but-empty path above.
-		const e = err instanceof Error ? err : new Error(String(err));
-		const stackHead = (e.stack ?? "").split("\n").slice(0, 3).join(" | ");
-		const reason =
-			`Empty response from model (provider=${model.provider}, ` +
-			`model=${model.model}, error=${e.name}: ${e.message}` +
-			(stackHead ? ` stack=${stackHead}` : "") +
-			`). Last chunk: ${(
-				chatModelChunks[chatModelChunks.length - 1]
-					? JSON.stringify(chatModelChunks[chatModelChunks.length - 1])
-					: "(no on_chat_model_stream events)"
-			).slice(0, 1024)}`;
-		sink.error(reason);
+		const lastChunkSample = (
+			chatModelChunks[chatModelChunks.length - 1]
+				? JSON.stringify(chatModelChunks[chatModelChunks.length - 1])
+				: "(no on_chat_model_stream events)"
+		).slice(0, 1024);
+		const delivery = classifyProviderThrownError(err, {
+			provider: model.provider,
+			model: model.model,
+			chunkSample: lastChunkSample,
+		});
+		sink.error(delivery.userMessage);
 		return {
 			text: "",
 			document: holder.current,
 			mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
-			reason,
-			...(investigationEvidence ? { investigationEvidence } : {}),
-			...(visualSpecialist ? { visualSpecialist } : {}),
+			status: delivery.status,
+			failureReason: delivery.failureReason,
+			providerHttpStatus: delivery.httpStatus,
+			...(delivery.providerDiagnostics
+				? { providerDiagnostics: delivery.providerDiagnostics }
+				: {}),
+			userMessage: delivery.userMessage,
+			reason: delivery.diagnostic,
+			contextTelemetry: finalizeTelemetry(),
+			...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+			...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+			...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+			...preLlmArtifacts,
 		};
 	}
 }

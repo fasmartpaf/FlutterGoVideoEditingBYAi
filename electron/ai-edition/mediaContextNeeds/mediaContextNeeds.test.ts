@@ -99,6 +99,35 @@ describe("mediaContextNeeds classifier", () => {
 		}
 	});
 
+	it("timestamp look is visualInspection, not whole-recording understanding", () => {
+		const n = classifyMediaContextNeeds("What happens at 12 seconds?");
+		expect(n.category).toBe("visualInspection");
+		expect(n.visual).toBe(true);
+		expect(n.speech).toBe(false);
+	});
+
+	it("Q5 compare-say-vs-visible is mediaUnderstanding with both modalities", () => {
+		const p =
+			"Compare what I say with what is visibly happening. Tell me what matches, what differs, and what cannot be verified.";
+		const n = classifyMediaContextNeeds(p);
+		expect(n.visual).toBe(true);
+		expect(n.speech).toBe(true);
+		expect(n.category).toBe("mediaUnderstanding");
+	});
+
+	it("editorial zoom-help judgment prepares visual+speech", () => {
+		const n = classifyMediaContextNeeds("Where would zoom actually help, if anywhere?");
+		expect(n.category).toBe("editingContext");
+		expect(n.visual).toBe(true);
+		expect(n.speech).toBe(true);
+		expect(promptWantsVisualEvidence("Where would zoom actually help, if anywhere?")).toBe(true);
+		const c1 = classifyMediaContextNeeds(
+			"Where would a zoom actually help in this recording, and where would it not help? Only recommend zooms when the visible evidence supports a specific focal target.",
+		);
+		expect(c1.category).toBe("editingContext");
+		expect(c1.visual).toBe(true);
+	});
+
 	it("12 — classifier does not invoke an LLM (pure sync function)", () => {
 		const before = Date.now();
 		classifyMediaContextNeeds("Improve the pacing.");

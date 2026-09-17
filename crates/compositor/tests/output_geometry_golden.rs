@@ -162,7 +162,7 @@ fn golden_frames_per_output_format() {
         // image source d'un format à l'autre.
         let rgba = unsafe {
             let mut player = Player::open(&screen, &webcam, &gpu).expect("ouvrir les sources");
-            player.present_frame(&comp, &cfg, AT_SEC).expect("composer la frame");
+            player.present_frame(&comp, &cfg, AT_SEC, None, 0).expect("composer la frame");
             comp.readback_resized(w, h).expect("readback")
         };
 
@@ -240,7 +240,7 @@ fn golden_side_by_side_webcam_is_not_stretched() {
 
     let rgba = unsafe {
         let mut player = Player::open(&screen, &webcam, &gpu).expect("ouvrir les sources");
-        player.present_frame(&comp, &cfg, AT_SEC).expect("composer");
+        player.present_frame(&comp, &cfg, AT_SEC, None, 0).expect("composer");
         comp.readback_resized(w, h).expect("readback")
     };
     let path = out_dir.join("side-by-side.ppm");
@@ -308,7 +308,7 @@ fn golden_cropped_clip_is_not_stretched() {
 
     let rgba = unsafe {
         let mut player = Player::open(&screen, &webcam, &gpu).expect("ouvrir les sources");
-        player.present_frame(&comp, &cfg, AT_SEC).expect("composer");
+        player.present_frame(&comp, &cfg, AT_SEC, None, 0).expect("composer");
         comp.readback_resized(w, h).expect("readback")
     };
     let path = out_dir.join("cropped-clip.ppm");

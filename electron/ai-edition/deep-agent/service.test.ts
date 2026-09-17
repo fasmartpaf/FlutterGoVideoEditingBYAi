@@ -471,6 +471,16 @@ describe("the prompt when the user has turned project edits off", () => {
 		expect(SYSTEM_PROMPT).not.toMatch(/PROJECT EDITS ARE CURRENTLY DISABLED/);
 	});
 
+	it("uses proposal-only wording when Settings edits are ON but authority is proposal_only", () => {
+		const prompt = buildSystemPrompt({
+			editsAllowed: true,
+			mutationMode: "proposal_only",
+		});
+		expect(prompt).toMatch(/MUTATION AUTHORITY: PROPOSAL_ONLY/);
+		expect(prompt).not.toMatch(/PROJECT EDITS ARE CURRENTLY DISABLED/);
+		expect(prompt).toMatch(/Never say Project edits are disabled/i);
+	});
+
 	it("pins the live open project onto the turn so the model does not ask if footage exists", () => {
 		const prompt = buildSystemPrompt({
 			editsAllowed: true,

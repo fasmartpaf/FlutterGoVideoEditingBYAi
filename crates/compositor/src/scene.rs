@@ -19,6 +19,17 @@ pub struct SceneClip {
     /// Une source sans piste audio décodable garde sa durée via du silence natif.
     #[serde(default)]
     pub has_audio: bool,
+    /// Incoming join dissolve half-window (seconds). `Some(0)` = hard CUT.
+    /// `None` → legacy default `CUT_FADE_HALF_SEC` (0.35). Additive / optional.
+    #[serde(default)]
+    pub incoming_fade_half_sec: Option<f64>,
+    /// Transition Library native mode (0=cut, 1=ab_dissolve, 2+=wipe/slide/…).
+    /// Absent → derive from fade half only (legacy).
+    #[serde(default)]
+    pub incoming_transition_mode: Option<u32>,
+    /// Registry id for diagnostics (optional).
+    #[serde(default)]
+    pub incoming_transition_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

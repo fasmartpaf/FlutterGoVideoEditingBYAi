@@ -274,6 +274,15 @@ unsafe fn swap_clip_pooled(
     Ok(())
 }
 
+/// Secondary FROM decoder for true A/B live preview (parity with export walk).
+/// Kept on the active player so scrub into a transition window still samples
+/// progressing outgoing media — not a frozen hold frame.
+struct AbFromDecoder {
+    path: String,
+    end_sec: f64,
+    dec: Decoder,
+}
+
 /// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
 /// Partagé avec la GUI standalone (`app.rs`).
 pub struct Player {
@@ -288,6 +297,8 @@ pub struct Player {
     has_current_frame: bool,
     use_current_on_next_step: bool,
     idx: u32,
+    /// Live A/B FROM — previous clip's screen decoder (Metal). `None` on clip 0 / cut.
+    ab_from: Option<AbFromDecoder>,
 }
 
 impl Player {
@@ -307,7 +318,100 @@ impl Player {
             has_current_frame: false,
             use_current_on_next_step: false,
             idx: 0,
+            ab_from: None,
         })
+    }
+
+    /// Open / refresh the secondary FROM decoder for the previous clip.
+    /// Used when advancing or scrubbing onto a clip with an incoming A/B transition.
+    unsafe fn ensure_ab_from(&mut self, path: &str, end_sec: f64) {
+        let needs_open = self
+            .ab_from
+            .as_ref()
+            .map(|a| a.path != path || (a.end_sec - end_sec).abs() > 1e-4)
+            .unwrap_or(true);
+        if !needs_open {
+            return;
+        }
+        match Decoder::open(path, &self.gpu) {
+            Ok(dec) => {
+                self.ab_from = Some(AbFromDecoder {
+                    path: path.to_string(),
+                    end_sec,
+                    dec,
+                });
+            }
+            Err(e) => {
+                eprintln!("[live] ab_from open failed ({path}): {e:#}");
+                self.ab_from = None;
+            }
+        }
+    }
+
+    fn clear_ab_from(&mut self) {
+        self.ab_from = None;
+    }
+
+    /// Bind progressing FROM texture for the current source time (export-parity A/B).
+    /// On success clears the legacy dissolve hold so Metal preview never mixes freeze+live.
+    /// On failure leaves hold in place as LEGACY_HOLD_FALLBACK (non-Metal / open failure).
+    unsafe fn bind_ab_transition(
+        &mut self,
+        comp: &Compositor,
+        scene: Option<&Scene>,
+        clip_index: usize,
+        source_t: f64,
+    ) {
+        comp.clear_transition_from_frame();
+        let Some(scene) = scene else {
+            return;
+        };
+        if clip_index == 0 {
+            self.clear_ab_from();
+            return;
+        }
+        let Some(clip) = scene.clips.get(clip_index) else {
+            return;
+        };
+        let Some(prev) = scene.clips.get(clip_index - 1) else {
+            return;
+        };
+        let mode = crate::regions::ab_transition_mode(clip);
+        let half_raw = clip
+            .incoming_fade_half_sec
+            .unwrap_or(crate::regions::CUT_FADE_HALF_SEC);
+        if half_raw <= 1e-6 || mode == 0 {
+            self.clear_ab_from();
+            return;
+        }
+        self.ensure_ab_from(&prev.screen_path, prev.source_end_sec);
+        let span = (clip.source_end_sec - clip.source_start_sec).max(0.0);
+        let half = half_raw.min(span * 0.45);
+        let progress =
+            crate::regions::ab_transition_progress(clip_index, &scene.clips, source_t);
+        if progress >= 0.999 {
+            return;
+        }
+        let from_t =
+            crate::regions::ab_from_source_time(prev.source_end_sec, half, progress);
+        let Some(ab) = self.ab_from.as_mut() else {
+            return;
+        };
+        let sought = match ab.dec.seek_to(from_t) {
+            Ok(ptr) if !ptr.is_null() => true,
+            _ => false,
+        };
+        if !sought {
+            return;
+        }
+        let ff = ab.dec.cur_frame();
+        if ff.is_null() {
+            return;
+        }
+        comp.set_transition_mode(mode);
+        comp.set_transition_from_frame(ff);
+        // Prefer live FROM over frozen hold on the supported Metal A/B path.
+        comp.clear_dissolve_hold();
     }
 
     /// Remplace atomiquement la paire de décodeurs du clip actif. Les nouvelles sources sont
@@ -453,7 +557,14 @@ impl Player {
     /// propre EOF — un clip webcam plus court que l'écran, cas normal quand la caméra
     /// s'arrête avant la capture — elle TIENT sa dernière image et laisse l'écran
     /// continuer seul, plutôt que de reboucler au début.
-    pub unsafe fn step(&mut self, comp: &Compositor, cfg: &Cfg, target_source_time: f64) -> Result<bool> {
+    pub unsafe fn step(
+        &mut self,
+        comp: &Compositor,
+        cfg: &Cfg,
+        target_source_time: f64,
+        scene: Option<&Scene>,
+        clip_index: usize,
+    ) -> Result<bool> {
         let use_current = self.use_current_on_next_step;
         self.use_current_on_next_step = false;
 
@@ -532,7 +643,10 @@ impl Player {
 
         self.has_current_frame = true;
         self.sync_time(comp);
+        let source_t = self.sdec.cur_time_sec();
+        self.bind_ab_transition(comp, scene, clip_index, source_t);
         comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
+        comp.clear_transition_from_frame();
         self.idx = self.idx.wrapping_add(1);
         Ok(true)
     }
@@ -551,7 +665,13 @@ impl Player {
     }
 
     /// Recompose la frame courante (déjà décodée) — rafraîchit après un changement de param.
-    pub unsafe fn recompose(&self, comp: &Compositor, cfg: &Cfg) -> Result<bool> {
+    pub unsafe fn recompose(
+        &mut self,
+        comp: &Compositor,
+        cfg: &Cfg,
+        scene: Option<&Scene>,
+        clip_index: usize,
+    ) -> Result<bool> {
         if !self.has_current_frame {
             return Ok(false);
         }
@@ -561,8 +681,11 @@ impl Player {
             return Ok(false);
         }
         self.sync_time(comp);
+        let source_t = self.sdec.cur_time_sec();
+        self.bind_ab_transition(comp, scene, clip_index, source_t);
         let f = self.idx.saturating_sub(1);
         comp.compose_frame(sf, wf, f as f32, cfg)?;
+        comp.clear_transition_from_frame();
         Ok(true)
     }
 
@@ -571,7 +694,14 @@ impl Player {
     /// "compte de frames" qui rewindait tout au frame 0 pour le moindre seek arrière et n'avait
     /// aucun raccourci keyframe pour les seeks avant lointains (lent ET, combiné au bug de
     /// `set_time`, incorrect au-delà de 6s sur un enregistrement réel).
-    pub unsafe fn present_frame(&mut self, comp: &Compositor, cfg: &Cfg, target_sec: f64) -> Result<bool> {
+    pub unsafe fn present_frame(
+        &mut self,
+        comp: &Compositor,
+        cfg: &Cfg,
+        target_sec: f64,
+        scene: Option<&Scene>,
+        clip_index: usize,
+    ) -> Result<bool> {
         let sf = self.sdec.seek_to(target_sec)?;
         let wf = self
             .wdec
@@ -582,12 +712,19 @@ impl Player {
         }
         self.has_current_frame = true;
         self.use_current_on_next_step = false;
-        comp.clear_dissolve_hold();
+        // Do NOT clear dissolve_hold here — bind_ab clears it when live FROM works;
+        // LEGACY_HOLD_FALLBACK remains for backends without transition_from.
+        if clip_index == 0 {
+            comp.clear_dissolve_hold();
+            self.clear_ab_from();
+        }
         self.sync_time(comp);
         // "idx" ne sert plus qu'au fallback fixture (jamais lu si une scène est posée) — dérivé
         // du temps réel pour rester cohérent si jamais consulté.
         self.idx = (target_sec * self.sdec.fps()).round().max(0.0) as u32;
+        self.bind_ab_transition(comp, scene, clip_index, target_sec);
         comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
+        comp.clear_transition_from_frame();
         Ok(true)
     }
 }
@@ -1214,7 +1351,13 @@ unsafe fn advance_to_next_scene_clip(
     };
     if next_index == 0 {
         comp.clear_dissolve_hold();
+        player.clear_ab_from();
     } else {
+        let prev = &scene.clips[*active_clip_index];
+        // Arm live A/B FROM for the outgoing clip (export parity).
+        player.ensure_ab_from(&prev.screen_path, prev.source_end_sec);
+        // LEGACY_HOLD_FALLBACK: keep frozen hold for backends without transition_from
+        // (D3D11/wgpu stubs). Metal bind_ab clears this once live FROM is bound.
         let sf = player.sdec.cur_frame();
         if !sf.is_null() {
             comp.capture_dissolve_hold(sf);
@@ -1461,6 +1604,17 @@ unsafe fn render_thread(
                             active_webcam_offset_sec,
                         ) {
                             active_clip_index = index;
+                            if index > 0 {
+                                if let Some(prev) = base_scene.clips.get(index - 1) {
+                                    player.ensure_ab_from(
+                                        &prev.screen_path,
+                                        prev.source_end_sec,
+                                    );
+                                }
+                            } else {
+                                player.clear_ab_from();
+                                comp.clear_dissolve_hold();
+                            }
                         } else {
                             eprintln!(
                                 "[live] set_active_clip: sources absentes de la scène (screen=\"{}\", webcam=\"{}\")",
@@ -1614,7 +1768,13 @@ unsafe fn render_thread(
         last = now;
         let mut stepped = false;
         if let Some(target) = requested {
-            if player.present_frame(&comp, &cfg, target)? {
+            if player.present_frame(
+                &comp,
+                &cfg,
+                target,
+                full_scene.as_ref(),
+                active_clip_index,
+            )? {
                 stepped = true;
                 // Un seek en pause compose UNE fois, exactement comme un changement de param :
                 // la frame webcam a changé, donc son masque aussi, et il arrivera deux composes
@@ -1691,7 +1851,13 @@ unsafe fn render_thread(
                 let screen_time_before_step = full_scene.as_ref().map(|_| player.screen_time_sec());
                 let before = player.screen_time_sec();
                 let target = before + acc;
-                let committed = player.step(&comp, &cfg, target)?;
+                let committed = player.step(
+                    &comp,
+                    &cfg,
+                    target,
+                    full_scene.as_ref(),
+                    active_clip_index,
+                )?;
                 // Filet de sécurité : un clip NON trimmé (source_end_sec == durée totale du
                 // fichier) peut ne jamais franchir le seuil ci-dessus si la dernière frame
                 // réelle a un PTS strictement inférieur à `source_end_sec` déclaré — `step()`
@@ -1734,14 +1900,14 @@ unsafe fn render_thread(
         } else if first || ip_changed || scene_changed || clip_changed || resized {
             // pause : recompose la frame courante (param / scène / clip / résolution changés).
             (settle_until, last_settle) = open_settle_window(now);
-            let _ = player.recompose(&comp, &cfg);
+            let _ = player.recompose(&comp, &cfg, full_scene.as_ref(), active_clip_index);
             stepped = true;
         } else if should_settle(now, settle_until, last_settle) {
             // Rien n'a changé, mais un masque de segmentation peut encore être en vol : on
             // recompose à la cadence de la segmentation (pas à celle de la boucle) jusqu'à ce
             // que la fenêtre expire.
             last_settle = now;
-            let _ = player.recompose(&comp, &cfg);
+            let _ = player.recompose(&comp, &cfg, full_scene.as_ref(), active_clip_index);
             stepped = true;
         }
 

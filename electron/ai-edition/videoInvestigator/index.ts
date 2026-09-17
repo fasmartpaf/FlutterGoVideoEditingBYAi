@@ -1,3 +1,14 @@
+export type { ClaimPromotionSet, InvestigatorClaimQueries, PromotedClaim } from "../claimPromotion";
+/** Claim-promotion query helpers (Reuse Milestone 2) — additive surface. */
+export {
+	createInvestigatorClaimQueries,
+	queryClaimEvidence,
+	queryClaimsInRange,
+	queryContradictedClaims,
+	queryUnresolvedClaims,
+	selectClaimsForLazyVerification,
+	suggestPromotionEvidence,
+} from "../claimPromotion";
 export { appendInvestigatorToUserMessage } from "./attachBriefing";
 export {
 	buildInvestigatorInternalBriefing,
@@ -9,9 +20,22 @@ export {
 	planInvestigation,
 	summarizeLedgerGaps,
 } from "./plan";
+export type {
+	InvestigationIntent,
+	InvestigatorRole,
+	RolePolicyPlan,
+	RolePolicyTrace,
+} from "./rolePolicy";
+export {
+	classifyInvestigationIntents,
+	INVESTIGATOR_V1_1_PROVIDER_ID,
+	planInvestigationV11,
+	rankCandidateRanges,
+} from "./rolePolicy";
 export {
 	type RunInvestigatorInput,
 	runMasterVideoInvestigatorV1,
+	runMasterVideoInvestigatorV1_1,
 	shouldRunInvestigator,
 } from "./run";
 export {

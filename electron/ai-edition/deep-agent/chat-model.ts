@@ -419,6 +419,7 @@ export async function createOpenScreenChatModel(
 		return new ChatAnthropic({
 			apiKey: config.apiKey,
 			model: config.model,
+			maxRetries: 2,
 			// ponytail: ChatAnthropic accepts `anthropicApiUrl` for self-hosted
 			// Anthropic-compatible endpoints — MiniMax uses this on the wire path.
 			...(config.baseUrl ? { anthropicApiUrl: config.baseUrl } : {}),
@@ -448,6 +449,10 @@ export async function createOpenScreenChatModel(
 	return new ChatOpenAI({
 		...(apiKey ? { apiKey } : {}),
 		model: config.model,
+		// Recovery 3: bound LangChain's default maxRetries (6) so 429/transient
+		// errors do not spin for tens of seconds. Hard quota still fails fast
+		// via deliveryStatus classification (retryable=false).
+		maxRetries: 2,
 		...(reasoningOptions.reasoning ? { reasoning: reasoningOptions.reasoning } : {}),
 		...(reasoningOptions.useResponsesApi ? { useResponsesApi: true } : {}),
 		...(reasoningOptions.modelKwargs ? { modelKwargs: reasoningOptions.modelKwargs } : {}),

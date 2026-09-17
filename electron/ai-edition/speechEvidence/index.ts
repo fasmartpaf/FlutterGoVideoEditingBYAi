@@ -4,6 +4,12 @@ export {
 	writeSpeechCache,
 } from "./cache";
 export {
+	classifySpeechFailureReason,
+	humanSafeSpeechFailureReason,
+	SPEECH_FAILURE_REASONS,
+	type SpeechFailureReason,
+} from "./failureReason";
+export {
 	formatSpeechSegmentsForUser,
 	isUnavailableTranscriptionWording,
 	resolveInjectedSpeechStatus,
@@ -24,6 +30,12 @@ export {
 } from "./map";
 export { prepareSpeechEvidenceForTurn } from "./prepare";
 export { probeAudioStream } from "./probe";
+export {
+	applySpeechStatusResolution,
+	filterUsableSpeechSegments,
+	isUsableSpeechSegment,
+	resolveSpeechEvidenceStatus,
+} from "./resolveStatus";
 export type {
 	PreparedSpeechEvidence,
 	SpeechEvidence,
@@ -32,3 +44,4 @@ export type {
 	SpeechSegment,
 	SpeechWord,
 } from "./types";
+export { SPEECH_EVIDENCE_STATUSES } from "./types";

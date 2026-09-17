@@ -31,14 +31,36 @@ pub fn incoming_dissolve(
     source_start: f64,
     source_end: f64,
 ) -> f32 {
+    incoming_dissolve_with_half(
+        clip_index,
+        clip_count,
+        source_t,
+        source_start,
+        source_end,
+        CUT_FADE_HALF_SEC,
+    )
+}
+
+/// Same as [`incoming_dissolve`] with an explicit half-window (0 = hard cut).
+pub fn incoming_dissolve_with_half(
+    clip_index: usize,
+    clip_count: usize,
+    source_t: f64,
+    source_start: f64,
+    source_end: f64,
+    half_sec: f64,
+) -> f32 {
     if clip_count < 2 || clip_index == 0 {
+        return 0.0;
+    }
+    if !(half_sec > 1e-6) {
         return 0.0;
     }
     let span = source_end - source_start;
     if !(span > 1e-4) {
         return 0.0;
     }
-    let half = CUT_FADE_HALF_SEC.min(span * 0.45);
+    let half = half_sec.min(span * 0.45);
     1.0 - smooth01((source_t - source_start) / half)
 }
 
@@ -68,13 +90,69 @@ pub fn footage_fade_opacity(
     let Some(clip) = clips.get(clip_index) else {
         return 0.0;
     };
-    incoming_dissolve(
+    let half = clip
+        .incoming_fade_half_sec
+        .unwrap_or(CUT_FADE_HALF_SEC);
+    incoming_dissolve_with_half(
         clip_index,
         clips.len(),
         source_t,
         clip.source_start_sec,
         clip.source_end_sec,
+        half,
     )
+}
+
+/// Progress 0→1 through an incoming A/B transition window (0 = full FROM, 1 = full TO).
+pub fn ab_transition_progress(
+    clip_index: usize,
+    clips: &[crate::scene::SceneClip],
+    source_t: f64,
+) -> f32 {
+    let Some(clip) = clips.get(clip_index) else {
+        return 1.0;
+    };
+    if clip_index == 0 || clips.len() < 2 {
+        return 1.0;
+    }
+    let half = clip
+        .incoming_fade_half_sec
+        .unwrap_or(CUT_FADE_HALF_SEC);
+    if !(half > 1e-6) {
+        return 1.0;
+    }
+    let span = clip.source_end_sec - clip.source_start_sec;
+    if !(span > 1e-4) {
+        return 1.0;
+    }
+    let half = half.min(span * 0.45);
+    let into = (source_t - clip.source_start_sec).max(0.0);
+    smooth01(into / half)
+}
+
+/// Source time on the *previous* clip that should be sampled for true A/B motion.
+/// Outgoing continues through its last `half` seconds while TO advances.
+pub fn ab_from_source_time(
+    prev_source_end_sec: f64,
+    half_sec: f64,
+    progress_01: f32,
+) -> f64 {
+    let half = half_sec.max(0.0);
+    let p = (progress_01 as f64).clamp(0.0, 1.0);
+    (prev_source_end_sec - half + p * half).max(0.0)
+}
+
+/// Native transition mode from scene (default dissolve=1 when fade active).
+pub fn ab_transition_mode(clip: &crate::scene::SceneClip) -> u32 {
+    if let Some(m) = clip.incoming_transition_mode {
+        return m;
+    }
+    let half = clip.incoming_fade_half_sec.unwrap_or(CUT_FADE_HALF_SEC);
+    if half > 1e-6 {
+        1
+    } else {
+        0
+    }
 }
 
 /// Last frame of the outgoing clip, kept so the incoming clip can dissolve over it.
@@ -1237,11 +1315,23 @@ mod cut_fade {
     }
 
     #[test]
-    fn the_first_clip_does_not_dissolve_and_the_last_does_not_fade_to_paper() {
+	fn the_first_clip_does_not_dissolve_and_the_last_does_not_fade_to_paper() {
         assert_eq!(incoming_dissolve(0, 2, 0.0, 0.0, 5.0), 0.0);
         assert!(incoming_dissolve(1, 2, 5.0, 5.0, 10.0) > 0.95);
         assert!(incoming_dissolve(0, 2, 5.0, 0.0, 5.0) < 0.05);
         assert!(incoming_dissolve(1, 2, 10.0, 5.0, 10.0) < 0.05);
+    }
+
+    #[test]
+    fn ab_from_source_time_progresses_through_outgoing_tail() {
+        let end = 10.0;
+        let half = 0.4;
+        let t0 = ab_from_source_time(end, half, 0.0);
+        let t1 = ab_from_source_time(end, half, 1.0);
+        let mid = ab_from_source_time(end, half, 0.5);
+        assert!((t0 - (end - half)).abs() < 1e-9);
+        assert!((t1 - end).abs() < 1e-9);
+        assert!(mid > t0 && mid < t1);
     }
 
     #[test]

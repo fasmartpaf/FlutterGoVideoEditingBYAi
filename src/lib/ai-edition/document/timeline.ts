@@ -222,14 +222,24 @@ export function resolvePlaybackSegments(
 		const pieces = kept.filter((piece) => piece.endSec > piece.startSec);
 		pieces.forEach((piece, i) => {
 			const dur = piece.endSec - piece.startSec;
-			result.push({
+			// Trim-created abutments must stay CUT unless explicitly authored on a
+			// real document clip. Spreading incomingTransition onto every _segN
+			// caused autonomous dissolve spam at trim joins (V5).
+			const segment: PlaybackSegment = {
 				...clip,
 				id: pieces.length === 1 ? clip.id : `${clip.id}_seg${i + 1}`,
 				sourceStartSec: piece.startSec,
 				sourceEndSec: piece.endSec,
 				timelineStartSec: timelineCursor,
 				timelineEndSec: timelineCursor + dur,
-			});
+			};
+			if (i > 0) {
+				segment.incomingTransition = {
+					kind: "cut",
+					transitionId: "openscreen.cut",
+				};
+			}
+			result.push(segment);
 			timelineCursor += dur;
 		});
 	}
@@ -336,6 +346,45 @@ export function projectRawTimelineSecToPlayback(
 	// Past every kept frame: programme end plus whatever raw time hangs off the end (identity when
 	// there are no clips at all). A value ≥ programme length just means the mixer skips the track.
 	return landed ?? outCursor + Math.max(0, rawSec - lastRawEnd);
+}
+
+/**
+ * Inverse of {@link projectRawTimelineSecToPlayback} for the trim-only case (no speed):
+ * map a trim-COMPRESSED playback second back onto the RAW virtual ruler where Zoom /
+ * the editor playhead / `startMs` caches live.
+ *
+ * Returns null when `playbackSec` falls outside every kept playback segment.
+ * Speed regions are not inverted here — callers that need speed-aware RAW must
+ * not use this helper for placement.
+ */
+export function projectPlaybackSecToRawTimelineSec(
+	clips: AxcutClip[],
+	trimRanges: AxcutTrimRange[],
+	playbackSec: number,
+): number | null {
+	if (!Number.isFinite(playbackSec)) return null;
+	const segs = resolvePlaybackSegments(clips, trimRanges);
+	if (segs.length === 0) return null;
+	const orderedClips = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+	for (const seg of segs) {
+		if (playbackSec < seg.timelineStartSec - 1e-6 || playbackSec > seg.timelineEndSec + 1e-6) {
+			continue;
+		}
+		const src = seg.sourceStartSec + (playbackSec - seg.timelineStartSec);
+		const clipId = seg.id.replace(/_seg\d+$/, "");
+		const clip =
+			orderedClips.find((c) => c.id === clipId) ??
+			orderedClips.find((c) => c.id === seg.id) ??
+			orderedClips.find((c) => c.assetId === seg.assetId);
+		if (!clip) return src;
+		const clipSrcLen = (clip.sourceEndSec ?? clip.sourceStartSec) - clip.sourceStartSec;
+		const clipRawLen = clip.timelineEndSec - clip.timelineStartSec;
+		if (!(clipSrcLen > 1e-9) || !(clipRawLen > 1e-9)) {
+			return clip.timelineStartSec + (src - clip.sourceStartSec);
+		}
+		return clip.timelineStartSec + ((src - clip.sourceStartSec) / clipSrcLen) * clipRawLen;
+	}
+	return null;
 }
 
 export function invertIntervals(intervals: Interval[], durationSec: number): Interval[] {

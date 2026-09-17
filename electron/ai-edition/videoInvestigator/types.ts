@@ -20,6 +20,7 @@ export type InvestigationStopReason =
 	| "budget_exhausted"
 	| "no_uncertainty"
 	| "deterministic_edit_skip"
+	| "media_not_required"
 	| "no_ledger"
 	| "insufficient_evidence";
 
@@ -122,10 +123,16 @@ export interface InvestigationMetrics {
 	roiExtractMs: number;
 	transcriptRetrievalMs: number;
 	cursorRetrievalMs: number;
-	/** Investigator V1 itself: 0 (deterministic). Main agent call is separate. */
+	/** Investigator itself: 0 (deterministic). Main agent call is separate. */
 	investigatorModelCalls: 0;
 	stepsUsed: number;
 	toolCalls: number;
+	/** V1.1 role-policy extras */
+	policyVersion?: "v1" | "v1.1";
+	rankedRangeCount?: number;
+	lazyScheduledClaims?: number;
+	skippedIrrelevantClaims?: number;
+	earlyStop?: boolean;
 }
 
 export interface InvestigationEvidenceSet {
@@ -151,4 +158,7 @@ export interface InvestigationEvidenceSet {
 		byteLength: number;
 		note: string;
 	}>;
+	/** V1.1 role-policy trace (optional; absent on pure V1 runs). */
+	rolePolicy?: import("./rolePolicy").RolePolicyTrace;
+	providerId?: string;
 }

@@ -26,14 +26,35 @@ export interface OcrLine {
 	box?: NormalizedBox;
 }
 
+/**
+ * Honest OCR outcome — never treat engine absence as "no text on screen".
+ * - available: engine ran and produced lines
+ * - no_text: engine ran; no readable glyphs
+ * - unavailable: engine/binary missing
+ * - failed: engine error
+ */
+export type OcrStatus = "available" | "no_text" | "unavailable" | "failed";
+
 export interface OcrResult {
-	engine: "macos_vision" | "unavailable" | "none";
+	engine: "macos_vision" | "tesseract" | "unavailable" | "none";
+	/** Defaults derived from lines/error when older callers omit it. */
+	status?: OcrStatus;
 	imagePath: string;
 	width: number;
 	height: number;
 	lines: OcrLine[];
 	ms: number;
 	error?: string;
+	/** Cache provenance. */
+	cacheHit?: boolean;
+	preprocess?: {
+		version: string;
+		applied: boolean;
+		inputWidth: number;
+		inputHeight: number;
+		outputWidth: number;
+		outputHeight: number;
+	};
 }
 
 export interface SourceResCrop {
@@ -95,6 +116,9 @@ export interface VisualSpecialistBudgets {
 	maxOcrCalls: number;
 	maxBeforeAfterPairs: number;
 	maxImageBytesTotal: number;
+	maxHighResRoiExtracted: number;
+	maxSpecialistFrames: number;
+	maxRepeatedOcrForSameEvidence: number;
 	/** Specialist itself uses 0 LLM calls in V1 (Vision OCR is native). */
 	maxExtraModelCalls: 0;
 }
@@ -105,6 +129,9 @@ export const DEFAULT_VISUAL_SPECIALIST_BUDGETS: VisualSpecialistBudgets = {
 	maxOcrCalls: 4,
 	maxBeforeAfterPairs: 2,
 	maxImageBytesTotal: 8_000_000,
+	maxHighResRoiExtracted: 5,
+	maxSpecialistFrames: 8,
+	maxRepeatedOcrForSameEvidence: 1,
 	maxExtraModelCalls: 0,
 };
 
@@ -119,6 +146,15 @@ export interface VisualSpecialistMetrics {
 	imageBytes: number;
 	extraModelCalls: 0;
 	engine: string;
+	/** Reuse-pipeline extras (optional for V1 baseline). */
+	dhashMs?: number;
+	sceneProbeMs?: number;
+	preprocessMs?: number;
+	candidatesBeforeDedupe?: number;
+	candidatesAfterDedupe?: number;
+	ocrCacheHits?: number;
+	ocrCacheMisses?: number;
+	providerId?: string;
 }
 
 export interface VisualSpecialistResult {

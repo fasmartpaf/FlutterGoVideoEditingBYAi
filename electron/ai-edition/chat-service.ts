@@ -401,48 +401,80 @@ export async function runChat(
 ): Promise<AiEditionChatResult> {
 	const emit: Required<ChatEventSink> = { ...NOOP_SINK, ...sink };
 	const config = llmConfig.getConfig();
-	if (!config) {
-		return {
-			success: false,
-			error: "No LLM provider configured. Open Settings → AI to configure.",
-		};
-	}
+	const { shouldHandleLocalEditorialWithoutCloud, classifyLocalEditorialTurn } = await import(
+		"./localEditorialChat"
+	);
+	const localEditorialOk = shouldHandleLocalEditorialWithoutCloud(message, projectId);
+	const classified = classifyLocalEditorialTurn(message, projectId);
+	const needsSemanticBrain =
+		classified.executionKind === "semantic_understanding" ||
+		classified.parseStatus === "UNRESOLVED";
 
-	const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
-	if (!def) {
-		return { success: false, error: `Unknown provider: ${config.provider}` };
-	}
-
-	const credential = llmConfig.getCredential(def.id, def.envKeys);
-	const apiKey = credential?.value ?? null;
-	if (!apiKey && def.authKind === "api-key") {
-		return {
-			success: false,
-			error: `No API key for ${def.label}. Add one in Settings → AI, or pick a local agent from the chat.`,
-		};
-	}
-	if (def.authKind === "local-cli" && !config.model) {
-		return {
-			success: false,
-			error: "No local agent selected. Open the Local CLI menu in the chat and pick one.",
-		};
-	}
-	if (def.authKind === "local-cli") {
-		const { formatLocalCliError, listLocalAgents } = await import("./local-agents");
-		const agents = await listLocalAgents();
-		const selected = agents.find(
-			(agent) =>
-				agent.id === config.model ||
-				agent.models?.includes(config.model) ||
-				(agent.path && config.baseUrl === `cli:${agent.path}`),
-		);
-		if (selected && !selected.ready) {
+	// Semantic brain uses the Chat-selected provider — never skip credential gate for it.
+	if (!localEditorialOk || needsSemanticBrain) {
+		if (!config) {
 			return {
 				success: false,
-				error: formatLocalCliError(selected.statusNote ?? "not logged in"),
+				error: "No LLM provider configured. Open Settings → AI to configure.",
 			};
 		}
+
+		const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
+		if (!def) {
+			return { success: false, error: `Unknown provider: ${config.provider}` };
+		}
+
+		const credential = llmConfig.getCredential(def.id, def.envKeys);
+		const apiKey = credential?.value ?? null;
+		if (!apiKey && def.authKind === "api-key") {
+			return {
+				success: false,
+				error: `No API key for ${def.label}. Add one in Settings → AI, or pick a local agent from the chat.`,
+			};
+		}
+		if (def.authKind === "local-cli" && !config.model) {
+			return {
+				success: false,
+				error: "No local agent selected. Open the Local CLI menu in the chat and pick one.",
+			};
+		}
+		if (def.authKind === "local-cli") {
+			const { formatLocalCliError, listLocalAgents } = await import("./local-agents");
+			const agents = await listLocalAgents();
+			const selected = agents.find(
+				(agent) =>
+					agent.id === config.model ||
+					agent.models?.includes(config.model) ||
+					(agent.path && config.baseUrl === `cli:${agent.path}`),
+			);
+			if (selected && !selected.ready) {
+				return {
+					success: false,
+					error: formatLocalCliError(selected.statusNote ?? "not logged in"),
+				};
+			}
+		}
 	}
+
+	const effectiveConfig =
+		config ??
+		({
+			provider: "openai",
+			model: "local-editorial-control",
+			baseUrl: "",
+			reasoningEffort: "none" as const,
+			localAgentPermission: "ask" as const,
+			allowAgentEdits: true,
+		} as import("./llm-config-store").LlmConfig);
+
+	const def =
+		PROVIDER_DEFINITIONS.find((d) => d.id === effectiveConfig.provider) ??
+		PROVIDER_DEFINITIONS.find((d) => d.id === "openai");
+	if (!def) {
+		return { success: false, error: `Unknown provider: ${effectiveConfig.provider}` };
+	}
+	const credential = llmConfig.getCredential?.(def.id, def.envKeys);
+	const apiKey = credential?.value ?? null;
 
 	const sessions = getProjectSessions(projectId);
 	let session = sessions.get(sessionId);
@@ -487,7 +519,7 @@ export async function runChat(
 	session.messages.push(userMessage);
 	persistProject(projectId);
 
-	const editsAllowed = config.allowAgentEdits !== false;
+	const editsAllowed = effectiveConfig.allowAgentEdits !== false;
 
 	// ponytail: NO automatic compaction here. A turn used to first check the
 	// history against a guessed 80k-token budget and, past 70% of it, block on
@@ -525,14 +557,15 @@ export async function runChat(
 	const result = await invokeOpenScreenAgent({
 		document: workingDocument ?? emptyDocumentForTextOnly(projectId),
 		model: {
-			provider: config.provider,
-			model: config.model,
+			provider: effectiveConfig.provider,
+			model: effectiveConfig.model,
 			apiKey: apiKey ?? undefined,
-			baseUrl: config.baseUrl,
-			reasoningEffort: config.reasoningEffort,
-			localAgentPermission: config.localAgentPermission,
+			baseUrl: effectiveConfig.baseUrl,
+			reasoningEffort: effectiveConfig.reasoningEffort,
+			localAgentPermission: effectiveConfig.localAgentPermission,
 			watchGranted:
-				config.localAgentPermission === "always" || llmConfig.isSessionWatchGranted?.() === true,
+				effectiveConfig.localAgentPermission === "always" ||
+				llmConfig.isSessionWatchGranted?.() === true,
 		},
 		history,
 		userMessage: message,
@@ -542,15 +575,25 @@ export async function runChat(
 		cli: env.cli,
 	});
 
-	if (!result.text) {
-		// ponytail: surface the deep-agent's diagnostic so the user can see
-		// *why* the model produced no text (e.g. MiniMax streaming only
-		// thinking blocks, or a non-text content shape that our extractor
-		// missed). Falls back to the generic message when the agent didn't
-		// provide a reason.
+	if (!result.text?.trim()) {
+		// Recovery 3: empty finals are never success. Toast gets user-safe copy;
+		// diagnostic stays in logs / InvokeResult.reason for benchmarks.
+		if (result.reason) {
+			console.warn("[chat-service] agent delivery failure", {
+				status: result.status,
+				failureReason: result.failureReason,
+				providerHttpStatus: result.providerHttpStatus,
+				diagnostic: result.reason.slice(0, 500),
+			});
+		}
 		return {
 			success: false,
-			error: result.reason ?? "Empty response from model.",
+			status: result.status ?? "analysis_error",
+			failureReason: result.failureReason,
+			providerHttpStatus: result.providerHttpStatus,
+			error:
+				result.userMessage ??
+				"OpenScreen couldn't complete this analysis. Your project was not changed.",
 		};
 	}
 
@@ -566,15 +609,56 @@ export async function runChat(
 
 	return {
 		success: true,
+		status: "completed",
 		assistantMessage,
 		// ponytail: belt and braces on `editsAllowed`. This returned document is
 		// the ONLY path to disk (ChatStripPanel → applyAgentDocument → saveDocument),
 		// so it is where a write that somehow escaped the executor's guard would
 		// still land. Cheap, and it makes the setting's guarantee structural
 		// rather than dependent on one predicate holding everywhere.
-		document: result.mutated && editsAllowed ? result.document : undefined,
+		// UI Consent: when a consentable review card is present, do NOT auto-ship
+		// a mutated document — the user must Approve via applyPreview.run.
+		// Single Mutation Authority: semantic/editorial and read-only turns never
+		// auto-ship timeline mutations from the agent tool loop.
+		document: (() => {
+			const mode = result.mutationAuthority?.mutationMode;
+			const fpBefore = result.mutationAuthority?.documentFingerprintBefore;
+			const fpAfter = result.mutationAuthority?.documentFingerprintAfterReasoning;
+			const editorialChanged =
+				typeof fpBefore === "string" &&
+				typeof fpAfter === "string" &&
+				fpBefore.length > 0 &&
+				fpAfter.length > 0 &&
+				fpBefore !== fpAfter;
+			const hasConsentableCard = result.editReview?.cards.some((c) => c.canApply) === true;
+			/**
+			 * CRITICAL PRODUCT PATH:
+			 * Professional Edit Orchestrator runs verified Apply Preview commits while
+			 * the agent tool loop stays proposal_only. Those commits must ship to the
+			 * renderer — otherwise Chat claims success and the live timeline never updates.
+			 */
+			const verifiedOrchestratorShip =
+				editsAllowed &&
+				result.mutated &&
+				!hasConsentableCard &&
+				result.mutationAuthority?.finalResponseClaim === "verified_applied";
+			if (verifiedOrchestratorShip) {
+				return result.document;
+			}
+			if (mode === "proposal_only" || mode === "read_only") {
+				if (editorialChanged) return undefined;
+				// Transcript-only / non-editorial fingerprint changes may still ship.
+				return result.mutated && editsAllowed ? result.document : undefined;
+			}
+			if (result.mutated && editsAllowed && !hasConsentableCard) {
+				return result.document;
+			}
+			return undefined;
+		})(),
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 		userMessageCheckpointId: userMessage.checkpointId ?? undefined,
+		editReview: result.editReview,
+		mutationAuthority: result.mutationAuthority,
 	};
 }
 

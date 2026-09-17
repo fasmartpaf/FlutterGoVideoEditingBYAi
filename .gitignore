@@ -135,3 +135,6 @@ workbench/fixtures/
 tmp_handoff.md
 /tmp/
 tmp/
+
+# Semantic Brain V1 local artifacts (may contain decrypted keys)
+electron/ai-edition/localEditorialChat/_artifacts/

@@ -50,6 +50,23 @@ export interface PrepareVisualEvidenceInput {
 	changeDeps?: Partial<ChangeScoreDeps>;
 	/** When provided, overrides promptWantsVisualEvidence for this prepare call. */
 	contextNeeds?: MediaContextNeeds;
+	/**
+	 * Hard cap after budget/refinement (Video Memory retrieval path).
+	 * Defaults to MAX_VISUAL_FRAMES. Use 0 to skip attachment while still allowing
+	 * callers to short-circuit via skipVisualAttachment.
+	 */
+	maxFrames?: number;
+	/** Force skip visual attachment (speech / direct_edit retrieval). */
+	skipVisualAttachment?: boolean;
+	/**
+	 * Coverage-first candidate pick (Retrieval whole-media): duration buckets
+	 * before interaction/change dominance. FULL context leaves this unset.
+	 */
+	coverageFirst?: boolean;
+	/** Restrict candidates to a source-time window (local / bounded queries). */
+	sourceWindowSec?: { startSec: number; endSec: number };
+	/** When set with coverageFirst / retrieval, compute focus window after duration probe. */
+	queryScope?: import("../videoMemory/queryScope").QueryScope;
 }
 
 export interface PrepareVisualEvidenceResult {
@@ -121,9 +138,13 @@ export async function prepareVisualEvidenceForTurn(
 	const plain = toAgentUserMessage(input.userMessage);
 	// Canonical: classifyMediaContextNeeds owns visual routing (incl. Bug-2 families).
 	const needs = input.contextNeeds ?? classifyMediaContextNeeds(input.userMessage);
-	const wantsVisual = needs.visual;
+	const wantsVisual = needs.visual && !input.skipVisualAttachment;
+	const frameCap =
+		typeof input.maxFrames === "number" && Number.isFinite(input.maxFrames)
+			? Math.max(0, Math.floor(input.maxFrames))
+			: MAX_VISUAL_FRAMES;
 
-	if (!wantsVisual) {
+	if (!wantsVisual || frameCap === 0) {
 		return { userMessage: plain, visualFramesSupplied: false, prepared: null };
 	}
 	if (!providerSupportsAttachedVisualFrames(input.provider)) {
@@ -152,6 +173,13 @@ export async function prepareVisualEvidenceForTurn(
 		return { userMessage: plain, visualFramesSupplied: false, prepared: null };
 	}
 
+	let sourceWindowSec = input.sourceWindowSec;
+	if (!sourceWindowSec && input.queryScope) {
+		const { parseFocusWindow } = await import("../videoMemory/queryScope");
+		const w = parseFocusWindow(input.userMessage, durationSec, input.queryScope);
+		if (w) sourceWindowSec = { startSec: w.startSec, endSec: w.endSec };
+	}
+
 	const timings = emptyTimings();
 	const selectStarted = Date.now();
 
@@ -171,14 +199,34 @@ export async function prepareVisualEvidenceForTurn(
 		}
 	}
 
-	const candidates = applyVisualFrameBudget(
-		collectVisualEvidenceCandidates({
-			document: workingDocument,
-			assetId: asset.id,
-			durationSec,
-			interactions,
-		}),
-	);
+	const collected = collectVisualEvidenceCandidates({
+		document: workingDocument,
+		assetId: asset.id,
+		durationSec,
+		interactions,
+	});
+	const windowed = sourceWindowSec
+		? collected.filter(
+				(c) =>
+					c.sourceTimeSec >= sourceWindowSec.startSec - 0.2 &&
+					c.sourceTimeSec <= sourceWindowSec.endSec + 0.2,
+			)
+		: collected;
+	const pool = windowed.length ? windowed : collected;
+
+	let candidates;
+	if (input.coverageFirst) {
+		const { applyCoverageFirstCandidateBudget } = await import("../videoMemory/coverage");
+		// Leave ~35%+ of extract cap for change midpoints (Stage B raw material).
+		const refineReserve = Math.max(2, Math.floor(frameCap * 0.35));
+		const initialSlots = Math.max(
+			3,
+			Math.min(frameCap - refineReserve, Math.ceil(frameCap * 0.55)),
+		);
+		candidates = applyCoverageFirstCandidateBudget(pool, initialSlots, durationSec);
+	} else {
+		candidates = applyVisualFrameBudget(pool, frameCap);
+	}
 	timings.candidateSelectionMs = Date.now() - selectStarted;
 
 	if (candidates.length === 0) {
@@ -203,7 +251,13 @@ export async function prepareVisualEvidenceForTurn(
 		return {
 			userMessage: plain,
 			visualFramesSupplied: false,
-			prepared: { frames: [], timings, attached: false, changes: [] },
+			prepared: {
+				frames: [],
+				timings,
+				attached: false,
+				changes: [],
+				sourceDurationSec: durationSec,
+			},
 		};
 	}
 
@@ -235,15 +289,17 @@ export async function prepareVisualEvidenceForTurn(
 	let refinementAdded = 0;
 	for (let level = 1; level <= MAX_REFINEMENT_LEVELS; level++) {
 		if (refinementAdded >= MAX_REFINEMENT_FRAMES) break;
-		if (frames.length >= MAX_VISUAL_FRAMES) break;
+		if (frames.length >= frameCap) break;
 
 		const plan = planRefinementMidpoints(changes, {
 			level,
 			alreadyPlanned: refinementAdded,
+			includeModerateLargeGaps: Boolean(input.coverageFirst),
+			moderateMinGapSec: 3.0,
 		});
 		const room = Math.min(
 			MAX_REFINEMENT_FRAMES - refinementAdded,
-			MAX_VISUAL_FRAMES - frames.length,
+			frameCap - frames.length,
 			plan.midpoints.length,
 		);
 		if (room <= 0) break;
@@ -295,8 +351,8 @@ export async function prepareVisualEvidenceForTurn(
 
 	timings.refinementFrameCount = refinementAdded;
 
-	if (frames.length > MAX_VISUAL_FRAMES) {
-		frames = cullFramesToBudget(frames, changes, MAX_VISUAL_FRAMES);
+	if (frames.length > frameCap) {
+		frames = cullFramesToBudget(frames, changes, frameCap);
 		try {
 			const scored = await scoreAdjacentVisualFrames(frames, changeDeps);
 			timings.changeDetectionMs = (timings.changeDetectionMs ?? 0) + scored.changeDetectionMs;
@@ -335,6 +391,6 @@ export async function prepareVisualEvidenceForTurn(
 	return {
 		userMessage: toAgentUserMessage(content),
 		visualFramesSupplied: true,
-		prepared: { frames, timings, attached: true, changes },
+		prepared: { frames, timings, attached: true, changes, sourceDurationSec: durationSec },
 	};
 }

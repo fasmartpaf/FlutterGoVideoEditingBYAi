@@ -30,6 +30,15 @@ export {
 	TARGET_STORY_OBJECTIVES,
 	TARGET_STORY_PACINGS,
 } from "./types";
+export type { TargetStoryInput, TargetStoryQualityRubric, TargetStoryV1 } from "./v1";
+export {
+	buildTargetStoryV1,
+	buildTargetStoryV1PromptSection,
+	constrainTargetStoryWithV1,
+	resetTargetStoryV1SeqForTests,
+	TARGET_STORY_V1_PROVIDER_ID,
+	targetStoryFromV1,
+} from "./v1";
 export {
 	extractTargetStoryJson,
 	normalizeBeatPurpose,

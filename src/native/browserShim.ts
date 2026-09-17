@@ -523,6 +523,21 @@ function createShimBridgeClient() {
 				persistChat();
 				return Promise.resolve({ success: true, assistantMessage });
 			},
+			applyPreviewRun: () =>
+				Promise.resolve({
+					success: false,
+					phase: "apply_failed",
+					mutationsApplied: 0 as const,
+					userMessage: "[browser-shim] Apply preview requires the Electron main process.",
+					warnings: [],
+					additionalModelCalls: 0 as const,
+					latencyMs: {
+						preflightMs: 0,
+						consentMintMs: 0,
+						applyVerifyMs: 0,
+						totalMs: 0,
+					},
+				}),
 			chatUndoLastBatch: () =>
 				Promise.resolve({
 					success: false,

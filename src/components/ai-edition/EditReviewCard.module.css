@@ -1,0 +1,166 @@
+.card {
+	margin-top: 10px;
+	padding: 12px 12px 10px;
+	border-radius: 10px;
+	border: 1px solid var(--accent-border);
+	background: var(--accent-wash);
+	color: var(--fg);
+}
+
+.header {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-bottom: 8px;
+}
+
+.kicker {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.title {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1.35;
+	color: var(--fg-emphasis);
+}
+
+.explanation {
+	margin: 0 0 10px;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--fg-2);
+}
+
+.section {
+	margin-bottom: 10px;
+}
+
+.sectionLabel {
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--muted);
+	margin-bottom: 4px;
+}
+
+.change,
+.range {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.4;
+	color: var(--fg-2);
+}
+
+.range {
+	color: var(--muted);
+	margin-top: 2px;
+}
+
+.list,
+.risks {
+	margin: 0;
+	padding-left: 1.1em;
+	font-size: 12.5px;
+	line-height: 1.45;
+	color: var(--fg-2);
+}
+
+.risks {
+	color: var(--fg-2);
+}
+
+.blocked {
+	margin: 0 0 10px;
+	font-size: 12.5px;
+	line-height: 1.4;
+	color: var(--muted);
+}
+
+.progress {
+	margin: 0 0 8px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.resultOk,
+.resultBad {
+	margin: 0 0 8px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	font-size: 12.5px;
+	line-height: 1.4;
+}
+
+.resultOk {
+	background: var(--brand-soft);
+	border: 1px solid var(--accent-border);
+}
+
+.resultBad {
+	background: var(--surface-1);
+	border: 1px solid var(--border);
+}
+
+.resultOk p,
+.resultBad p {
+	margin: 4px 0 0;
+	color: var(--fg-2);
+}
+
+.actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.apply,
+.dismiss,
+.linkBtn {
+	appearance: none;
+	border-radius: 8px;
+	font-size: 12.5px;
+	font-weight: 550;
+	cursor: pointer;
+	padding: 7px 12px;
+}
+
+.apply {
+	border: none;
+	background: var(--accent);
+	color: var(--accent-on);
+}
+
+.apply:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.dismiss {
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--fg-2);
+}
+
+.dismiss:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.linkBtn {
+	margin-top: 6px;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--brand-lo);
+	font-weight: 550;
+}
+
+.linkBtn:hover {
+	text-decoration: underline;
+}

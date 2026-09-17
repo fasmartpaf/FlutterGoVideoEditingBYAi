@@ -164,6 +164,10 @@ pub(crate) unsafe fn walk_composited_timeline(
     let mut cursor_active_path: Option<String> = None;
 
     let mut frames: u64 = 0;
+    /// Previous clip screen path + clamped source end — for true A/B FROM sampling.
+    let mut prev_screen: Option<(String, f64)> = None;
+    /// Dedicated FROM decoder (separate instance even when path matches current).
+    let mut from_dec: Option<(String, Decoder)> = None;
 
     // L'export doit être reproductible : deux rendus du même projet, les mêmes pixels. Cette
     // boucle avance aussi vite que la machine décode, sans rapport avec le temps réel, alors que
@@ -324,6 +328,56 @@ pub(crate) unsafe fn walk_composited_timeline(
                     break 'clip_frames;
                 }
 
+                // True A/B: decode progressing FROM from previous clip during fade window.
+                comp.clear_transition_from_frame();
+                if let (Some(base), Some((prev_path, prev_end))) =
+                    (scene.as_ref(), prev_screen.as_ref())
+                {
+                    if clip_index > 0 {
+                        if let Some(sc) = base.clips.get(clip_index) {
+                            let half = sc
+                                .incoming_fade_half_sec
+                                .unwrap_or(crate::regions::CUT_FADE_HALF_SEC);
+                            let mode = crate::regions::ab_transition_mode(sc);
+                            comp.set_transition_mode(mode);
+                            if half > 1e-6 && mode != 0 {
+                                let progress = crate::regions::ab_transition_progress(
+                                    clip_index,
+                                    &base.clips,
+                                    target_source_time,
+                                );
+                                if progress < 0.999 {
+                                    let from_t = crate::regions::ab_from_source_time(
+                                        *prev_end,
+                                        half.min((sc.source_end_sec - sc.source_start_sec) * 0.45),
+                                        progress,
+                                    );
+                                    if from_dec
+                                        .as_ref()
+                                        .map(|(p, _)| p != prev_path)
+                                        .unwrap_or(true)
+                                    {
+                                        from_dec = Decoder::open_for_export(prev_path, gpu)
+                                            .ok()
+                                            .map(|d| (prev_path.clone(), d));
+                                    }
+                                    if let Some((_, fd)) = from_dec.as_mut() {
+                                        // Seek each frame — from_t advances but may not align with
+                                        // sequential peek when half window starts mid-file.
+                                        if fd.seek_to(from_t)?.is_null() {
+                                            let _ = advance_decoder_to(fd, from_t, 0.0);
+                                        }
+                                        let ff = fd.cur_frame();
+                                        if !ff.is_null() {
+                                            comp.set_transition_from_frame(ff);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 comp.set_timeline_time(Some(target_source_time as f32));
                 if cursor_enabled && cursor_active_path.is_some() {
                     comp.set_cursor_time(Some(target_source_time as f32));
@@ -332,18 +386,21 @@ pub(crate) unsafe fn walk_composited_timeline(
                     let _p = crate::export_probe::scope(crate::export_probe::Stage::Compose);
                     comp.compose_frame(sf, wf, frames as f32, cfg)?;
                 }
+                comp.clear_transition_from_frame();
 
                 on_frame(frames)?;
                 frames += 1;
             }
         }
 
+        // Legacy hold fallback for backends without live FROM this frame.
         if clip_index + 1 < clips.len() {
             let last = sdec.cur_frame();
             if !last.is_null() {
                 comp.capture_dissolve_hold(last);
             }
         }
+        prev_screen = Some((clip.screen.clone(), source_end_sec));
 
         on_clip_end(
             clip_index,

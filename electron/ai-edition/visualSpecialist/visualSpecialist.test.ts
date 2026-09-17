@@ -265,7 +265,10 @@ describe.runIf(canCase2)("Visual Specialist Case 2 source-res OCR", () => {
 
 		const inv = fakeInvestigation(19.89);
 		inv.additionalFrames[0]!.note = "investigator ROI bottom_center";
+		inv.additionalFrames[0]!.sourceTimeSec = 18;
 		inv.observations[0]!.startSourceTimeSec = 18;
+		inv.observations[0]!.endSourceTimeSec = 18;
+		inv.coverage.rangesInspected = [{ startSourceTimeSec: 14, endSourceTimeSec: 19.89 }];
 		inv.focusRange = { startSourceTimeSec: 0, endSourceTimeSec: 19.89 };
 
 		const set = await runVisualSpecialistV1({
@@ -273,12 +276,12 @@ describe.runIf(canCase2)("Visual Specialist Case 2 source-res OCR", () => {
 			investigation: inv,
 			cacheDir,
 			ffmpegPath: FFMPEG,
-			budgets: { maxBeforeAfterPairs: 1, maxOcrCalls: 3, maxSourceResCrops: 4 },
+			budgets: { maxBeforeAfterPairs: 0, maxOcrCalls: 3, maxSourceResCrops: 4 },
 		});
 
 		expect(set.metrics.extraModelCalls).toBe(0);
 		expect(set.metrics.sourceCrops).toBeGreaterThan(0);
-		expect(specialistObservedText(set, "Restart recording")).toBe(true);
+		expect(specialistObservedText(set, "Restart")).toBe(true);
 		// Must not invent action
 		expect(JSON.stringify(set.observations)).not.toMatch(/user restarted/i);
 

@@ -50,6 +50,7 @@ import {
 	VideoEffectsPane,
 } from "../RightPanes";
 import styles from "./EditorShellV4.module.css";
+import { TransitionLibraryPane } from "./TransitionLibraryPane";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
@@ -118,7 +119,8 @@ export function FloatingInspector({
 	// An imported audio track is selected (issue #350) — like a region selection it
 	// takes over the inspector body with its own pane (see AudioTrackPane).
 	const audioTrackSelected = Boolean(tl.selectedAudioTrackId);
-	const effectiveOpen = open || selection !== null || audioTrackSelected;
+	const transitionSelected = Boolean(tl.selectedTransitionBoundary);
+	const effectiveOpen = open || selection !== null || audioTrackSelected || transitionSelected;
 	return (
 		<div className={styles.inspectorWrap}>
 			{effectiveOpen ? (
@@ -127,6 +129,8 @@ export function FloatingInspector({
 						<SelectionPane tl={tl} onClose={() => tl.clearSelection()} />
 					) : audioTrackSelected ? (
 						<AudioTrackPane tl={tl} onClose={() => tl.clearSelection()} />
+					) : transitionSelected ? (
+						<TransitionLibraryPane tl={tl} onClose={() => tl.clearSelection()} />
 					) : (
 						<FacetBody facet={facet} onCollapse={onToggleOpen} transcriptProps={transcriptProps} />
 					)}
@@ -139,11 +143,13 @@ export function FloatingInspector({
 						type="button"
 						title={ts(labelKey)}
 						aria-label={ts(labelKey)}
-						aria-pressed={!selection && !audioTrackSelected && open && facet === id}
+						aria-pressed={
+							!selection && !audioTrackSelected && !transitionSelected && open && facet === id
+						}
 						onClick={() => {
 							// Switching facets while an element is selected should show
 							// the facet, not leave the selection pane on top of it.
-							if (selection || audioTrackSelected) tl.clearSelection();
+							if (selection || audioTrackSelected || transitionSelected) tl.clearSelection();
 							if (facet === id && open) {
 								onToggleOpen();
 							} else {
@@ -162,7 +168,7 @@ export function FloatingInspector({
 						aria-haspopup={clips.length > 1 ? "menu" : undefined}
 						aria-expanded={clips.length > 1 ? clipPickerOpen : undefined}
 						onClick={() => {
-							if (selection) tl.clearSelection();
+							if (selection || audioTrackSelected || transitionSelected) tl.clearSelection();
 							if (clips.length === 0) return;
 							if (clips.length === 1) {
 								onEditClip(clips[0]);

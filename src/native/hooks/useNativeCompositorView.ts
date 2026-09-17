@@ -89,7 +89,7 @@ export function useNativeCompositorView(
 	const enabled = opts.enabled !== false;
 	// Re-create the native view when the screen source changes (e.g. loading a different
 	// project) so it never keeps showing a stale clip.
-	const screenPath = opts.sources?.screenPath;
+	const _screenPath = opts.sources?.screenPath;
 	const [viewId, setViewId] = useState<number | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	// Mirror into a ref so async callbacks always see the freshest id without
@@ -320,7 +320,7 @@ export function useNativeCompositorView(
 		};
 		// `canvasRef` is a stable RefObject; we re-run (destroy + re-create the view) when the
 		// enabled flag flips or the screen source changes.
-	}, [enabled, canvasRef, screenPath]);
+	}, [enabled, canvasRef, opts.sources]);
 
 	const setParam = useCallback((key: string, value: CompositorParamValue) => {
 		const id = viewIdRef.current;

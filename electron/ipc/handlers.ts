@@ -2658,16 +2658,14 @@ export function registerIpcHandlers(
 				nativeWindowsIsPaused = false;
 
 				const cursorStartTimeMs = Date.now();
-				if (cursorCaptureMode === "editable-overlay") {
-					nativeWindowsCursorRecordingStartMs = cursorStartTimeMs;
-					await startCursorRecording(cursorStartTimeMs);
-					console.info("[native-wgc] cursor sampler ready", {
-						cursorStartTimeMs,
-						warmupMs: Date.now() - cursorStartTimeMs,
-					});
-				} else {
-					pendingCursorRecordingData = null;
-				}
+				// Always capture cursor telemetry for editorial focal evidence.
+				nativeWindowsCursorRecordingStartMs = cursorStartTimeMs;
+				await startCursorRecording(cursorStartTimeMs);
+				console.info("[native-wgc] cursor sampler ready", {
+					cursorStartTimeMs,
+					warmupMs: Date.now() - cursorStartTimeMs,
+					cursorCaptureMode,
+				});
 
 				const proc = spawn(helperPath, [JSON.stringify(config)], {
 					cwd: RECORDINGS_DIR,
@@ -2680,10 +2678,7 @@ export function registerIpcHandlers(
 
 				await waitForNativeWindowsCaptureStart(proc);
 				const captureStartedAtMs = Date.now();
-				nativeWindowsCursorOffsetMs =
-					cursorCaptureMode === "editable-overlay"
-						? Math.max(0, captureStartedAtMs - cursorStartTimeMs)
-						: 0;
+				nativeWindowsCursorOffsetMs = Math.max(0, captureStartedAtMs - cursorStartTimeMs);
 				const webcamFormat = readWebcamFormat(nativeWindowsCaptureOutput);
 				const encoderSelection = readNativeWindowsEncoderSelection(nativeWindowsCaptureOutput);
 				// Captured now because stop may have no helper left to ask. A helper
@@ -2845,12 +2840,11 @@ export function registerIpcHandlers(
 			activeMacCaptureBounds = null;
 
 			const cursorStartTimeMs = Date.now();
-			if (cursorCaptureMode === "editable-overlay") {
-				nativeMacCursorRecordingStartMs = cursorStartTimeMs;
-				await startCursorRecording(cursorStartTimeMs);
-			} else {
-				pendingCursorRecordingData = null;
-			}
+			// Always capture cursor telemetry for editorial focal evidence.
+			// editable-overlay also replaces the on-screen cursor; system mode keeps
+			// the OS cursor in pixels but still needs samples for zoom/planning.
+			nativeMacCursorRecordingStartMs = cursorStartTimeMs;
+			await startCursorRecording(cursorStartTimeMs);
 
 			const proc = spawn(helperPath, [JSON.stringify(config)], {
 				cwd: RECORDINGS_DIR,
@@ -2861,10 +2855,7 @@ export function registerIpcHandlers(
 
 			await waitForNativeMacCaptureStart(proc);
 			const captureStartedAtMs = Date.now();
-			nativeMacCursorOffsetMs =
-				cursorCaptureMode === "editable-overlay"
-					? Math.max(0, captureStartedAtMs - cursorStartTimeMs)
-					: 0;
+			nativeMacCursorOffsetMs = Math.max(0, captureStartedAtMs - cursorStartTimeMs);
 
 			const source = selectedSource || { name: "Screen" };
 			if (onRecordingStateChange) {
@@ -3115,17 +3106,10 @@ export function registerIpcHandlers(
 				throw new Error("Native Windows capture did not return an output path.");
 			}
 
-			if (cursorCaptureMode === "editable-overlay") {
-				await stopCursorRecording();
-			} else {
-				pendingCursorRecordingData = null;
-			}
-
-			if (cursorCaptureMode === "editable-overlay") {
-				compactPendingCursorTelemetryPauseRanges(nativeWindowsPauseRanges);
-				shiftPendingCursorTelemetry(nativeWindowsCursorOffsetMs);
-				await writePendingCursorTelemetry(screenVideoPath);
-			}
+			await stopCursorRecording();
+			compactPendingCursorTelemetryPauseRanges(nativeWindowsPauseRanges);
+			shiftPendingCursorTelemetry(nativeWindowsCursorOffsetMs);
+			await writePendingCursorTelemetry(screenVideoPath);
 			let webcamVideoPath: string | undefined;
 			if (preferredWebcamPath) {
 				try {
@@ -3215,11 +3199,7 @@ export function registerIpcHandlers(
 				throw new Error("Native macOS capture did not return an output path.");
 			}
 
-			if (cursorCaptureMode === "editable-overlay") {
-				await stopCursorRecording();
-			} else {
-				pendingCursorRecordingData = null;
-			}
+			await stopCursorRecording();
 			if (discard) {
 				pendingCursorRecordingData = null;
 				await Promise.all([
@@ -3229,11 +3209,9 @@ export function registerIpcHandlers(
 				return { success: true, discarded: true };
 			}
 
-			if (cursorCaptureMode === "editable-overlay") {
-				compactPendingCursorTelemetryPauseRanges(nativeMacPauseRanges);
-				shiftPendingCursorTelemetry(nativeMacCursorOffsetMs);
-				await writePendingCursorTelemetry(screenVideoPath);
-			}
+			compactPendingCursorTelemetryPauseRanges(nativeMacPauseRanges);
+			shiftPendingCursorTelemetry(nativeMacCursorOffsetMs);
+			await writePendingCursorTelemetry(screenVideoPath);
 
 			const session: RecordingSession = {
 				screenVideoPath,

@@ -170,6 +170,18 @@ export interface CompositorClipInput {
 	 *  convention). Populated by `buildSceneDescription` and `buildNativeClipList`;
 	 *  see the comment on the producer side for the exact rule. */
 	hasAudio: boolean;
+	/**
+	 * Incoming join dissolve half-window in seconds.
+	 * `0` = hard CUT. Absent/undefined → native default (0.35s dissolve).
+	 */
+	incomingFadeHalfSec?: number;
+	/**
+	 * Transition Library implementation mode (see NATIVE_IMPL_MODE).
+	 * 0=cut, 1=ab_dissolve, 2+=wipes/slides/…. Absent → dissolve/cut from fade half only.
+	 */
+	incomingTransitionMode?: number;
+	/** Stable registry id for diagnostics / future native lookup. */
+	incomingTransitionId?: string;
 }
 
 /** Bilan d'un export natif (mesure enveloppante §10 : frames, durée, fps). */
@@ -324,8 +336,75 @@ export interface AiEditionChatResult {
 	document?: unknown;
 	toolCalls?: AiEditionToolCallSummary[];
 	error?: string;
+	/**
+	 * Recovery 3 — typed delivery outcome. `completed` is implied by
+	 * `success: true` with non-empty assistant content.
+	 */
+	status?:
+		| "completed"
+		| "provider_error"
+		| "analysis_error"
+		| "insufficient_evidence"
+		| "cancelled";
+	/** Internal failure code for diagnostics/benchmarks — not for raw UI dump. */
+	failureReason?: string;
+	providerHttpStatus?: number;
 	/** Document checkpoint id recorded for the user message that triggered this turn (axcut parity). */
 	userMessageCheckpointId?: string;
+	/**
+	 * UI Consent Surface V1 — typed edit review cards (never parsed from prose).
+	 * Apply via `applyPreview.run`, not by auto-applying `document`.
+	 */
+	editReview?: {
+		providerId: "CURRENT_OPENSCREEN_UI_CONSENT_V1";
+		cards: Array<{
+			proposalId: string;
+			title: string;
+			explanation: string;
+			changeSummary: string;
+			reasonSummary: string;
+			affectedRange?: {
+				label: string;
+				startSourceSec: number;
+				endSourceSec: number;
+				durationSec: number;
+			};
+			preserves: string[];
+			risks: string[];
+			readiness: "ready" | "blocked" | "stale";
+			blockedReason?: string;
+			capabilityLabel: string;
+			canApply: boolean;
+			consentScope: "single_proposal_preview";
+			documentFingerprint: string;
+		}>;
+		editProposalV1: unknown;
+		selectedProposalId: string | null;
+		additionalModelCalls: 0;
+	};
+	/** Single Mutation Authority V1 telemetry (optional; diagnostics/benchmarks). */
+	mutationAuthority?: unknown;
+}
+
+export interface AiEditionApplyPreviewRunResult {
+	success: boolean;
+	phase: string;
+	terminalStatus?: string;
+	verificationStatus?: string;
+	mutationsApplied: 0 | 1;
+	document?: unknown;
+	userMessage: string;
+	detailMessage?: string;
+	warnings: string[];
+	rollbackSucceeded?: boolean;
+	stale?: boolean;
+	additionalModelCalls: 0;
+	latencyMs: {
+		preflightMs: number;
+		consentMintMs: number;
+		applyVerifyMs: number;
+		totalMs: number;
+	};
 }
 
 export interface AiEditionChatRewindResult {
@@ -622,6 +701,17 @@ export type NativeBridgeRequest =
 				/** Current AxcutDocument snapshot — enables the agent tool loop.
 				 * When omitted the chat runs text-only (no tools). */
 				document?: unknown;
+			};
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "applyPreview.run";
+			payload: {
+				document: unknown;
+				editProposalV1: unknown;
+				selectedProposalId: string;
+				proposalDocumentFingerprint: string;
 			};
 			requestId?: string;
 	  }

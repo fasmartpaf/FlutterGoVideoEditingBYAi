@@ -183,7 +183,13 @@ export interface RefinementPlan {
  */
 export function planRefinementMidpoints(
 	changes: VisualChange[],
-	options?: { level?: number; alreadyPlanned?: number },
+	options?: {
+		level?: number;
+		alreadyPlanned?: number;
+		/** When true, also refine moderate transitions with large gaps (coverage-first sparse samples). */
+		includeModerateLargeGaps?: boolean;
+		moderateMinGapSec?: number;
+	},
 ): RefinementPlan {
 	const level = options?.level ?? 1;
 	const already = options?.alreadyPlanned ?? 0;
@@ -192,6 +198,7 @@ export function planRefinementMidpoints(
 		return { midpoints };
 	}
 
+	const moderateMinGap = options?.moderateMinGapSec ?? 3.0;
 	const significant = changes
 		.filter(
 			(c) =>
@@ -200,7 +207,20 @@ export function planRefinementMidpoints(
 		)
 		.sort((a, b) => b.score - a.score);
 
-	for (const c of significant) {
+	const moderateLarge =
+		options?.includeModerateLargeGaps === true
+			? changes
+					.filter(
+						(c) =>
+							c.classification === "moderate" &&
+							c.toSourceTimeSec - c.fromSourceTimeSec >= moderateMinGap,
+					)
+					.sort((a, b) => b.score - a.score)
+			: [];
+
+	const ordered = [...significant, ...moderateLarge];
+
+	for (const c of ordered) {
 		if (already + midpoints.length >= MAX_REFINEMENT_FRAMES) break;
 		const mid = round3((c.fromSourceTimeSec + c.toSourceTimeSec) / 2);
 		if (
@@ -209,6 +229,7 @@ export function planRefinementMidpoints(
 		) {
 			continue;
 		}
+		if (midpoints.some((m) => Math.abs(m.sourceTimeSec - mid) <= DEDUPE_WINDOW_SEC)) continue;
 		midpoints.push({
 			sourceTimeSec: mid,
 			fromSourceTimeSec: c.fromSourceTimeSec,

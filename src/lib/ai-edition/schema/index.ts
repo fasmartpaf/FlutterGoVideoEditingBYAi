@@ -220,6 +220,27 @@ export const clipSchema = z
 		// that as the identity region {x:0,y:0,width:1,height:1} rather than
 		// storing the identity explicitly, so untouched clips stay lean.
 		cropRegion: clipCropRegionSchema.optional(),
+		/**
+		 * Authorable incoming join treatment.
+		 * Legacy: kind cut|dissolve.
+		 * V3: optional transitionId + params reference the Transition Registry
+		 * (shader source is never stored in the document).
+		 */
+		incomingTransition: z
+			.object({
+				kind: z.enum(["cut", "dissolve"]).optional(),
+				/** Registry id e.g. openscreen.dissolve, gl.wipeLeft */
+				transitionId: z.string().min(1).optional(),
+				/** Half-window / duration seconds; ignored for cut. Default 0.35. */
+				durationSec: z.number().min(0).max(2).optional(),
+				/** Registry parameter overrides (numeric / bool). */
+				params: z.record(z.union([z.number(), z.boolean()])).optional(),
+			})
+			.refine(
+				(t) => Boolean(t.kind || t.transitionId),
+				"incomingTransition requires kind and/or transitionId",
+			)
+			.optional(),
 	})
 	.refine((data) => data.timelineEndSec >= data.timelineStartSec, {
 		message: "timelineEndSec must be greater than or equal to timelineStartSec",
