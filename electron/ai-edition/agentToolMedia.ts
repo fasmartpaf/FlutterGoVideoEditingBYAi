@@ -8,7 +8,8 @@
  * The executor then only consumes finished files via `options.prepared`.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { sequenceFrameName } from "../../src/lib/ai-edition/document/imageSequence";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
@@ -91,6 +92,8 @@ export interface PreparedToolMedia {
 		pageErrors: string[];
 		/** Asked for a plain titleCard; rendered as the productIntro opener instead. */
 		upgradedFrom?: "titleCard";
+		/** Reused an identical earlier render (no new file). */
+		cached?: boolean;
 	};
 }
 
@@ -371,7 +374,9 @@ export async function prepareAgentToolMedia(
 			});
 			if (clip) {
 				prepared.motionClip = clip;
-				discardOnFailure.push(clip.mp4Path);
+				// A reused clip may already be on the timeline from an earlier turn:
+				// never delete it because this call was refused.
+				if (!clip.cached) discardOnFailure.push(clip.mp4Path);
 			}
 		} catch (err) {
 			if (err instanceof Error && err.name === "AbortError") throw err;
@@ -488,10 +493,17 @@ async function renderMotionClip(
 		: htmlPath
 			? { htmlPath }
 			: { html: html! };
+	const outDir = resolveGeneratedGraphicsDir(document);
+	const label = str(a.label) ?? (template ? `${template} graphic` : "Motion graphic");
+	// Same composition, size, rate and length → the clip already exists: reuse it.
+	const cacheKey = renderCacheKey(source, { width, height, fps, durationSec, background: kit.background });
+	const cached = cacheKey ? readRenderCache<CachedClip>(outDir, cacheKey) : null;
+	if (cached && existsSync(cached.mp4Path)) {
+		return { ...cached, label, ...(upgrade ? { upgradedFrom: "titleCard" as const } : {}), cached: true };
+	}
 	const frameSource = await options.createFrameSource();
 	if (!frameSource) throw new Error("Could not start the motion renderer.");
 	const composition = writeComposition(source, { width, height, background: kit.background });
-	const outDir = resolveGeneratedGraphicsDir(document);
 	const stem = uniqueStem(`motion-${template ?? "custom"}`);
 	const mp4Path = join(outDir, `${stem}.mp4`);
 	try {
@@ -515,19 +527,56 @@ async function renderMotionClip(
 			stem,
 			signal: options.signal,
 		});
-		return {
+		const result: CachedClip = {
 			mp4Path,
 			durationSec: rendered.durationSec,
 			width: rendered.width,
 			height: rendered.height,
 			fps: rendered.fps,
-			label: str(a.label) ?? (template ? `${template} graphic` : "Motion graphic"),
-			...(upgrade ? { upgradedFrom: "titleCard" as const } : {}),
 			check,
 			pageErrors: rendered.pageErrors,
 		};
+		if (cacheKey && check.ok) writeRenderCache(outDir, cacheKey, result);
+		return { ...result, label, ...(upgrade ? { upgradedFrom: "titleCard" as const } : {}) };
 	} finally {
 		composition.dispose();
+	}
+}
+
+type CachedClip = Omit<NonNullable<PreparedToolMedia["motionClip"]>, "label" | "upgradedFrom" | "cached">;
+
+/**
+ * Render cache: a hash of exactly what would be drawn (the composition HTML or
+ * the .html file's bytes) and how (size, rate, length, background). Renders
+ * are deterministic (virtual clock), so equal keys mean equal videos.
+ */
+export function renderCacheKey(
+	source: { html: string } | { htmlPath: string },
+	frame: { width: number; height: number; fps: number; durationSec: number; background?: string },
+): string | null {
+	let body: string;
+	try {
+		body = "html" in source ? source.html : `${source.htmlPath}\n${readFileSync(source.htmlPath, "utf8")}`;
+	} catch {
+		return null;
+	}
+	return createHash("sha1").update(JSON.stringify(frame)).update(body).digest("hex").slice(0, 20);
+}
+
+function readRenderCache<T>(outDir: string, key: string): T | null {
+	try {
+		return JSON.parse(readFileSync(join(outDir, ".render-cache", `${key}.json`), "utf8")) as T;
+	} catch {
+		return null;
+	}
+}
+
+function writeRenderCache(outDir: string, key: string, value: unknown): void {
+	try {
+		mkdirSync(join(outDir, ".render-cache"), { recursive: true });
+		writeFileSync(join(outDir, ".render-cache", `${key}.json`), JSON.stringify(value));
+	} catch {
+		/* a cache that can't be written is just a slower render next time */
 	}
 }
 

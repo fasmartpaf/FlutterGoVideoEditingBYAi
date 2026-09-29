@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { insertClip } from "../../../src/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "../../../src/lib/ai-edition/schema";
 import { executeAgentTool } from "../agent-tools";
-import { prepareAgentToolMedia, upgradeOpener } from "../agentToolMedia";
+import { prepareAgentToolMedia, renderCacheKey, upgradeOpener } from "../agentToolMedia";
 import { TEST_FFMPEG } from "../testing/ffmpegForTests";
 import { DEFAULT_BRAND_KIT, readBrandKit, writeBrandKit } from "./brandKit";
 import { MOTION_DRIVER_JS, wrapComposition } from "./driver";
@@ -173,6 +173,17 @@ describe("productIntro", () => {
 		expect(dashboard).toContain('class="dash"');
 		expect(dashboard).toContain(">AC<");
 		expect(dashboard).toContain("window.render");
+	});
+});
+
+describe("render cache", () => {
+	it("keys on exactly what is drawn and how", () => {
+		const frame = { width: 1920, height: 1080, fps: 30, durationSec: 3 };
+		const a = renderCacheKey({ html: "<div>hi</div>" }, frame);
+		expect(renderCacheKey({ html: "<div>hi</div>" }, frame)).toBe(a);
+		expect(renderCacheKey({ html: "<div>hi!</div>" }, frame)).not.toBe(a);
+		expect(renderCacheKey({ html: "<div>hi</div>" }, { ...frame, durationSec: 4 })).not.toBe(a);
+		expect(renderCacheKey({ htmlPath: "/nonexistent/x.html" }, frame)).toBeNull();
 	});
 });
 
@@ -393,6 +404,25 @@ describe.skipIf(!pw || !TEST_FFMPEG)("createMotionClip end to end (headless Chro
 		expect(payload.placed.snappedToSec).toBeCloseTo(1.1, 5);
 		expect(result.document!.timeline.clips).toHaveLength(3);
 		expect(existsSync(payload.videoPath)).toBe(true);
+	}, 120_000);
+
+	it("renders an identical clip once, then reuses it", async () => {
+		const { doc } = fixture();
+		const args = { template: "sectionCard", params: { title: "Setup", number: 1 }, durationSec: 1 };
+		const opts = { ffmpegPath: TEST_FFMPEG, mayMutate: true, createFrameSource: createPlaywrightFrameSource };
+		const first = await prepareAgentToolMedia(doc, "createMotionClip", args, opts);
+		let opened = 0;
+		const second = await prepareAgentToolMedia(doc, "createMotionClip", args, {
+			...opts,
+			createFrameSource: async () => {
+				opened += 1;
+				return createPlaywrightFrameSource();
+			},
+		});
+		expect(second.prepared.motionClip?.mp4Path).toBe(first.prepared.motionClip?.mp4Path);
+		expect(second.prepared.motionClip?.cached).toBe(true);
+		expect(opened).toBe(0);
+		expect(second.discardOnFailure).not.toContain(second.prepared.motionClip?.mp4Path);
 	}, 120_000);
 
 	it("flags a composition that draws nothing", async () => {
