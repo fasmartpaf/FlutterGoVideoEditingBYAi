@@ -269,38 +269,51 @@ function isSystem(message: BaseMessage): boolean {
 }
 
 export type IncrementalPrompt =
-	| { kind: "full"; text: string; fingerprints: string[] }
-	| { kind: "delta"; text: string; fingerprints: string[] }
+	| { kind: "full"; text: string; fingerprints: string[]; humanKeys: string[] }
+	| { kind: "delta"; text: string; fingerprints: string[]; humanKeys: string[] }
 	| { kind: "diverged" };
 
+/** A user message as the live process remembers it (start of the text, spacing folded). */
+function humanKey(message: BaseMessage): string {
+	return messageText(message).replace(/\s+/g, " ").trim().slice(0, 400);
+}
+
+/** Same user message, allowing for context appended to it on one side (frames, packets). */
+function sameHuman(a: string, b: string): boolean {
+	if (a === b) return true;
+	const n = Math.min(200, a.length, b.length);
+	return n >= 20 && a.slice(0, n) === b.slice(0, n);
+}
+
 /**
- * What to send to a live Claude process that already saw `sentFingerprints`.
- *  - nothing sent yet            → the full prompt
- *  - same history + new messages → only the new messages (tool results, the
- *                                  next user message) and, when it changed,
- *                                  the refreshed project state (SYSTEM)
- *  - history rewritten (rewind / compaction) → "diverged": start over
- * Claude's own replies are never re-sent — they are already in its context.
+ * What to send to a live Claude process that already saw part of this chat.
+ *  - nothing sent yet → the full prompt
+ *  - the user messages it saw are still there, in order → only what is new:
+ *    new user messages, tool results it has not seen, and the project state
+ *    when it changed. Claude's own replies (and the tool calls inside them)
+ *    are never compared or re-sent — they are already in its context. Across
+ *    turns the chat history only keeps the short final reply of each turn, so
+ *    comparing replies made every new turn look like a rewind and restarted
+ *    Claude from scratch.
+ *  - a user message it saw is gone or changed (rewind, edit) → "diverged"
  */
 export function buildIncrementalPrompt(
 	messages: BaseMessage[],
 	tools: BoundTool[],
-	sent: { fingerprints: string[]; frameKey: string; toolsKey: string },
+	sent: { fingerprints: string[]; frameKey: string; toolsKey: string; humanKeys?: string[] },
 	options?: { framePaths?: string[] },
 ): IncrementalPrompt {
 	const fingerprints = messages.map(messageFingerprint);
+	const nowHumans = messages.filter((m) => m.getType() === "human").map(humanKey);
 	if (sent.fingerprints.length === 0) {
-		return { kind: "full", text: buildPrompt(messages, tools, options), fingerprints };
+		return { kind: "full", text: buildPrompt(messages, tools, options), fingerprints, humanKeys: nowHumans };
+	}
+	const sentHumans = sent.humanKeys ?? [];
+	if (sentHumans.length > nowHumans.length) return { kind: "diverged" };
+	for (let i = 0; i < sentHumans.length; i++) {
+		if (!sameHuman(sentHumans[i]!, nowHumans[i]!)) return { kind: "diverged" };
 	}
 	const sentSet = new Set(sent.fingerprints);
-	const sentHistory = sent.fingerprints.filter((fp) => !fp.startsWith("system:"));
-	const nowHistory = messages
-		.map((m, i) => ({ m, fp: fingerprints[i]! }))
-		.filter(({ m }) => !isSystem(m));
-	// Every non-system message Claude saw must still be there, in order.
-	for (let i = 0; i < sentHistory.length; i++) {
-		if (nowHistory[i]?.fp !== sentHistory[i]) return { kind: "diverged" };
-	}
 	const lines: string[] = [];
 	const changedSystem = messages.filter((m, i) => isSystem(m) && !sentSet.has(fingerprints[i]!));
 	for (const m of changedSystem) {
@@ -315,14 +328,17 @@ export function buildIncrementalPrompt(
 	if (frameKey && frameKey !== sent.frameKey) {
 		lines.push(framePathSection(options?.framePaths ?? []).trimEnd());
 	}
+	let humanIndex = 0;
 	let sawToolResult = false;
-	for (const { m } of nowHistory.slice(sentHistory.length)) {
-		if (ToolMessage.isInstance(m) || m.getType() === "tool") {
+	for (const [i, m] of messages.entries()) {
+		if (m.getType() === "human") {
+			const isNew = humanIndex >= sentHumans.length;
+			humanIndex += 1;
+			const t = messageText(m);
+			if (isNew && t) lines.push(`USER: ${t}`);
+		} else if ((ToolMessage.isInstance(m) || m.getType() === "tool") && !sentSet.has(fingerprints[i]!)) {
 			sawToolResult = true;
 			lines.push(`TOOL RESULT: ${messageText(m)}`);
-		} else if (m.getType() === "human") {
-			const t = messageText(m);
-			if (t) lines.push(`USER: ${t}`);
 		}
 		// AI messages are Claude's own earlier replies — already in its context.
 	}
@@ -331,11 +347,20 @@ export function buildIncrementalPrompt(
 			'Continue the loop if the user objective is not yet verified. When it is met, reply ONLY with {"message":"…"}. Do NOT retry a failing tool with the same args.',
 		);
 	}
-	lines.push(
-		'Reply with ONE JSON object and nothing else: {"tool_calls":[…]} or {"message":"…"}.',
-	);
-	return { kind: "delta", text: lines.join("\n"), fingerprints };
+	lines.push('Reply with ONE JSON object and nothing else: {"tool_calls":[…]} or {"message":"…"}.');
+	return {
+		kind: "delta",
+		text: lines.join("\n"),
+		fingerprints: [...new Set([...sent.fingerprints, ...fingerprints])],
+		humanKeys: nowHumans,
+	};
 }
+
+/** How the long-lived sessions are doing — logged per turn, so a slow turn says why. */
+export const liveCliStats = { liveSteps: 0, oneShotSteps: 0, liveFailures: 0, freshRestarts: 0, lastLiveError: null as string | null };
+/** Consecutive live failures before this app run gives up on live sessions. */
+const LIVE_FAILURES_BEFORE_DISABLE = 3;
+let liveFailureStreak = 0;
 
 let liveDisabledReason: string | null = null;
 
@@ -352,6 +377,7 @@ export function liveClaudeSessionsDisabledReason(): string | null {
 /** Test helper. */
 export function resetLiveClaudeSessionsForTests(): void {
 	liveDisabledReason = null;
+	liveFailureStreak = 0;
 }
 
 /** Live (long-lived) Claude sessions are on unless OPENSCREEN_CLI_PERSISTENT=0 or one failed. */
@@ -737,19 +763,31 @@ export class LocalCliChatModel extends BaseChatModel {
 		const cwd = workDir && workDir.length > 0 ? workDir : os.tmpdir();
 		let raw: string | null = null;
 		if (this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled()) {
-			try {
-				raw = await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward, budgetLine });
-			} catch (err) {
-				if ((err as Error)?.name === "AbortError" || this.abortSignal?.aborted) throw err;
-				// The long-lived process failed: keep the chat working on the proven
-				// one-spawn-per-step path for the rest of this app session, and say why.
-				disableLiveClaudeSessions(err instanceof Error ? err.message : String(err));
-				closeLiveSession(this.cliSessionId);
-				console.warn(`[local-cli] live session disabled, falling back: ${(err as Error)?.message}`);
-				forward({ kind: "progress", delta: "Live session failed — continuing in one-shot mode…\n" });
-				raw = null;
+			// One failure (a rate limit, a bad reply, a crashed process) must not cost
+			// every later step its live session: retry once on a fresh process, and
+			// only give up on live mode for this app run after repeated failures.
+			for (const fresh of [false, true]) {
+				try {
+					raw = await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward, budgetLine, fresh });
+					liveFailureStreak = 0;
+					liveCliStats.liveSteps += 1;
+					break;
+				} catch (err) {
+					if ((err as Error)?.name === "AbortError" || this.abortSignal?.aborted) throw err;
+					const reason = err instanceof Error ? err.message : String(err);
+					liveCliStats.liveFailures += 1;
+					liveCliStats.lastLiveError = reason.slice(0, 300);
+					closeLiveSession(this.cliSessionId);
+					console.warn(`[local-cli] live step failed${fresh ? " again" : ""}: ${reason}`);
+					if (!fresh) continue;
+					liveFailureStreak += 1;
+					if (liveFailureStreak >= LIVE_FAILURES_BEFORE_DISABLE) disableLiveClaudeSessions(reason);
+					forward({ kind: "progress", delta: "Live session failed — continuing in one-shot mode…\n" });
+					raw = null;
+				}
 			}
 		}
+		if (raw === null) liveCliStats.oneShotSteps += 1;
 		if (raw === null)
 			raw = await runCliStreaming(
 			this.binPath,
@@ -820,6 +858,8 @@ export class LocalCliChatModel extends BaseChatModel {
 			forward: (event: LocalCliProgressEvent) => void;
 			/** Budget reminder appended to this reply's prompt ("" when within budget). */
 			budgetLine: string;
+			/** Start a new process on a new Claude session and send the whole conversation. */
+			fresh?: boolean;
 		},
 	): Promise<string> {
 		const key = this.cliSessionId!;
@@ -832,13 +872,21 @@ export class LocalCliChatModel extends BaseChatModel {
 				resumeCliSession: resume,
 			});
 		let live = acquireLiveSession(key, this.binPath, argvFor(key, Boolean(ctx.resumeCliSession)), ctx.cwd);
-		let prompt = buildIncrementalPrompt(
-			messages,
-			this.boundTools,
-			{ fingerprints: live.sentFingerprints, frameKey: live.sentFrameKey, toolsKey: live.sentToolsKey },
-			{ framePaths: this.framePaths },
-		);
+		let prompt = ctx.fresh
+			? ({ kind: "diverged" } as const)
+			: buildIncrementalPrompt(
+					messages,
+					this.boundTools,
+					{
+						fingerprints: live.sentFingerprints,
+						frameKey: live.sentFrameKey,
+						toolsKey: live.sentToolsKey,
+						humanKeys: live.sentHumanKeys,
+					},
+					{ framePaths: this.framePaths },
+				);
 		if (prompt.kind === "diverged") {
+			liveCliStats.freshRestarts += 1;
 			// History was rewritten (rewind / compaction): Claude's memory no longer
 			// matches the chat. Start a clean process on a fresh session and send
 			// the whole conversation again.
@@ -848,6 +896,7 @@ export class LocalCliChatModel extends BaseChatModel {
 				kind: "full",
 				text: buildPrompt(messages, this.boundTools, { framePaths: this.framePaths }),
 				fingerprints: messages.map(messageFingerprint),
+				humanKeys: messages.filter((m) => m.getType() === "human").map(humanKey),
 			};
 		}
 		const raw = await live.runTurn(prompt.text + ctx.budgetLine, {
@@ -856,6 +905,7 @@ export class LocalCliChatModel extends BaseChatModel {
 			agentId: this.agentId,
 		});
 		live.sentFingerprints = prompt.fingerprints;
+		live.sentHumanKeys = prompt.humanKeys;
 		live.sentFrameKey = this.framePaths.join("\n");
 		live.sentToolsKey = JSON.stringify(this.boundTools.map((t) => t.name));
 		return raw;

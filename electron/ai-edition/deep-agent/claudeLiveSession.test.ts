@@ -55,7 +55,12 @@ describe("buildIncrementalPrompt", () => {
 		const turn1 = [new SystemMessage("doc v1"), new HumanMessage("tighten the intro")];
 		const first = buildIncrementalPrompt(turn1, tools, { fingerprints: [], frameKey: "", toolsKey: "" });
 		expect(first.kind).toBe("full");
-		const sent = { fingerprints: turn1.map(messageFingerprint), frameKey: "", toolsKey: JSON.stringify(["getCurrentDocument"]) };
+		const sent = {
+			fingerprints: turn1.map(messageFingerprint),
+			frameKey: "",
+			toolsKey: JSON.stringify(["getCurrentDocument"]),
+			humanKeys: ["tighten the intro"],
+		};
 		const turn1b = [
 			...turn1,
 			new AIMessage({ content: "", tool_calls: [{ id: "c0", name: "getCurrentDocument", args: {} }] }),
@@ -71,7 +76,7 @@ describe("buildIncrementalPrompt", () => {
 
 	it("re-sends the project state when it changed, and detects a rewritten history", () => {
 		const a = [new SystemMessage("doc v1"), new HumanMessage("one")];
-		const sent = { fingerprints: a.map(messageFingerprint), frameKey: "", toolsKey: "" };
+		const sent = { fingerprints: a.map(messageFingerprint), frameKey: "", toolsKey: "", humanKeys: ["one"] };
 		const next = buildIncrementalPrompt(
 			[new SystemMessage("doc v2"), new HumanMessage("one"), new AIMessage("ok"), new HumanMessage("two")],
 			[],
@@ -83,8 +88,49 @@ describe("buildIncrementalPrompt", () => {
 			expect(next.text).toContain("doc v2");
 			expect(next.text).toContain("USER: two");
 		}
-		const rewound = buildIncrementalPrompt([new SystemMessage("doc v1"), new HumanMessage("different")], [], sent);
+		const rewound = buildIncrementalPrompt(
+			[new SystemMessage("doc v1"), new HumanMessage("different")],
+			[],
+			sent,
+		);
 		expect(rewound.kind).toBe("diverged");
+	});
+
+	it("keeps the same Claude across turns: last turn's replies and tool calls are not compared", () => {
+		// Turn 1 as the live process saw it: the ask, its tool call, the result, its reply.
+		const turn1 = [
+			new SystemMessage("doc v1"),
+			new HumanMessage("add a zoom at the start"),
+			new AIMessage({ content: "", tool_calls: [{ id: "c0", name: "addZoom", args: {} }] }),
+			new ToolMessage({ content: '{"ok":true}', tool_call_id: "c0" }),
+			new AIMessage('{"message":"Added a zoom."}'),
+		];
+		const first = buildIncrementalPrompt(turn1, [], { fingerprints: [], frameKey: "", toolsKey: "" });
+		if (first.kind === "diverged") throw new Error("unexpected");
+		// Turn 2 as the chat history rebuilds it: only the final reply text survives.
+		const turn2 = [
+			new SystemMessage("doc v2"),
+			new HumanMessage("add a zoom at the start"),
+			new AIMessage("Added a zoom."),
+			new HumanMessage("now make the intro amazing"),
+		];
+		const next = buildIncrementalPrompt(turn2, [], { fingerprints: first.fingerprints, frameKey: "", toolsKey: "", humanKeys: first.humanKeys });
+		expect(next.kind).toBe("delta");
+		if (next.kind !== "delta") return;
+		expect(next.text).toContain("USER: now make the intro amazing");
+		expect(next.text).not.toContain("USER: add a zoom");
+		expect(next.text).not.toContain("TOOL RESULT");
+	});
+
+	it("a user message with context appended on one side still counts as the same message", () => {
+		const long = "make the intro amazing and show some saas type things on it, not just a simple text card";
+		const sent = { fingerprints: ["x"], frameKey: "", toolsKey: "", humanKeys: [long] };
+		const next = buildIncrementalPrompt(
+			[new HumanMessage(`${long}\n\n[frames attached: 4]`), new HumanMessage("thanks, now export it")],
+			[],
+			sent,
+		);
+		expect(next.kind).toBe("delta");
 	});
 });
 
@@ -150,6 +196,33 @@ describe.skipIf(!posix)("long-lived Claude session", () => {
 		expect(turns[1]!.text).not.toContain("add a title");
 	});
 
+	it("the next chat turn talks to the same Claude process (no restart)", async () => {
+		const sid = "66666666-6666-6666-6666-666666666666";
+		let started = false;
+		const shared = { isCliSessionStarted: () => started, onCliSpawnComplete: () => { started = true; } };
+		const turn1 = [new SystemMessage("doc v1"), new HumanMessage("add a title")];
+		const r1 = await model(sid, shared).invoke(turn1);
+		const r2 = await model(sid, shared).invoke([
+			...turn1,
+			r1,
+			new ToolMessage({ content: '{"clips":1}', tool_call_id: r1.tool_calls![0]!.id! }),
+		]);
+		expect(r2.content).toBe("All done.");
+		// Turn 2: a new model (new chat turn); history keeps only the final reply.
+		const r3 = await model(sid, shared).invoke([
+			new SystemMessage("doc v2"),
+			new HumanMessage("add a title"),
+			new AIMessage("All done."),
+			new HumanMessage("now add an outro"),
+		]);
+		expect(r3.content).toBe("All done.");
+		const log = readLog(logFile);
+		expect(log.filter((e) => e.kind === "spawn")).toHaveLength(1);
+		const last = log.filter((e) => e.kind === "turn").at(-1)!;
+		expect(last.text).toContain("USER: now add an outro");
+		expect(last.text).not.toContain("add a title");
+	});
+
 	it("Stop kills the live process; the next step resumes the same Claude session", async () => {
 		const sid = "44444444-4444-4444-4444-444444444444";
 		const first = model(sid);
@@ -207,6 +280,36 @@ describe.skipIf(!posix)("live session failure", () => {
 		const { resetLiveClaudeSessionsForTests } = await import("./local-cli-chat-model");
 		resetLiveClaudeSessionsForTests();
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("one failed live step retries on a fresh process and keeps live mode on", async () => {
+		// The first live process crashes on its first message; the next one works.
+		const flag = path.join(dir, "crashed-once");
+		const bin = path.join(dir, "claude");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env node
+const fs = require("fs");
+const live = process.argv.includes("--input-format");
+if (!live) { process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify({ message: "one-shot" }) }) + "\\n"); process.exit(0); }
+process.stdin.on("data", () => {
+  if (!fs.existsSync(${JSON.stringify(flag)})) { fs.writeFileSync(${JSON.stringify(flag)}, "1"); process.exit(3); }
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify({ message: "live again" }) }) + "\\n");
+});
+`,
+		);
+		chmodSync(bin, 0o755);
+		const warn = console.warn;
+		console.warn = () => {};
+		try {
+			const { liveClaudeSessionsDisabledReason } = await import("./local-cli-chat-model");
+			const m = new LocalCliChatModel({ agentId: "claude", binPath: bin, cliSessionId: "77777777-7777-7777-7777-777777777777" });
+			const r = await m.invoke([new HumanMessage("hi")]);
+			expect(r.content).toBe("live again");
+			expect(liveClaudeSessionsDisabledReason()).toBeNull();
+		} finally {
+			console.warn = warn;
+		}
 	});
 
 	it("shows the CLI's own error and falls back to one-shot spawns", async () => {

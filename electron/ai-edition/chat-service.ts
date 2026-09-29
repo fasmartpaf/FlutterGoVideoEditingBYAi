@@ -419,6 +419,8 @@ export async function runChat(
 	// tool, and the total. Logged, and sent to the UI as a `turn_timing` status.
 	const { createTurnTimer, formatTurnTiming } = await import("./turnTiming");
 	const timer = createTurnTimer();
+	const { liveCliStats, liveClaudeSessionsDisabledReason } = await import("./deep-agent/local-cli-chat-model");
+	const cliBefore = { ...liveCliStats };
 	const emit = timer.wrap({ ...NOOP_SINK, ...sink });
 	try {
 		return await runChatTimed(projectId, sessionId, message, llmConfig, documentInput, emit, env);
@@ -430,7 +432,22 @@ export async function runChat(
 		// diagnosed afterwards (where the minutes went: model replies vs renders).
 		try {
 			const { appendTurnLog } = await import("./turnTiming");
-			appendTurnLog(documentInput, { at: new Date().toISOString(), sessionId, message: message.slice(0, 200), ...timing });
+			appendTurnLog(documentInput, {
+				at: new Date().toISOString(),
+				sessionId,
+				message: message.slice(0, 200),
+				...timing,
+				// How the Local CLI ran this turn: live steps reuse one Claude process;
+				// one-shot steps each start a new one (slow). Restarts = fresh sessions.
+				cli: {
+					liveSteps: liveCliStats.liveSteps - cliBefore.liveSteps,
+					oneShotSteps: liveCliStats.oneShotSteps - cliBefore.oneShotSteps,
+					liveFailures: liveCliStats.liveFailures - cliBefore.liveFailures,
+					freshRestarts: liveCliStats.freshRestarts - cliBefore.freshRestarts,
+					lastLiveError: liveCliStats.lastLiveError,
+					liveDisabled: liveClaudeSessionsDisabledReason(),
+				},
+			});
 		} catch {
 			/* logging must never fail a turn */
 		}
@@ -658,7 +675,7 @@ async function runChatTimed(
 					invokeOpenScreenAgent({
 						document: stage.document,
 						model: { ...modelConfig, turnBudgetLimits: stage.budget },
-						history,
+						history: [...history, ...stage.history],
 						userMessage: stage.prompt,
 						sink: { ...agentSink, plan: () => {} },
 						editsAllowed,

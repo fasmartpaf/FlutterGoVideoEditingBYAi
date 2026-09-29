@@ -30,6 +30,12 @@ export interface StageRun {
 	prompt: string;
 	toolNames: string[];
 	budget: EditStage["budget"];
+	/**
+	 * The earlier stages as chat turns (their prompt, then what they did). Sent
+	 * as history so each stage continues the same live Claude conversation
+	 * instead of looking like a rewind that restarts it.
+	 */
+	history: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
 export interface StagedEditInput {
@@ -72,6 +78,7 @@ async function defaultPreview(document: AxcutDocument, stage: EditStage): Promis
 export async function runStagedEdit(input: StagedEditInput): Promise<InvokeResult> {
 	const stages = input.stages ?? EDIT_STAGES;
 	const outcomes: StageOutcome[] = [];
+	const history: StageRun["history"] = [];
 	let document = input.document;
 	let mutated = false;
 	let last: InvokeResult | null = null;
@@ -87,14 +94,16 @@ export async function runStagedEdit(input: StagedEditInput): Promise<InvokeResul
 		input.emit.status("stage", `${stage.title} (${index + 1}/${stages.length})`);
 		if (index > 0) input.emit.text("\n\n");
 		let r: InvokeResult;
+		const prompt = stagePrompt(stage, index, input.request, outcomes, stages.length);
 		try {
 			r = await input.invoke({
 				stage,
 				index,
 				document,
-				prompt: stagePrompt(stage, index, input.request, outcomes, stages.length),
+				prompt,
 				toolNames: stageToolNames(stage),
 				budget: stage.budget,
+				history: [...history],
 			});
 		} catch (err) {
 			const aborted = input.abortSignal?.aborted || (err as Error)?.name === "AbortError";
@@ -118,6 +127,7 @@ export async function runStagedEdit(input: StagedEditInput): Promise<InvokeResul
 			break;
 		}
 		const { summary, skipped } = stageSummary(r.text || r.userMessage, stage);
+		history.push({ role: "user", content: prompt }, { role: "assistant", content: summary });
 		const outcome: StageOutcome = { stage, status: skipped ? "skipped" : "done", summary, mutated: r.mutated };
 		if (stage.preview && r.mutated) {
 			const path = await (input.renderPreview ?? defaultPreview)(document, stage).catch(() => null);

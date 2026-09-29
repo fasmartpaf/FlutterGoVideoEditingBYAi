@@ -121,8 +121,16 @@ export function appendTurnLog(documentInput: unknown, record: Record<string, unk
 		const { resolveGeneratedGraphicsDir } = await import("./agentToolMedia");
 		const { appendFileSync, mkdirSync } = await import("node:fs");
 		const { join } = await import("node:path");
+		const line = `${JSON.stringify(record)}\n`;
 		const dir = join(resolveGeneratedGraphicsDir(parsed.data), ".logs");
 		mkdirSync(dir, { recursive: true });
-		appendFileSync(join(dir, "turns.jsonl"), `${JSON.stringify(record)}\n`);
+		appendFileSync(join(dir, "turns.jsonl"), line);
+		// Running from source (npm run dev): keep a copy in the repo too, where the
+		// timings can be read without access to the app's data folder.
+		if (process.env.VITE_DEV_SERVER_URL) {
+			const devDir = join(process.cwd(), ".fluttergo", "logs");
+			mkdirSync(devDir, { recursive: true });
+			appendFileSync(join(devDir, "turns.jsonl"), line);
+		}
 	})().catch(() => {});
 }
