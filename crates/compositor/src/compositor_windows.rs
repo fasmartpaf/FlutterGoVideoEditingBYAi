@@ -2208,25 +2208,32 @@ impl Compositor {
                     });
                 }
                 "image" => {
-                    let Some(src) = annotation.image_path.as_ref() else { continue };
-                    if src.is_empty() {
+                    // Frame courante d'un overlay animé, ou l'image fixe (clé = id, historique).
+                    let Some((src, seq_key)) = annotation.image_source_at(t as f64) else {
                         continue;
-                    }
+                    };
+                    let src: &str = &src;
                     // Cache indexé sur l'ID de l'annotation, pas sur la data URL : celle-ci pèse
                     // souvent des mégaoctets, et la prendre comme clé de HashMap la ferait hacher
                     // à chaque frame. La longueur, stockée à côté, sert de garde-fou quand
                     // l'utilisateur change l'image (une nouvelle image de longueur identique au
                     // bit près serait manquée jusqu'au rechargement — coût accepté en connaissance).
-                    let key = annotation.id.clone();
+                    let key = seq_key;
                     let cached = {
                         let cache = self.ann_img_cache.borrow();
-                        cache.get(&key).filter(|(_, _, _, len)| *len == src.len()).cloned()
+                        cache.get(key.as_ref()).filter(|(_, _, _, len)| *len == src.len()).cloned()
                     };
                     let Some((srv, iw, ih, _)) = cached.or_else(|| {
                         match self.load_image_srv(src) {
                             Ok((srv, w, h)) => {
                                 let entry = (srv, w, h, src.len());
-                                self.ann_img_cache.borrow_mut().insert(key, entry.clone());
+                                let mut cache = self.ann_img_cache.borrow_mut();
+                                if annotation.image_sequence.is_some() {
+                                    // Une seule frame décodée par séquence.
+                                    let prefix = annotation.sequence_cache_prefix();
+                                    cache.retain(|k, _| !k.starts_with(&prefix));
+                                }
+                                cache.insert(key.into_owned(), entry.clone());
                                 Some(entry)
                             }
                             Err(e) => {

@@ -1408,18 +1408,26 @@ impl Compositor {
                     });
                 }
                 "image" => {
-                    let Some(src) = a.image_path.as_ref().filter(|s| !s.is_empty()) else {
+                    // Frame courante d'un overlay animé, ou l'image fixe (clé = id, historique).
+                    let Some((src, cache_key)) = a.image_source_at(t as f64) else {
                         continue;
                     };
+                    let src: &str = &src;
                     let cached = {
                         let c = self.ann_img_cache.borrow();
-                        c.get(&a.id).filter(|(_, _, _, len)| *len == src.len()).cloned()
+                        c.get(cache_key.as_ref()).filter(|(_, _, _, len)| *len == src.len()).cloned()
                     };
                     let Some((tex, iw, ih, _)) = cached.or_else(|| {
                         match self.load_image_texture(src) {
                             Ok((tex, w, h)) => {
                                 let e = (tex, w, h, src.len());
-                                self.ann_img_cache.borrow_mut().insert(a.id.clone(), e.clone());
+                                let mut cache = self.ann_img_cache.borrow_mut();
+                                if a.image_sequence.is_some() {
+                                    // Une seule frame décodée par séquence : la précédente part.
+                                    let prefix = a.sequence_cache_prefix();
+                                    cache.retain(|k, _| !k.starts_with(&prefix));
+                                }
+                                cache.insert(cache_key.into_owned(), e.clone());
                                 Some(e)
                             }
                             Err(e) => {

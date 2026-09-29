@@ -232,10 +232,83 @@ pub struct SceneAnnotation {
     pub text: Option<SceneAnnotationText>,
     #[serde(default)]
     pub image_path: Option<String>,
+    /// Overlay ANIMÉ : une séquence PNG (avec alpha) dont la frame suit le temps. `image_path`
+    /// porte alors l'affiche (poster), que dessine un binaire sans cette clé. Voir
+    /// `src/lib/ai-edition/document/imageSequence.ts` côté app.
+    #[serde(default)]
+    pub image_sequence: Option<SceneImageSequence>,
     #[serde(default)]
     pub figure: Option<SceneAnnotationFigure>,
     #[serde(default)]
     pub blur: Option<SceneAnnotationBlur>,
+}
+
+/// Séquence d'images d'un overlay animé : `dir/frame-00000.png`, `frame-00001.png`, …
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneImageSequence {
+    pub dir: String,
+    pub fps: f64,
+    pub frame_count: u32,
+    /// Secondes déjà jouées avant le début de CE fragment (un overlay coupé en deux par un
+    /// split de clip continue au lieu de redémarrer).
+    #[serde(default)]
+    pub offset_sec: f64,
+}
+
+impl SceneImageSequence {
+    /// Frame à afficher `elapsed_sec` après le début du fragment : lecture unique à `fps`,
+    /// puis la dernière frame est tenue. Miroir exact de `sequenceFrameIndex` (TS).
+    pub fn frame_index(&self, elapsed_sec: f64) -> u32 {
+        if self.frame_count == 0 || !(self.fps > 0.0) {
+            return 0;
+        }
+        let t = (elapsed_sec + self.offset_sec).max(0.0);
+        let idx = (t * self.fps + 1e-6).floor();
+        if !idx.is_finite() {
+            return 0;
+        }
+        (idx as u64).min(self.frame_count as u64 - 1) as u32
+    }
+
+    /// Chemin de la frame pour `elapsed_sec`.
+    pub fn frame_path(&self, elapsed_sec: f64) -> String {
+        let name = format!("frame-{:05}.png", self.frame_index(elapsed_sec));
+        std::path::Path::new(&self.dir).join(name).to_string_lossy().into_owned()
+    }
+}
+
+impl SceneAnnotation {
+    /// L'image à dessiner à l'instant `t` (secondes, même horloge que `start_sec`) : la frame
+    /// de la séquence si l'annotation est animée, sinon `image_path`. Renvoie aussi la clé de
+    /// cache : l'id seul pour une image fixe (comportement historique), `id#chemin` pour une
+    /// frame de séquence.
+    ///
+    /// Une image fixe est empruntée, pas copiée : c'est souvent une data URL de plusieurs
+    /// mégaoctets, et ce chemin tourne à chaque frame.
+    pub fn image_source_at(
+        &self,
+        t: f64,
+    ) -> Option<(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)> {
+        use std::borrow::Cow;
+        if let Some(seq) = self.image_sequence.as_ref() {
+            if seq.frame_count > 0 && !seq.dir.is_empty() {
+                let path = seq.frame_path(t - self.start_sec);
+                let key = format!("{}#{}", self.id, path);
+                return Some((Cow::Owned(path), Cow::Owned(key)));
+            }
+        }
+        self.image_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| (Cow::Borrowed(s), Cow::Borrowed(self.id.as_str())))
+    }
+
+    /// Préfixe des clés de cache des frames de séquence de cette annotation (pour ne garder
+    /// qu'une frame décodée à la fois).
+    pub fn sequence_cache_prefix(&self) -> String {
+        format!("{}#", self.id)
+    }
 }
 
 impl SceneAnnotation {
@@ -883,5 +956,41 @@ mod annotation_tests {
             filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
             vec!["in-window"]
         );
+    }
+}
+
+#[cfg(test)]
+mod image_sequence_tests {
+    use super::*;
+
+    fn ann(json: &str) -> SceneAnnotation {
+        serde_json::from_str(json).expect("annotation json")
+    }
+
+    #[test]
+    fn plays_once_then_holds_the_last_frame() {
+        let seq = SceneImageSequence { dir: "/o".into(), fps: 30.0, frame_count: 90, offset_sec: 0.0 };
+        assert_eq!(seq.frame_index(0.0), 0);
+        assert_eq!(seq.frame_index(0.034), 1);
+        assert_eq!(seq.frame_index(1.0), 30);
+        assert_eq!(seq.frame_index(10.0), 89);
+        assert_eq!(seq.frame_index(-1.0), 0);
+        let split = SceneImageSequence { offset_sec: 1.0, ..seq.clone() };
+        assert_eq!(split.frame_index(0.0), 30);
+        assert!(seq.frame_path(1.0).ends_with("frame-00030.png"));
+    }
+
+    #[test]
+    fn animated_annotations_pick_the_frame_and_stills_keep_their_path() {
+        let a = ann(r#"{"id":"a1","startSec":2.0,"endSec":5.0,"kind":"image","x":0,"y":0,"w":0.5,"h":0.2,
+            "imagePath":"/poster.png","imageSequence":{"dir":"/seq","fps":10,"frameCount":20}}"#);
+        let (path, key) = a.image_source_at(3.05).unwrap();
+        assert!(path.ends_with("frame-00010.png"), "{path}");
+        assert!(key.starts_with(&a.sequence_cache_prefix()));
+        let still = ann(r#"{"id":"b","startSec":0,"endSec":1,"kind":"image","x":0,"y":0,"w":1,"h":1,"imagePath":"/x.png"}"#);
+        let (p, k) = still.image_source_at(0.5).unwrap();
+        assert_eq!((p.as_ref(), k.as_ref()), ("/x.png", "b"));
+        // Older payloads without the key still parse.
+        assert!(still.image_sequence.is_none());
     }
 }
