@@ -406,6 +406,15 @@ const NOOP_SINK: Required<ChatEventSink> = {
 	plan: noop,
 };
 
+/** Reply budget for a targeted request ("make the intro amazing", "zoom at 0:12"). */
+const TARGETED_TURN_BUDGET = {
+	softSteps: 3,
+	finishSteps: 5,
+	hardSteps: 7,
+	softMs: 2 * 60_000,
+	finishMs: 4 * 60_000,
+};
+
 /** Add a finished turn to the project journal (best effort — never fails the turn). */
 async function rememberTurn(
 	document: AxcutDocument | null | undefined,
@@ -736,7 +745,8 @@ async function runChatTimed(
 			result = await invokeOpenScreenAgent({
 				...(scope ? { allowedToolNames: scope } : {}),
 				document: workingDocument ?? emptyDocumentForTextOnly(projectId),
-				model: modelConfig,
+				// A targeted ask is a small job: finish it in 1–3 replies.
+				model: scope ? { ...modelConfig, turnBudgetLimits: TARGETED_TURN_BUDGET } : modelConfig,
 				history,
 				userMessage: messageForAgent,
 				sink: agentSink,
