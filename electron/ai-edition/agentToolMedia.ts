@@ -24,6 +24,7 @@ import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from "./mediaStudio";
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
 import { type BrandKit, DEFAULT_BRAND_KIT, storedBrandKit } from "./motionStudio/brandKit";
+import { readGlobalBrandKit } from "./motionStudio/globalBrandKit";
 import { deriveBrandKitFromVideo, paletteSourceVideo } from "./motionStudio/videoPalette";
 import type { CompositedFrameSampler } from "./compositorVerify/types";
 import { type SampleFramesResult, sampleFramesForAgent } from "./frameCheck";
@@ -226,9 +227,12 @@ export async function prepareAgentToolMedia(
 	const nextArgs = await shrinkImageArgs(document, name, args, ffmpegPath, signal);
 	const a = (nextArgs ?? {}) as Record<string, unknown>;
 
-	// Graphics follow the video's own colours until someone sets a brand kit.
+	// Graphics follow the user's remembered brand, else the video's own colours,
+	// until this project gets a brand kit of its own.
+	const remembered = BRAND_KIT_TOOLS.has(name) && !storedBrandKit(document) ? readGlobalBrandKit() : null;
+	if (remembered) prepared.videoBrandKit = remembered;
 	const wantsVideoKit =
-		name === "setBrandKit" ? a.fromVideo === true : BRAND_KIT_TOOLS.has(name) && !storedBrandKit(document);
+		name === "setBrandKit" ? a.fromVideo === true : BRAND_KIT_TOOLS.has(name) && !storedBrandKit(document) && !remembered;
 	if (wantsVideoKit && ffmpegPath) {
 		try {
 			const kit = await deriveBrandKitFromVideo(document, ffmpegPath, signal);

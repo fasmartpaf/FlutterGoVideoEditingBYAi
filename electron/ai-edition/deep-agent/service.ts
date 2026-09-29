@@ -17,6 +17,8 @@
 // middlewares (they are in `REQUIRED_MIDDLEWARE_NAMES`), so the fix is to stop
 // going through it: `createAgent` is what it wrapped, minus the sandbox.
 
+import { storedBrandKit } from "../motionStudio/brandKit";
+import { saveGlobalBrandKit } from "../motionStudio/globalBrandKit";
 import { existsSync } from "node:fs";
 import { anthropicPromptCachingMiddleware, createAgent, tool } from "langchain";
 import { z } from "zod";
@@ -850,6 +852,11 @@ function documentTool<S extends z.ZodType>(
 			});
 			if (!execution.ok && discardOnFailure.length > 0) discardPreparedFiles(discardOnFailure);
 			if (execution.document) holder.current = execution.document;
+			// A brand the user named (logo / name) is remembered for their next projects.
+			if (execution.ok && name === "setBrandKit" && execution.document) {
+				const kit = storedBrandKit(execution.document);
+				if (kit && kit.source !== "video") saveGlobalBrandKit(kit);
+			}
 			if (isMutatingTool(name)) {
 				if (execution.ok) telemetry.mutatingToolsExecuted.push(name);
 				else {

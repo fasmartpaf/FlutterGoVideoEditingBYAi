@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { setBrandHome } from "./ai-edition/motionStudio/globalBrandKit";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -103,6 +104,8 @@ if (process.platform === "linux") {
 installMainProcessErrorGuards();
 
 export const RECORDINGS_DIR = path.join(app.getPath("userData"), "recordings");
+// The brand a user sets in one project is remembered for the next ones.
+setBrandHome(app.getPath("userData"));
 
 async function ensureRecordingsDir() {
 	try {

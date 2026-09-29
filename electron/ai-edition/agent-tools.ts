@@ -3799,7 +3799,9 @@ export function executeAgentTool(
 						? storedBrandKit(document)?.source === "video"
 							? "taken from the video"
 							: "set for this project"
-						: options?.prepared?.videoBrandKit
+						: options?.prepared?.videoBrandKit?.name || options?.prepared?.videoBrandKit?.logoPath
+							? "the user's saved brand from an earlier project (used until setBrandKit changes it)"
+							: options?.prepared?.videoBrandKit
 							? "read from the video (used until setBrandKit changes it)"
 							: "default (no readable video)",
 					customHtml:
