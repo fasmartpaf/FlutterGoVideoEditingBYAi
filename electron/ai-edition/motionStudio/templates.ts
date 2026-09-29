@@ -261,3 +261,119 @@ li{display:flex;align-items:center;gap:calc(26*var(--u));font-size:calc(52*var(-
 		}
 	}
 }
+
+// --- overlays -----------------------------------------------------------------
+// Transparent compositions drawn ON TOP of the recording (a PNG sequence the
+// compositor steps through). Sized to the overlay box, not the full frame.
+
+export const OVERLAY_TEMPLATE_IDS = ["lowerThird", "callout", "cornerBadge", "keywordPop"] as const;
+export type OverlayTemplateId = (typeof OVERLAY_TEMPLATE_IDS)[number];
+
+export const OVERLAY_PARAMS = {
+	lowerThird: z.object({ name: text(60), title: text(80).optional() }),
+	callout: z.object({ text: text(90), pointer: z.enum(["left", "right", "up", "down", "none"]).optional() }),
+	cornerBadge: z.object({ text: text(24) }),
+	keywordPop: z.object({ text: text(40) }),
+} as const;
+
+export const OVERLAY_DESCRIPTIONS: Record<OverlayTemplateId, string> = {
+	lowerThird: "Name / title bar that slides in at the bottom — {name, title?}. Suggested box: x 4, y 76, width 46, height 16",
+	callout: "Speech-bubble callout pointing at something — {text, pointer?: left|right|up|down|none}. Suggested box ~30×12",
+	cornerBadge: "Small pill badge (NEW, TIP, 2×) that bounces in — {text}. Suggested box ~14×8 in a corner",
+	keywordPop: "One big emphasis word that pops — {text}. Suggested box ~40×18",
+};
+
+export const OVERLAY_DEFAULT_SEC: Record<OverlayTemplateId, number> = {
+	lowerThird: 4,
+	callout: 3,
+	cornerBadge: 2.5,
+	keywordPop: 1.8,
+};
+
+function overlayShell(kit: BrandKit, frame: Frame, css: string, body: string): string {
+	// Design unit: 1/200 of the box height, so text fills the box at any size.
+	const u = frame.height / 200;
+	const exitAt = Math.max(0.3, frame.durationSec - 0.4);
+	const f = feel(kit);
+	return `<!doctype html><html><head><style>
+:root{--u:${u}px;--p:${kit.primary};--s:${kit.secondary};--bg:${kit.background};--fg:${kit.text};--enter:${f.enter}s;--ease:${f.ease}}
+*{box-sizing:border-box}
+html,body{margin:0;width:${frame.width}px;height:${frame.height}px;overflow:hidden;background:transparent!important;color:var(--fg);font-family:${fontStack(kit)}}
+.o{position:absolute;inset:0;animation:oexit .4s ease-in ${exitAt}s both}
+@keyframes oexit{to{opacity:0;transform:translateY(calc(10*var(--u)))}}
+@keyframes rise{from{opacity:0;transform:translateY(calc(30*var(--u)))}to{opacity:1;transform:none}}
+@keyframes pop{0%{opacity:0;transform:scale(.5)}100%{opacity:1;transform:scale(1)}}
+${css}
+</style></head><body><div class="o">${body}</div></body></html>`;
+}
+
+export function renderOverlayTemplate(
+	id: OverlayTemplateId,
+	rawParams: unknown,
+	kit: BrandKit,
+	frame: Frame,
+): string {
+	switch (id) {
+		case "lowerThird": {
+			const p = OVERLAY_PARAMS.lowerThird.parse(rawParams);
+			const title = p.title ? `<div class="ti">${escapeHtml(p.title)}</div>` : "";
+			return overlayShell(
+				kit,
+				frame,
+				`.card{position:absolute;left:0;bottom:0;height:100%;display:flex;align-items:stretch;
+ animation:slidein var(--enter) var(--ease) both}
+@keyframes slidein{from{transform:translateX(-110%)}to{transform:none}}
+.stripe{width:calc(14*var(--u));background:linear-gradient(180deg,var(--p),var(--s));border-radius:calc(8*var(--u)) 0 0 calc(8*var(--u))}
+.body{background:color-mix(in srgb,var(--bg) 88%,transparent);padding:calc(22*var(--u)) calc(44*var(--u));display:flex;flex-direction:column;justify-content:center;
+ border-radius:0 calc(14*var(--u)) calc(14*var(--u)) 0;box-shadow:0 calc(10*var(--u)) calc(40*var(--u)) rgba(0,0,0,.35)}
+.nm{font-size:calc(64*var(--u));font-weight:800;line-height:1.05;white-space:nowrap;animation:rise var(--enter) var(--ease) .15s both}
+.ti{font-size:calc(38*var(--u));opacity:.85;margin-top:calc(10*var(--u));white-space:nowrap;animation:rise var(--enter) var(--ease) .3s both}`,
+				`<div class="card"><div class="stripe"></div><div class="body"><div class="nm">${escapeHtml(p.name)}</div>${title}</div></div>`,
+			);
+		}
+		case "callout": {
+			const p = OVERLAY_PARAMS.callout.parse(rawParams);
+			const pointer = p.pointer ?? "down";
+			const tail =
+				pointer === "none"
+					? ""
+					: `<div class="tail ${pointer}"></div>`;
+			return overlayShell(
+				kit,
+				frame,
+				`.b{position:absolute;inset:calc(18*var(--u));display:flex;align-items:center;justify-content:center;text-align:center;
+ padding:0 calc(30*var(--u));border-radius:calc(28*var(--u));background:#fff;color:#111;font-size:calc(52*var(--u));font-weight:700;
+ box-shadow:0 calc(10*var(--u)) calc(30*var(--u)) rgba(0,0,0,.3);border:calc(5*var(--u)) solid var(--p)}
+.w{position:absolute;inset:0;transform-origin:50% 100%;animation:pop var(--enter) var(--ease) both}
+.tail{position:absolute;width:calc(34*var(--u));height:calc(34*var(--u));background:#fff;border:calc(5*var(--u)) solid var(--p);transform:rotate(45deg);z-index:1}
+.tail.down{bottom:calc(2*var(--u));left:calc(50% - 17*var(--u));border-top:none;border-left:none}
+.tail.up{top:calc(2*var(--u));left:calc(50% - 17*var(--u));border-bottom:none;border-right:none}
+.tail.left{left:calc(2*var(--u));top:calc(50% - 17*var(--u));border-top:none;border-right:none}
+.tail.right{right:calc(2*var(--u));top:calc(50% - 17*var(--u));border-bottom:none;border-left:none}`,
+				`<div class="w"><div class="b">${escapeHtml(p.text)}</div>${tail}</div>`,
+			);
+		}
+		case "cornerBadge": {
+			const p = OVERLAY_PARAMS.cornerBadge.parse(rawParams);
+			return overlayShell(
+				kit,
+				frame,
+				`.pill{position:absolute;inset:calc(20*var(--u));display:flex;align-items:center;justify-content:center;border-radius:999px;
+ background:linear-gradient(90deg,var(--p),var(--s));color:#fff;font-size:calc(80*var(--u));font-weight:900;letter-spacing:.04em;
+ box-shadow:0 calc(8*var(--u)) calc(30*var(--u)) rgba(0,0,0,.35);animation:pop var(--enter) cubic-bezier(.34,1.56,.64,1) both}`,
+				`<div class="pill">${escapeHtml(p.text)}</div>`,
+			);
+		}
+		case "keywordPop": {
+			const p = OVERLAY_PARAMS.keywordPop.parse(rawParams);
+			return overlayShell(
+				kit,
+				frame,
+				`.k{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:calc(130*var(--u));font-weight:900;
+ text-transform:uppercase;background:linear-gradient(135deg,var(--p),var(--s));-webkit-background-clip:text;background-clip:text;color:transparent;
+ filter:drop-shadow(0 calc(6*var(--u)) calc(14*var(--u)) rgba(0,0,0,.45));animation:pop .45s cubic-bezier(.34,1.56,.64,1) both}`,
+				`<div class="k">${escapeHtml(p.text)}</div>`,
+			);
+		}
+	}
+}

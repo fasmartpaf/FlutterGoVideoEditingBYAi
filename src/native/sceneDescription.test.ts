@@ -19,6 +19,7 @@ import type {
 } from "@/lib/ai-edition/schema";
 import { axcutSchemaVersion } from "@/lib/ai-edition/schema";
 import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
+import { encodeImageSequenceRef } from "@/lib/ai-edition/document/imageSequence";
 import { buildSceneDescription } from "./sceneDescription";
 
 // --- Fixture helpers --------------------------------------------------------
@@ -1632,6 +1633,52 @@ describe("buildSceneDescription.annotations", () => {
 			h: 0.1,
 			clipIndex: 0,
 		});
+	});
+
+	it("hands an animated image overlay to the compositor as a sequence, poster as the still", () => {
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ov1",
+					startMs: 2000,
+					endMs: 5000,
+					type: "image",
+					content: "data:image/png;base64,POSTER",
+					imageContent: encodeImageSequenceRef({ dir: "/gg/overlays/a", fps: 30, frameCount: 90, offsetSec: 0.5 }),
+					textContent: "badge",
+					position: { x: 80, y: 5 },
+					size: { width: 14, height: 8 },
+					style,
+					zIndex: 1,
+				},
+			]),
+		);
+		expect(scene.annotations[0]).toMatchObject({
+			kind: "image",
+			imagePath: "data:image/png;base64,POSTER",
+			imageSequence: { dir: "/gg/overlays/a", fps: 30, frameCount: 90, offsetSec: 0.5 },
+		});
+	});
+
+	it("a plain image annotation carries no sequence", () => {
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "img1",
+					startMs: 0,
+					endMs: 1000,
+					type: "image",
+					content: "/x.png",
+					textContent: "",
+					position: { x: 0, y: 0 },
+					size: { width: 10, height: 10 },
+					style,
+					zIndex: 1,
+				},
+			]),
+		);
+		expect(scene.annotations[0]?.imageSequence).toBeUndefined();
+		expect(scene.annotations[0]?.imagePath).toBe("/x.png");
 	});
 
 	it("carries the text payload, reading the field the inspector actually writes", () => {

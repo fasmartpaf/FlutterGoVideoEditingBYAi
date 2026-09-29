@@ -15,6 +15,7 @@
  * contract — do not change the exported types.
  */
 
+import { decodeImageSequenceRef } from "@/lib/ai-edition/document/imageSequence";
 import type {
 	CameraFullscreenRegion,
 	SpeedRegion,
@@ -232,6 +233,12 @@ export interface SceneAnnotation {
 	};
 	/** Present for `kind: "image"` — the authored `imageContent` (path or data URI). */
 	imagePath?: string;
+	/**
+	 * Present for an ANIMATED image overlay: a PNG sequence the compositor steps
+	 * through (see document/imageSequence.ts). `imagePath` still carries the
+	 * poster frame, which is what a compositor without sequence support draws.
+	 */
+	imageSequence?: { dir: string; fps: number; frameCount: number; offsetSec: number };
 	/** Present for `kind: "figure"`. */
 	figure?: {
 		direction:
@@ -1165,6 +1172,21 @@ export function buildSceneDescription(
 					// `content.startsWith("data:image")`), `imageContent` being the parallel slot
 					// older documents used. Reading them the other way round would render an image
 					// the preview isn't showing.
+					const sequence = decodeImageSequenceRef(region.imageContent);
+					if (sequence) {
+						return [
+							{
+								...base,
+								imagePath: region.content || "",
+								imageSequence: {
+									dir: sequence.dir,
+									fps: sequence.fps,
+									frameCount: sequence.frameCount,
+									offsetSec: sequence.offsetSec ?? 0,
+								},
+							},
+						];
+					}
 					return [{ ...base, imagePath: region.content || region.imageContent || "" }];
 				}
 				if (region.type === "figure") {

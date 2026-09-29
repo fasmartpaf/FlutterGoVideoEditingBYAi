@@ -94,7 +94,15 @@ import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { brandKitSchema, readBrandKit, writeBrandKit } from "./motionStudio/brandKit";
 import { type MotionPlacement, placeMotionClip } from "./motionStudio/placement";
-import { MOTION_TEMPLATE_IDS, TEMPLATE_DEFAULT_SEC, TEMPLATE_DESCRIPTIONS } from "./motionStudio/templates";
+import {
+	MOTION_TEMPLATE_IDS,
+	OVERLAY_DEFAULT_SEC,
+	OVERLAY_DESCRIPTIONS,
+	OVERLAY_TEMPLATE_IDS,
+	TEMPLATE_DEFAULT_SEC,
+	TEMPLATE_DESCRIPTIONS,
+} from "./motionStudio/templates";
+import { encodeImageSequenceRef } from "../../src/lib/ai-edition/document/imageSequence";
 import {
 	BUILTIN_CHARACTERS,
 	listCharactersCatalog,
@@ -928,6 +936,35 @@ export const setBrandKitArgs = brandKitSchema.partial();
 
 export const listMotionTemplatesArgs = z.object({});
 
+/**
+ * An animated graphic drawn ON TOP of the recording (lower third, callout,
+ * badge, keyword pop, or agent HTML with a transparent background). Rendered
+ * to a transparent PNG sequence sized to the box, then stored as an image
+ * annotation the compositor plays frame by frame.
+ */
+export const addMotionOverlayArgs = z
+	.object({
+		template: z.enum(OVERLAY_TEMPLATE_IDS).optional(),
+		/** Template fields — see listMotionTemplates (overlays). */
+		params: z.record(z.string(), z.unknown()).optional(),
+		/** A complete HTML composition with a TRANSPARENT background, drawn at the box size. */
+		html: z.string().min(1).max(8_000_000).optional(),
+		htmlPath: z.string().min(1).optional(),
+		/** Box, in % of the recording (0–100). */
+		x: z.number().min(0).max(100),
+		y: z.number().min(0).max(100),
+		width: z.number().min(2).max(100),
+		height: z.number().min(2).max(100),
+		/** Playback time the overlay appears. */
+		startSec: z.number().nonnegative(),
+		durationSec: z.number().min(0.6).max(30).optional(),
+		fps: z.number().int().min(12).max(30).optional(),
+		label: z.string().max(80).optional(),
+	})
+	.refine((v) => Boolean(v.template || v.html || v.htmlPath), {
+		message: "addMotionOverlay needs template, html or htmlPath",
+	});
+
 export const createMotionGraphicPreviewArgs = z.object({
 	titles: z.array(z.string().min(1)).min(1).max(12),
 	/** Seconds per title card (default 1.8). */
@@ -1138,6 +1175,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"listMotionTemplates",
 	"createMotionClip",
 	"placeMotionClip",
+	"addMotionOverlay",
 	"setBrandKit",
 	"setWordText",
 	"addTrim",
@@ -1261,6 +1299,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addBeatGraphics",
 	"createMotionClip",
 	"placeMotionClip",
+	"addMotionOverlay",
 	"setBrandKit",
 	"addGraphic",
 	"setAnnotation",
@@ -3687,6 +3726,14 @@ export function executeAgentTool(
 						params: TEMPLATE_DESCRIPTIONS[id],
 						defaultSec: TEMPLATE_DEFAULT_SEC[id],
 					})),
+					overlays: OVERLAY_TEMPLATE_IDS.map((id) => ({
+						id,
+						params: OVERLAY_DESCRIPTIONS[id],
+						defaultSec: OVERLAY_DEFAULT_SEC[id],
+					})),
+					overlayNote:
+						"Overlays go on top of the recording with addMotionOverlay (box x/y/width/height in % of the recording, startSec). " +
+						"Custom overlay HTML must keep a transparent background; the page is the box size.",
 					brandKit: readBrandKit(document),
 					customHtml:
 						"Or write your own composition: html (or htmlPath) with CSS/Web Animations, requestAnimationFrame, or window.render(t) drawing a canvas. " +
@@ -3769,6 +3816,86 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "addMotionOverlay": {
+			const parsed = addMotionOverlayArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const overlay = options?.prepared?.motionOverlay;
+			if (!overlay) {
+				if (options?.prepared?.renderError) {
+					return failure(`Could not render the overlay: ${options.prepared.renderError}`);
+				}
+				return failure(
+					"addMotionOverlay renders frames, so it must be called directly as an agent tool (not inside a batch).",
+				);
+			}
+			const d = parsed.data;
+			const width = Math.min(d.width, 100 - d.x);
+			const height = Math.min(d.height, 100 - d.y);
+			const startMs = Math.round(d.startSec * 1000);
+			const endMs = Math.round((d.startSec + overlay.durationSec) * 1000);
+			const label = d.label ?? (d.template ? `${d.template} overlay` : "motion overlay");
+			const seqRef = { dir: overlay.dir, fps: overlay.fps, frameCount: overlay.frameCount };
+			const result = commitAnnotation(
+				document,
+				{
+					type: "image",
+					content: overlay.posterDataUri,
+					imageContent: encodeImageSequenceRef(seqRef),
+					textContent: label,
+					position: { x: d.x, y: d.y },
+					size: { width, height },
+					style: {
+						color: "#ffffff",
+						backgroundColor: "transparent",
+						fontSize: 32,
+						fontFamily: "Inter",
+						fontWeight: "bold",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: "none",
+					},
+					zIndex: document.annotations.length + 1,
+				},
+				startMs,
+				endMs,
+				`animated overlay "${label}"`,
+			);
+			if (!result.ok || !result.document) return result;
+			// A split overlay (it straddles a cut) continues where it left off.
+			const before = new Set(document.annotations.map((a) => a.id));
+			const fresh = result.document.annotations.filter((a) => !before.has(a.id));
+			const firstStart = Math.min(...fresh.map((a) => a.startMs));
+			const nextDoc: AxcutDocument = {
+				...result.document,
+				annotations: result.document.annotations.map((a) =>
+					before.has(a.id) || a.startMs === firstStart
+						? a
+						: { ...a, imageContent: encodeImageSequenceRef({ ...seqRef, offsetSec: (a.startMs - firstStart) / 1000 }) },
+				) as AxcutDocument["annotations"],
+			};
+			let payload: Record<string, unknown> = {};
+			try {
+				payload = JSON.parse(result.resultJson) as Record<string, unknown>;
+			} catch {
+				/* keep empty */
+			}
+			return {
+				...result,
+				document: nextDoc,
+				resultJson: JSON.stringify({
+					...payload,
+					framesDir: overlay.dir,
+					frameCount: overlay.frameCount,
+					fps: overlay.fps,
+					durationSec: overlay.durationSec,
+					previewFrames: [overlay.posterPath],
+					pageErrors: overlay.pageErrors,
+					note: "Placed on top of the recording. Look at previewFrames to check it reads well; move or resize it with setAnnotation.",
+				}),
 			};
 		}
 

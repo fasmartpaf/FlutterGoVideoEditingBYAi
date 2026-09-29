@@ -67,6 +67,7 @@ const ARGS: Record<string, unknown> = {
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
 	placeMotionClip: { videoPath: "/nonexistent/clip.mp4", place: "end", durationSec: 2 },
+	addMotionOverlay: { template: "cornerBadge", params: { text: "NEW" }, x: 80, y: 5, width: 14, height: 8, startSec: 1 },
 	setBrandKit: { primary: "#112233" },
 	setWordText: { wordId: "word_1", text: "Hullo" },
 	addTrim: { startSec: 1, endSec: 2 },
@@ -221,7 +222,8 @@ type BuiltTool = StructuredToolInterface;
 function toolsFor(document: AxcutDocument, runtime?: { cli?: CliEngine }) {
 	const { sink, events } = recordingSink();
 	const holder = { current: document };
-	const tools: BuiltTool[] = buildTools(holder, sink, true, runtime);
+	// No headless renderer in unit tests: a render tool fails the same way on every machine.
+	const tools: BuiltTool[] = buildTools(holder, sink, true, { createFrameSource: async () => null, ...runtime });
 	return { tools, events, holder };
 }
 
@@ -329,6 +331,8 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
+const RENDER_TOOLS = new Set(["createMotionClip", "addMotionOverlay"]);
+
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {
 		it(`${name}: one start, one end, ok from the executor`, async () => {
@@ -346,7 +350,8 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 			expect(events[0].name).toBe(name);
 			expect(events[1].name).toBe(name);
 			expect(events[1].ok).toBe(expected.ok);
-			expect(events[1].summary).toBe(expected.summary);
+			// Render tools run a media step first, so their refusal names the render failure.
+			if (!RENDER_TOOLS.has(name)) expect(events[1].summary).toBe(expected.summary);
 		});
 	}
 

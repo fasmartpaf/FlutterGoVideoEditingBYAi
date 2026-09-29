@@ -181,6 +181,7 @@ describe("the mutating-tool table", () => {
 				"addBeatGraphics",
 				"createMotionClip",
 				"placeMotionClip",
+				"addMotionOverlay",
 				"setBrandKit",
 				"addGraphic",
 				"addAudio",

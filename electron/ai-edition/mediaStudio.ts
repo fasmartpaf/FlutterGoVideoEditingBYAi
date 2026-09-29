@@ -118,11 +118,13 @@ export function resetEncoderCacheForTests(): void {
 	encoderCache.clear();
 }
 
-/** ffprobe sits beside ffmpeg in every bundle OpenScreen ships. */
+/** Prefer ffprobe next to ffmpeg; fall back to PATH when the bundle omits it. */
 export function ffprobeBesideFfmpeg(ffmpegPath: string): string {
-	return ffmpegPath.replace(/ffmpeg(\.exe)?$/i, (_m, exe: string | undefined) =>
+	const beside = ffmpegPath.replace(/ffmpeg(\.exe)?$/i, (_m, exe: string | undefined) =>
 		exe ? "ffprobe.exe" : "ffprobe",
 	);
+	if (existsSync(beside)) return beside;
+	return process.platform === "win32" ? "ffprobe.exe" : "ffprobe";
 }
 
 /** Container duration in seconds, or null when ffprobe is missing / fails. */

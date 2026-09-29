@@ -49,7 +49,7 @@ const REMOVE_LIKE =
 	/^(removeModifier|removeAnnotation|removeGraphic|removeZoom|removeCursorHighlight|removePrivacyCover|removeClip)$/i;
 const ADD_GRAPHIC_LIKE = /^(addGraphic|addAnnotation|addBeatGraphics)$/i;
 const ADD_ZOOM_LIKE = /^(addZoom|updateZoom)$/i;
-const MEDIA_LIKE = /^(importMedia|insertStartThumbnail|createMotionGraphicPreview|createMotionClip|placeMotionClip)$/i;
+const MEDIA_LIKE = /^(importMedia|insertStartThumbnail|createMotionGraphicPreview|createMotionClip|placeMotionClip|addMotionOverlay)$/i;
 const INSPECT_LIKE =
 	/^(getCurrentDocument|listSources|listTransitions|getTranscript|getTranscriptWords|getCursorTrack|listCharacters|listMotionTemplates)$/i;
 
@@ -75,6 +75,9 @@ function batchLabel(name: string, count: number, sampleSummary?: string): string
 				: `Created ${count} motion graphic previews.`;
 		}
 		if (name === "insertStartThumbnail") return "Updated the start cover.";
+		if (name === "addMotionOverlay") {
+			return count === 1 ? "Added an animated overlay." : `Added ${count} animated overlays.`;
+		}
 		if (name === "createMotionClip" || name === "placeMotionClip") {
 			return count === 1 ? "Added a motion graphic." : `Added ${count} motion graphics.`;
 		}

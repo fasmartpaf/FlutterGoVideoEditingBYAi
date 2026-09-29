@@ -87,6 +87,7 @@ import {
 	createMotionClipArgs,
 	listMotionTemplatesArgs,
 	placeMotionClipArgs,
+	addMotionOverlayArgs,
 	setBrandKitArgs,
 } from "../agent-tools";
 import { overagentCookbookSection } from "../overagentEditCookbook";
@@ -502,11 +503,13 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	importMedia:
 		"Import a video or audio file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk.",
 	listMotionTemplates:
-		"List built-in motion templates (titleCard, sectionCard, outroCta, kineticText, statHighlight, bulletList, logoReveal) with their params, plus the project brand kit. Call before createMotionClip.",
+		"List built-in motion templates (titleCard, sectionCard, outroCta, kineticText, statHighlight, bulletList, logoReveal) and overlay templates (lowerThird, callout, cornerBadge, keywordPop) with their params, plus the project brand kit. Call before createMotionClip / addMotionOverlay.",
 	createMotionClip:
 		"Render a full-frame animated MP4 at the project's size: an intro, section card, stat, bullet list, outro CTA… Use a template (+ params) or write your own html/htmlPath composition (CSS/Web Animations, requestAnimationFrame, or window.render(t) on a canvas — time starts at 0, no network). Uses the brand kit. Returns checks + previewFrames (stills you can look at). place: none (preview only, default) | start | end | {beforeClipId} | {afterClipId} | {atSec} — atSec is snapped to a pause in the speech so it never cuts mid-word. Prefer preview first, then place with placeMotionClip.",
 	placeMotionClip:
 		"Put an already rendered motion MP4 (videoPath from createMotionClip) on the timeline as its own full-frame clip: start | end | {beforeClipId} | {afterClipId} | {atSec} (snapped to a speech pause).",
+	addMotionOverlay:
+		"Animated graphic ON TOP of the recording (the video keeps playing underneath): lower third, callout, corner badge, keyword pop — template + params from listMotionTemplates (overlays) — or your own html/htmlPath with a TRANSPARENT background, drawn at the box size. Box x/y/width/height in % of the recording; startSec on the edited timeline; durationSec optional. Rendered to a transparent PNG sequence and played frame by frame. Uses the brand kit. Returns previewFrames. Use createMotionClip instead for full-frame cards that replace the picture.",
 	setBrandKit:
 		"Set the project brand kit used by every generated graphic: primary / secondary / background / text (hex), fontFamily (installed font), logoPath (absolute), style (clean|bold|playful|tech). Partial updates are fine.",
 	insertStartThumbnail:
@@ -649,6 +652,7 @@ const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
 	"createMotionGraphicPreview",
 	"createMotionClip",
 	"placeMotionClip",
+	"addMotionOverlay",
 	"addGraphic",
 	"registerCharacter",
 	"addCursorHighlight",
@@ -876,6 +880,7 @@ export function buildTools(
 		build("listMotionTemplates", listMotionTemplatesArgs),
 		build("createMotionClip", createMotionClipArgs),
 		build("placeMotionClip", placeMotionClipArgs),
+		build("addMotionOverlay", addMotionOverlayArgs),
 		build("setBrandKit", setBrandKitArgs),
 		build("setWordText", setWordTextArgs),
 		build("addTrim", addTrimArgs),

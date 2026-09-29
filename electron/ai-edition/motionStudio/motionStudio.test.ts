@@ -1,6 +1,6 @@
 // Motion studio: templates, brand kit, placement (speech-snapped), and the
 // full HTML → MP4 → check → place path when a headless Chromium is available.
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,7 +13,21 @@ import { DEFAULT_BRAND_KIT, readBrandKit, writeBrandKit } from "./brandKit";
 import { MOTION_DRIVER_JS, wrapComposition } from "./driver";
 import { placeMotionClip, snapToSpeechPause } from "./placement";
 import { createPlaywrightFrameSource } from "./playwrightFrameSource";
-import { MOTION_TEMPLATE_IDS, renderTemplate, TEMPLATE_DEFAULT_SEC } from "./templates";
+import {
+	MOTION_TEMPLATE_IDS,
+	OVERLAY_DEFAULT_SEC,
+	OVERLAY_TEMPLATE_IDS,
+	renderOverlayTemplate,
+	renderTemplate,
+	TEMPLATE_DEFAULT_SEC,
+} from "./templates";
+import {
+	decodeImageSequenceRef,
+	encodeImageSequenceRef,
+	sequenceFrameIndex,
+	sequenceFrameName,
+} from "../../../src/lib/ai-edition/document/imageSequence";
+import { splitClip } from "../../../src/lib/ai-edition/document/timeline";
 
 const scratch: string[] = [];
 afterEach(() => {
@@ -141,6 +155,87 @@ describe("placement", () => {
 	});
 });
 
+describe("animated overlays", () => {
+	it("encodes, decodes and steps through an image sequence (plays once, then holds)", () => {
+		const ref = { dir: "/o", fps: 10, frameCount: 20 };
+		const decoded = decodeImageSequenceRef(encodeImageSequenceRef(ref));
+		expect(decoded).toEqual({ ...ref, offsetSec: 0 });
+		expect(decodeImageSequenceRef("/plain.png")).toBeNull();
+		expect(decodeImageSequenceRef("openscreen-seq:{bad")).toBeNull();
+		expect(decodeImageSequenceRef(encodeImageSequenceRef({ dir: "", fps: 10, frameCount: 2 }))).toBeNull();
+		expect(sequenceFrameIndex(ref, 0)).toBe(0);
+		expect(sequenceFrameIndex(ref, 1.05)).toBe(10);
+		expect(sequenceFrameIndex(ref, 99)).toBe(19);
+		expect(sequenceFrameIndex({ ...ref, offsetSec: 1 }, 0)).toBe(10);
+		expect(sequenceFrameName(7)).toBe("frame-00007.png");
+	});
+
+	it("overlay templates draw on a transparent page in the brand colour", () => {
+		const kit = { ...DEFAULT_BRAND_KIT, primary: "#123456" };
+		const params: Record<string, unknown> = {
+			lowerThird: { name: "Ada <Lovelace>", title: "Founder" },
+			callout: { text: "Click here", pointer: "left" },
+			cornerBadge: { text: "NEW" },
+			keywordPop: { text: "Fast" },
+		};
+		for (const id of OVERLAY_TEMPLATE_IDS) {
+			const html = renderOverlayTemplate(id, params[id], kit, { width: 600, height: 160, durationSec: OVERLAY_DEFAULT_SEC[id] });
+			expect(html).toContain("#123456");
+			expect(html).toContain("background:transparent");
+			expect(html).not.toContain("<Lovelace>");
+		}
+	});
+
+	function fakeOverlay(root: string) {
+		const dir = join(root, "overlays", "seq");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, sequenceFrameName(0)), "png");
+		return {
+			dir,
+			fps: 30,
+			frameCount: 60,
+			durationSec: 2,
+			posterDataUri: "data:image/png;base64,AAAA",
+			posterPath: join(dir, sequenceFrameName(0)),
+			pageErrors: [],
+		};
+	}
+
+	it("stores the overlay as an image annotation whose picture is the sequence", () => {
+		const { doc, root } = fixture();
+		const args = { template: "cornerBadge", params: { text: "NEW" }, x: 80, y: 5, width: 14, height: 8, startSec: 1 };
+		const r = executeAgentTool(doc, "addMotionOverlay", JSON.stringify(args), { prepared: { motionOverlay: fakeOverlay(root) } });
+		expect(r.ok).toBe(true);
+		const ann = r.document!.annotations.at(-1)!;
+		expect(ann.type).toBe("image");
+		expect(ann.content).toBe("data:image/png;base64,AAAA");
+		expect(ann.startMs).toBe(1000);
+		expect(ann.endMs).toBe(3000);
+		expect(decodeImageSequenceRef(ann.imageContent)).toMatchObject({ fps: 30, frameCount: 60, offsetSec: 0 });
+		expect(JSON.parse(r.resultJson).previewFrames).toHaveLength(1);
+	});
+
+	it("an overlay that straddles a cut continues on the second clip instead of restarting", () => {
+		const { doc, root } = fixture();
+		const cut = splitClip(doc, doc.timeline.clips[0]!.id, 2, "user");
+		const args = { template: "keywordPop", params: { text: "Go" }, x: 30, y: 40, width: 40, height: 18, startSec: 1 };
+		const r = executeAgentTool(cut, "addMotionOverlay", JSON.stringify(args), { prepared: { motionOverlay: fakeOverlay(root) } });
+		expect(r.ok).toBe(true);
+		const added = r.document!.annotations.slice(cut.annotations.length).sort((a, b) => a.startMs - b.startMs);
+		expect(added).toHaveLength(2);
+		expect(decodeImageSequenceRef(added[0]!.imageContent)?.offsetSec).toBe(0);
+		expect(decodeImageSequenceRef(added[1]!.imageContent)?.offsetSec).toBeCloseTo(1, 3);
+	});
+
+	it("without a rendered overlay the executor explains instead of storing a blank", () => {
+		const { doc } = fixture();
+		const args = { template: "cornerBadge", params: { text: "NEW" }, x: 80, y: 5, width: 14, height: 8, startSec: 1 };
+		const r = executeAgentTool(doc, "addMotionOverlay", JSON.stringify(args), { prepared: { renderError: "boom" } });
+		expect(r.ok).toBe(false);
+		expect(r.resultJson + (r.summary ?? "")).toMatch(/boom/);
+	});
+});
+
 const pw = await createPlaywrightFrameSource().catch(() => null);
 await pw?.close();
 
@@ -182,5 +277,29 @@ describe.skipIf(!pw || !TEST_FFMPEG)("createMotionClip end to end (headless Chro
 		});
 		expect(prep.prepared.motionClip?.check.ok).toBe(false);
 		expect(prep.prepared.motionClip?.check.problems.join(" ")).toMatch(/flat colour|identical/);
+	}, 120_000);
+});
+
+
+describe.skipIf(!pw)("addMotionOverlay end to end (headless Chromium)", () => {
+	it("renders a transparent PNG sequence at the box size", async () => {
+		const { doc } = fixture();
+		const args = { template: "lowerThird", params: { name: "Ada", title: "Founder" }, x: 4, y: 76, width: 46, height: 16, startSec: 0.5, durationSec: 1, fps: 12 };
+		const prep = await prepareAgentToolMedia(doc, "addMotionOverlay", args, {
+			ffmpegPath: TEST_FFMPEG,
+			mayMutate: true,
+			createFrameSource: createPlaywrightFrameSource,
+		});
+		expect(prep.prepared.renderError).toBeUndefined();
+		const ov = prep.prepared.motionOverlay!;
+		scratch.push(ov.dir);
+		expect(ov.frameCount).toBe(12);
+		const png = readFileSync(join(ov.dir, sequenceFrameName(0)));
+		// IHDR: width/height at 16/20, colour type 6 = RGBA.
+		expect(png.readUInt32BE(16)).toBe(Math.round((640 * 46) / 100));
+		expect(png.readUInt32BE(20)).toBe(Math.round((360 * 16) / 100));
+		expect(png[25]).toBe(6);
+		const r = executeAgentTool(doc, "addMotionOverlay", JSON.stringify(args), { prepared: prep.prepared });
+		expect(r.ok).toBe(true);
 	}, 120_000);
 });

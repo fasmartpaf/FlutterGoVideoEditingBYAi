@@ -34,11 +34,19 @@ export async function createPlaywrightFrameSource(): Promise<FrameSource | null>
 	try {
 		browser = await chromium.launch({ headless: true });
 	} catch {
-		return null;
+		// Bundled Playwright Chromium may be missing (TLS / offline install). Prefer
+		// the machine's Google Chrome so Mac tests still exercise the real pipeline.
+		try {
+			browser = await chromium.launch({ headless: true, channel: "chrome" });
+		} catch {
+			return null;
+		}
 	}
 	let page: PwPage | null = null;
+	let transparent = false;
 	return {
-		async open(filePath, size) {
+		async open(filePath, size, options) {
+			transparent = Boolean(options?.transparent);
 			page = await browser.newPage({ viewport: { width: size.width, height: size.height }, deviceScaleFactor: 1 });
 			await page.route("**/*", (route) =>
 				/^(file|data|blob|about):/i.test(route.request().url()) ? route.continue() : route.abort(),
@@ -48,7 +56,7 @@ export async function createPlaywrightFrameSource(): Promise<FrameSource | null>
 		async frame(ms) {
 			if (!page) throw new Error("not open");
 			await page.evaluate(`window.__osSeek(${Number(ms)})`);
-			return page.screenshot({ type: "png", animations: "allow", caret: "initial" });
+			return page.screenshot({ type: "png", animations: "allow", caret: "initial", omitBackground: transparent });
 		},
 		async errors() {
 			return page ? page.evaluate<string[]>("window.__osErrors || []") : [];

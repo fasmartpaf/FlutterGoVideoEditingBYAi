@@ -29,7 +29,8 @@ export function createElectronFrameSource(): FrameSource {
 		});
 
 	return {
-		async open(filePath, size) {
+		async open(filePath, size, options) {
+			const transparent = Boolean(options?.transparent);
 			// In-memory partition (no "persist:" prefix): nothing survives the render.
 			const ses = session.fromPartition(`motion-render-${randomUUID()}`, { cache: false });
 			ses.webRequest.onBeforeRequest((details, callback) => {
@@ -44,6 +45,9 @@ export function createElectronFrameSource(): FrameSource {
 				useContentSize: true,
 				frame: false,
 				enableLargerThanScreen: true,
+				// Overlays: keep alpha so the compositor can draw them over the recording.
+				transparent,
+				backgroundColor: transparent ? "#00000000" : "#000000",
 				webPreferences: {
 					offscreen: true,
 					session: ses,

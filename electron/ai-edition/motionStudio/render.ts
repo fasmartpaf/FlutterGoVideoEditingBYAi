@@ -7,11 +7,17 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { sequenceFrameName } from "../../../src/lib/ai-edition/document/imageSequence";
 import { pickH264Encoder } from "../mediaStudio";
 
 export interface FrameSource {
-	/** Load the composition file (already wrapped with the driver). */
-	open(filePath: string, size: { width: number; height: number }): Promise<void>;
+	/**
+	 * Load the composition file (already wrapped with the driver). `transparent`
+	 * keeps the page background see-through so frames carry alpha (overlays).
+	 */
+	open(filePath: string, size: { width: number; height: number }, options?: { transparent?: boolean }): Promise<void>;
 	/** Seek to `ms` on the virtual clock and return the frame as PNG bytes. */
 	frame(ms: number): Promise<Buffer>;
 	/** Script errors the page reported so far. */
@@ -155,6 +161,62 @@ export async function renderComposition(input: RenderCompositionInput): Promise<
 			encoder.kill();
 			rmSync(input.outPath, { force: true });
 		}
+		await source.close().catch(() => undefined);
+	}
+}
+
+export interface RenderSequenceInput {
+	source: FrameSource;
+	compositionPath: string;
+	width: number;
+	height: number;
+	fps: number;
+	durationSec: number;
+	/** Folder for frame-00000.png … (created). */
+	outDir: string;
+	signal?: AbortSignal;
+}
+
+export interface RenderSequenceResult {
+	dir: string;
+	frameCount: number;
+	fps: number;
+	width: number;
+	height: number;
+	durationSec: number;
+	pageErrors: string[];
+}
+
+/**
+ * Composition → transparent PNG sequence, for animated overlays drawn on top
+ * of the recording by the compositor (which steps through the frames).
+ */
+export async function renderSequence(input: RenderSequenceInput): Promise<RenderSequenceResult> {
+	const { source, signal } = input;
+	if (signal?.aborted) throw abortError();
+	const width = even(input.width);
+	const height = even(input.height);
+	const fps = Math.min(30, Math.max(10, Math.round(input.fps)));
+	const durationSec = Math.min(30, Math.max(0.5, input.durationSec));
+	const total = Math.max(1, Math.round(durationSec * fps));
+	mkdirSync(input.outDir, { recursive: true });
+	await source.open(input.compositionPath, { width, height }, { transparent: true });
+	try {
+		for (let i = 0; i < total; i++) {
+			if (signal?.aborted) throw abortError();
+			const png = await source.frame((i * 1000) / fps);
+			writeFileSync(join(input.outDir, sequenceFrameName(i)), png);
+		}
+		return {
+			dir: input.outDir,
+			frameCount: total,
+			fps,
+			width,
+			height,
+			durationSec: total / fps,
+			pageErrors: await source.errors(),
+		};
+	} finally {
 		await source.close().catch(() => undefined);
 	}
 }
