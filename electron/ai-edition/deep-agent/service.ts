@@ -511,7 +511,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	addMotionOverlay:
 		"Animated graphic ON TOP of the recording (the video keeps playing underneath): lower third, callout, corner badge, keyword pop — template + params from listMotionTemplates (overlays) — or your own html/htmlPath with a TRANSPARENT background, drawn at the box size. Box x/y/width/height in % of the recording; startSec on the edited timeline; durationSec optional. Rendered to a transparent PNG sequence and played frame by frame. Uses the brand kit. Returns previewFrames. Use createMotionClip instead for full-frame cards that replace the picture.",
 	setBrandKit:
-		"Set the project brand kit used by every generated graphic: primary / secondary / background / text (hex), fontFamily (installed font), logoPath (absolute), style (clean|bold|playful|tech). Partial updates are fine.",
+		"Set the project brand kit used by every generated graphic: primary / secondary / background / text (hex), fontFamily (installed font), logoPath (absolute), style (clean|bold|playful|tech). Partial updates are fine. fromVideo:true takes the colours from the recording again. Until a kit is set, graphics already use colours read from the video — only call this when the user asks for specific brand colours/fonts.",
 	insertStartThumbnail:
 		"Put a FULL-FRAME opening segment at the START of the timeline (its own clip), then the recording plays after it. Use for thumbnail / cover / start frame — NEVER addGraphic for that (addGraphic is an overlay ON the take and hides part of the video). Pass imagePath or image (data URI), or text/subtext to bake a title plate. durationSec default 2.5. Matches project canvas size. Removes leftover full-bleed start overlays by default. If projectQueue.hasStartThumbnail is true, do NOT call this for polish/attractive asks — keep the existing opener, or pass replace:true only when the user asks to change the cover.",
 	listTransitions:
@@ -650,9 +650,11 @@ const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
 	"importMedia",
 	"insertStartThumbnail",
 	"createMotionGraphicPreview",
+	"listMotionTemplates",
 	"createMotionClip",
 	"placeMotionClip",
 	"addMotionOverlay",
+	"setBrandKit",
 	"addGraphic",
 	"registerCharacter",
 	"addCursorHighlight",

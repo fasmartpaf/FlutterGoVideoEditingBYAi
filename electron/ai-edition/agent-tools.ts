@@ -92,7 +92,13 @@ import {
 import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentToolMedia";
 import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
-import { brandKitSchema, readBrandKit, writeBrandKit } from "./motionStudio/brandKit";
+import { brandKitPatchSchema, readBrandKit, storedBrandKit, writeBrandKit } from "./motionStudio/brandKit";
+
+/** First graphic in a project without a brand kit: keep the colours it was drawn with (the video's). */
+function withVideoBrandKit(document: AxcutDocument, prepared: PreparedToolMedia | undefined): AxcutDocument {
+	if (storedBrandKit(document) || !prepared?.videoBrandKit) return document;
+	return writeBrandKit(document, prepared.videoBrandKit).document;
+}
 import { type MotionPlacement, placeMotionClip } from "./motionStudio/placement";
 import {
 	MOTION_TEMPLATE_IDS,
@@ -932,7 +938,10 @@ export const placeMotionClipArgs = z.object({
 	durationSec: z.number().positive().max(120).optional(),
 });
 
-export const setBrandKitArgs = brandKitSchema.partial();
+export const setBrandKitArgs = brandKitPatchSchema.extend({
+	/** Take the colours from the recording (anything else passed still overrides). */
+	fromVideo: z.boolean().optional(),
+});
 
 export const listMotionTemplatesArgs = z.object({});
 
@@ -3734,10 +3743,18 @@ export function executeAgentTool(
 					overlayNote:
 						"Overlays go on top of the recording with addMotionOverlay (box x/y/width/height in % of the recording, startSec). " +
 						"Custom overlay HTML must keep a transparent background; the page is the box size.",
-					brandKit: readBrandKit(document),
+					brandKit: storedBrandKit(document) ?? options?.prepared?.videoBrandKit ?? readBrandKit(document),
+					brandKitSource: storedBrandKit(document)
+						? storedBrandKit(document)?.source === "video"
+							? "taken from the video"
+							: "set for this project"
+						: options?.prepared?.videoBrandKit
+							? "read from the video (used until setBrandKit changes it)"
+							: "default (no readable video)",
 					customHtml:
 						"Or write your own composition: html (or htmlPath) with CSS/Web Animations, requestAnimationFrame, or window.render(t) drawing a canvas. " +
-						"Time starts at 0 on load and is stepped frame by frame; no network. Page size = project canvas.",
+						"Time starts at 0 on load and is stepped frame by frame; no network. Page size = project canvas. " +
+						"Use the brandKit colours and font above in your own HTML so it matches the video.",
 				}),
 			};
 		}
@@ -3745,7 +3762,21 @@ export function executeAgentTool(
 		case "setBrandKit": {
 			const parsed = setBrandKitArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
-			const patch = { ...parsed.data };
+			const { fromVideo, ...rest } = parsed.data;
+			const videoKit = options?.prepared?.videoBrandKit;
+			if (fromVideo && !videoKit) {
+				return failure(
+					"Could not read colours from the recording (no readable video in the project, or ffmpeg is missing). Set the colours directly instead.",
+				);
+			}
+			const touchesColours = ["primary", "secondary", "background", "text"].some((k) => k in rest);
+			const patch = {
+				...(fromVideo && videoKit
+					? { primary: videoKit.primary, secondary: videoKit.secondary, background: videoKit.background, text: videoKit.text }
+					: {}),
+				...rest,
+				source: fromVideo && !touchesColours ? ("video" as const) : ("manual" as const),
+			};
 			if (patch.logoPath) {
 				try {
 					patch.logoPath = assertSafeLocalMediaPath(patch.logoPath, "logoPath");
@@ -3759,7 +3790,7 @@ export function executeAgentTool(
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({ brandKit: kit }),
-				summary: `brand kit set (${kit.primary} / ${kit.secondary}, ${kit.fontFamily}, ${kit.style})`,
+				summary: `${fromVideo ? "brand kit taken from the video" : "brand kit set"} (${kit.primary} / ${kit.secondary}, ${kit.fontFamily}, ${kit.style})`,
 			};
 		}
 
@@ -3793,7 +3824,7 @@ export function executeAgentTool(
 			}
 			return {
 				ok: true,
-				...(placed ? { document: placed.document } : {}),
+				...(placed ? { document: withVideoBrandKit(placed.document, options?.prepared) } : {}),
 				resultJson: JSON.stringify({
 					videoPath: clip.mp4Path,
 					exportedPaths: [clip.mp4Path],
@@ -3885,7 +3916,7 @@ export function executeAgentTool(
 			}
 			return {
 				...result,
-				document: nextDoc,
+				document: withVideoBrandKit(nextDoc, options?.prepared),
 				resultJson: JSON.stringify({
 					...payload,
 					framesDir: overlay.dir,

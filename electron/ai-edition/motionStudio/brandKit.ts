@@ -28,9 +28,26 @@ export const brandKitSchema = z.object({
 	logoPath: z.string().trim().max(1024).optional(),
 	/** Overall motion feel. */
 	style: z.enum(["clean", "bold", "playful", "tech"]).default("clean"),
+	/** Where the colours came from: taken from the recording, or set by the user / agent. */
+	source: z.enum(["video", "manual"]).optional(),
 });
 
 export type BrandKit = z.infer<typeof brandKitSchema>;
+
+/**
+ * A partial update. Not `brandKitSchema.partial()`: in zod 4 that still fills
+ * the defaults, so `{primary}` would silently reset every other field.
+ */
+export const brandKitPatchSchema = z.object({
+	name: z.string().trim().max(60).optional(),
+	primary: hex.optional(),
+	secondary: hex.optional(),
+	background: hex.optional(),
+	text: hex.optional(),
+	fontFamily: z.string().trim().max(80).optional(),
+	logoPath: z.string().trim().max(1024).optional(),
+	style: z.enum(["clean", "bold", "playful", "tech"]).optional(),
+});
 
 export const DEFAULT_BRAND_KIT: BrandKit = brandKitSchema.parse({});
 
@@ -39,6 +56,14 @@ export function readBrandKit(document: AxcutDocument): BrandKit {
 	const raw = (document.legacyEditor as Record<string, unknown> | null | undefined)?.brandKit;
 	const parsed = brandKitSchema.safeParse(raw ?? {});
 	return parsed.success ? parsed.data : DEFAULT_BRAND_KIT;
+}
+
+/** The brand kit saved on the project, or null when none was ever set. */
+export function storedBrandKit(document: AxcutDocument): BrandKit | null {
+	const raw = (document.legacyEditor as Record<string, unknown> | null | undefined)?.brandKit;
+	if (!raw) return null;
+	const parsed = brandKitSchema.safeParse(raw);
+	return parsed.success ? parsed.data : null;
 }
 
 /** Return a copy of the document with the brand kit merged in (partial updates allowed). */

@@ -22,7 +22,8 @@ import {
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from "./mediaStudio";
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
-import { readBrandKit } from "./motionStudio/brandKit";
+import { type BrandKit, DEFAULT_BRAND_KIT, storedBrandKit } from "./motionStudio/brandKit";
+import { deriveBrandKitFromVideo } from "./motionStudio/videoPalette";
 import { writeComposition } from "./motionStudio/composition";
 import { type FrameSource, renderComposition, renderSequence } from "./motionStudio/render";
 import {
@@ -58,6 +59,8 @@ export interface PreparedToolMedia {
 	mediaDurationSec?: number | null;
 	/** A render was attempted and failed — the executor reports this message. */
 	renderError?: string;
+	/** Brand colours read from the recording (used when the project has no brand kit yet). */
+	videoBrandKit?: BrandKit;
 	/** addMotionOverlay: the rendered transparent PNG sequence. */
 	motionOverlay?: {
 		dir: string;
@@ -202,6 +205,19 @@ export async function prepareAgentToolMedia(
 	const nextArgs = await shrinkImageArgs(document, name, args, ffmpegPath, signal);
 	const a = (nextArgs ?? {}) as Record<string, unknown>;
 
+	// Graphics follow the video's own colours until someone sets a brand kit.
+	const wantsVideoKit =
+		name === "setBrandKit" ? a.fromVideo === true : BRAND_KIT_TOOLS.has(name) && !storedBrandKit(document);
+	if (wantsVideoKit && ffmpegPath) {
+		try {
+			const kit = await deriveBrandKitFromVideo(document, ffmpegPath, signal);
+			if (kit) prepared.videoBrandKit = kit;
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+		}
+	}
+	const kit = storedBrandKit(document) ?? prepared.videoBrandKit ?? DEFAULT_BRAND_KIT;
+
 	if (name === "importMedia" || name === "placeMotionClip") {
 		const path = str(a.path) ?? str(a.videoPath);
 		if (path && ffmpegPath) {
@@ -293,7 +309,7 @@ export async function prepareAgentToolMedia(
 
 	if (name === "addMotionOverlay" && options.mayMutate) {
 		try {
-			const overlay = await renderMotionOverlay(document, a, { signal, createFrameSource: options.createFrameSource });
+			const overlay = await renderMotionOverlay(document, a, kit, { signal, createFrameSource: options.createFrameSource });
 			if (overlay) {
 				prepared.motionOverlay = overlay;
 				discardOnFailure.push(overlay.dir);
@@ -306,7 +322,7 @@ export async function prepareAgentToolMedia(
 
 	if (name === "createMotionClip" && ffmpegPath) {
 		try {
-			const clip = await renderMotionClip(document, a, {
+			const clip = await renderMotionClip(document, a, kit, {
 				ffmpegPath,
 				signal,
 				createFrameSource: options.createFrameSource,
@@ -328,6 +344,7 @@ export async function prepareAgentToolMedia(
 async function renderMotionOverlay(
 	document: AxcutDocument,
 	a: Record<string, unknown>,
+	kit: BrandKit,
 	options: { signal?: AbortSignal; createFrameSource?: () => Promise<FrameSource | null> },
 ): Promise<PreparedToolMedia["motionOverlay"] | null> {
 	const template = str(a.template);
@@ -350,7 +367,6 @@ async function renderMotionOverlay(
 		Math.max(0.6, num(a.durationSec) ?? (template ? OVERLAY_DEFAULT_SEC[template as OverlayTemplateId] : 3)),
 	);
 	const fps = Math.min(30, Math.max(12, Math.round(num(a.fps) ?? 30)));
-	const kit = readBrandKit(document);
 	const source = template
 		? { html: renderOverlayTemplate(template as OverlayTemplateId, a.params ?? {}, kit, { width, height, durationSec }) }
 		: htmlPath
@@ -396,6 +412,7 @@ async function renderMotionOverlay(
 async function renderMotionClip(
 	document: AxcutDocument,
 	a: Record<string, unknown>,
+	kit: BrandKit,
 	options: {
 		ffmpegPath: string;
 		signal?: AbortSignal;
@@ -418,7 +435,6 @@ async function renderMotionClip(
 		30,
 		Math.max(0.8, num(a.durationSec) ?? (template ? TEMPLATE_DEFAULT_SEC[template as MotionTemplateId] : 3)),
 	);
-	const kit = readBrandKit(document);
 	const source = template
 		? { html: renderTemplate(template as MotionTemplateId, a.params ?? {}, kit, { width, height, durationSec }) }
 		: htmlPath
@@ -465,6 +481,9 @@ async function renderMotionClip(
 		composition.dispose();
 	}
 }
+
+/** Tools whose output uses the brand kit (so they read the video's colours when none is set). */
+const BRAND_KIT_TOOLS: ReadonlySet<string> = new Set(["listMotionTemplates", "createMotionClip", "addMotionOverlay"]);
 
 /** Remove files (or overlay frame folders) a refused/failed tool call left behind. */
 export function discardPreparedFiles(paths: string[]): void {

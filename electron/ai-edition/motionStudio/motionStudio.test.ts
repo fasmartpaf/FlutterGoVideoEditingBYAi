@@ -12,6 +12,7 @@ import { TEST_FFMPEG } from "../testing/ffmpegForTests";
 import { DEFAULT_BRAND_KIT, readBrandKit, writeBrandKit } from "./brandKit";
 import { MOTION_DRIVER_JS, wrapComposition } from "./driver";
 import { placeMotionClip, snapToSpeechPause } from "./placement";
+import { contrastRatio, deriveBrandKitFromVideo, paletteFromPixels } from "./videoPalette";
 import { createPlaywrightFrameSource } from "./playwrightFrameSource";
 import {
 	MOTION_TEMPLATE_IDS,
@@ -155,6 +156,90 @@ describe("placement", () => {
 	});
 });
 
+describe("brand kit from the video", () => {
+	/** A frame: `bg` everywhere, `accent` on `share` of the pixels (e.g. buttons). */
+	function frame(bg: number[], accents: Array<[number[], number]>, n = 64 * 36 * 6): Uint8Array {
+		const px = new Uint8Array(n * 3);
+		let i = 0;
+		for (const [c, share] of accents) {
+			for (const end = i + Math.round(n * share); i < end; i++) px.set(c, i * 3);
+		}
+		for (; i < n; i++) px.set(bg, i * 3);
+		return px;
+	}
+	const rgb = (h: string) => [1, 3, 5].map((i) => Number.parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
+	const hue = (h: string) => {
+		const [r, g, b] = rgb(h);
+		const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+		if (!d) return 0;
+		const x = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+		return (x * 60 + 360) % 360;
+	};
+
+	it("a dark IDE demo with blue and green accents gets dark cards in those accents", () => {
+		const p = paletteFromPixels(frame([24, 26, 33], [[[59, 130, 246], 0.08], [[34, 197, 94], 0.04]]))!;
+		expect(contrastRatio(rgb(p.background), [0, 0, 0])).toBeLessThan(2);
+		expect(p.text).toBe("#ffffff");
+		expect(hue(p.primary)).toBeGreaterThan(200);
+		expect(hue(p.primary)).toBeLessThan(235);
+		expect(hue(p.secondary)).toBeGreaterThan(120);
+		expect(hue(p.secondary)).toBeLessThan(160);
+	});
+
+	it("a light SaaS UI with an orange button gets light cards, dark text and a readable orange", () => {
+		const p = paletteFromPixels(frame([247, 248, 250], [[[249, 115, 22], 0.05]]))!;
+		expect(p.background).toBe("#f7f8fa");
+		expect(p.text).toBe("#0f172a");
+		expect(hue(p.primary)).toBeGreaterThan(10);
+		expect(hue(p.primary)).toBeLessThan(40);
+		expect(contrastRatio(rgb(p.primary), rgb(p.background))).toBeGreaterThanOrEqual(2.4);
+	});
+
+	it("greyscale footage keeps its light/dark look with readable default accents", () => {
+		const p = paletteFromPixels(frame([30, 30, 30], [[[200, 200, 200], 0.1]]))!;
+		expect(p.background).toBe("#1e1e1e");
+		expect(contrastRatio(rgb(p.primary), rgb(p.background))).toBeGreaterThanOrEqual(2.4);
+	});
+
+	it("setBrandKit fromVideo stores the video colours; explicit colours still win", () => {
+		const { doc } = fixture();
+		const videoBrandKit = { ...DEFAULT_BRAND_KIT, primary: "#3b82f6", secondary: "#22c55e", background: "#181a21", source: "video" as const };
+		const r = executeAgentTool(doc, "setBrandKit", JSON.stringify({ fromVideo: true }), { prepared: { videoBrandKit } });
+		expect(r.ok).toBe(true);
+		expect(readBrandKit(r.document!)).toMatchObject({ primary: "#3b82f6", background: "#181a21", source: "video" });
+		const r2 = executeAgentTool(doc, "setBrandKit", JSON.stringify({ fromVideo: true, primary: "#ff0000" }), { prepared: { videoBrandKit } });
+		expect(readBrandKit(r2.document!)).toMatchObject({ primary: "#ff0000", background: "#181a21", source: "manual" });
+		expect(executeAgentTool(doc, "setBrandKit", JSON.stringify({ fromVideo: true })).ok).toBe(false);
+		// A partial update keeps every other field.
+		const r3 = executeAgentTool(r.document!, "setBrandKit", JSON.stringify({ fontFamily: "Poppins" }));
+		expect(readBrandKit(r3.document!)).toMatchObject({ primary: "#3b82f6", background: "#181a21", fontFamily: "Poppins" });
+	});
+
+	it("listMotionTemplates reports the video's colours when no kit is set", () => {
+		const { doc } = fixture();
+		const videoBrandKit = { ...DEFAULT_BRAND_KIT, primary: "#3b82f6", source: "video" as const };
+		const r = executeAgentTool(doc, "listMotionTemplates", "{}", { prepared: { videoBrandKit } });
+		const payload = JSON.parse(r.resultJson);
+		expect(payload.brandKit.primary).toBe("#3b82f6");
+		expect(payload.brandKitSource).toMatch(/video/);
+	});
+
+	it.skipIf(!TEST_FFMPEG)("reads the palette from a real recording", async () => {
+		const { doc, root } = fixture();
+		const video = join(root, "recordings", "rec.mp4");
+		const { spawnSync } = await import("node:child_process");
+		spawnSync(TEST_FFMPEG!, [
+			"-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x181a21:s=320x180:d=2",
+			"-vf", "drawbox=x=20:y=20:w=120:h=40:color=0x3b82f6:t=fill", "-pix_fmt", "yuv420p", video,
+		]);
+		const kit = await deriveBrandKitFromVideo(doc, TEST_FFMPEG!);
+		expect(kit?.source).toBe("video");
+		expect(contrastRatio(rgb(kit!.background), [0, 0, 0])).toBeLessThan(2);
+		expect(hue(kit!.primary)).toBeGreaterThan(200);
+		expect(hue(kit!.primary)).toBeLessThan(235);
+	});
+});
+
 describe("animated overlays", () => {
 	it("encodes, decodes and steps through an image sequence (plays once, then holds)", () => {
 		const ref = { dir: "/o", fps: 10, frameCount: 20 };
@@ -213,6 +298,11 @@ describe("animated overlays", () => {
 		expect(ann.endMs).toBe(3000);
 		expect(decodeImageSequenceRef(ann.imageContent)).toMatchObject({ fps: 30, frameCount: 60, offsetSec: 0 });
 		expect(JSON.parse(r.resultJson).previewFrames).toHaveLength(1);
+		// No brand kit yet → the colours the overlay was drawn with (the video's) are kept.
+		const withKit = executeAgentTool(doc, "addMotionOverlay", JSON.stringify(args), {
+			prepared: { motionOverlay: fakeOverlay(root), videoBrandKit: { ...DEFAULT_BRAND_KIT, primary: "#3b82f6", source: "video" } },
+		});
+		expect(readBrandKit(withKit.document!)).toMatchObject({ primary: "#3b82f6", source: "video" });
 	});
 
 	it("an overlay that straddles a cut continues on the second clip instead of restarting", () => {
