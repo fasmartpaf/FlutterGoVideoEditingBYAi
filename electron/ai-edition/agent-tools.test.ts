@@ -180,6 +180,7 @@ describe("the mutating-tool table", () => {
 				"registerCharacter",
 				"addBeatGraphics",
 				"createMotionClip",
+				"createShowcaseVideo",
 				"placeMotionClip",
 				"addMotionOverlay",
 				"setBrandKit",

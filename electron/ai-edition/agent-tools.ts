@@ -101,6 +101,8 @@ function withVideoBrandKit(document: AxcutDocument, prepared: PreparedToolMedia 
 	return writeBrandKit(document, prepared.videoBrandKit).document;
 }
 import { type MotionPlacement, placeMotionClip } from "./motionStudio/placement";
+import { showcaseArgsSchema } from "./showcase/plan";
+import { placeShowcase } from "./showcase/placement";
 import {
 	MOTION_TEMPLATE_IDS,
 	OVERLAY_DEFAULT_SEC,
@@ -944,6 +946,15 @@ export const setBrandKitArgs = brandKitPatchSchema.extend({
 	fromVideo: z.boolean().optional(),
 });
 
+/**
+ * Turn the recording into a branded showcase video: the recording in a floating
+ * 3D window over an animated brand background, logo intro/outro, step cards,
+ * zooms, highlights, ticks and click ripples. Times are the recording's own
+ * seconds; positions are fractions of the recording frame. Rendered in the
+ * async media step.
+ */
+export const createShowcaseVideoArgs = showcaseArgsSchema;
+
 export const listMotionTemplatesArgs = z.object({});
 
 export const listCursorThemesArgs = z.object({});
@@ -1213,6 +1224,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"createShowcaseVideo",
 	"placeMotionClip",
 	"addMotionOverlay",
 	"setBrandKit",
@@ -1337,6 +1349,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"registerCharacter",
 	"addBeatGraphics",
 	"createMotionClip",
+	"createShowcaseVideo",
 	"placeMotionClip",
 	"addMotionOverlay",
 	"setBrandKit",
@@ -3888,6 +3901,58 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "createShowcaseVideo": {
+			const parsed = createShowcaseVideoArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const clip = options?.prepared?.showcaseClip;
+			if (!clip) {
+				if (options?.prepared?.renderError) {
+					return failure(`Could not make the showcase video: ${options.prepared.renderError}`);
+				}
+				return failure(
+					resolveFfmpeg()?.trim()
+						? "createShowcaseVideo renders video, so it must be called directly as an agent tool (not inside a batch)."
+						: "createShowcaseVideo needs ffmpeg (bundled OpenScreen ffmpeg missing).",
+				);
+			}
+			let placed: ReturnType<typeof placeShowcase> | null = null;
+			try {
+				placed =
+					parsed.data.place === "none"
+						? null
+						: placeShowcase(document, { mp4Path: clip.mp4Path, durationSec: clip.durationSec, label: clip.label }, parsed.data.place);
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			return {
+				ok: true,
+				...(placed ? { document: withVideoBrandKit(placed.document, options?.prepared) } : {}),
+				resultJson: JSON.stringify({
+					videoPath: clip.mp4Path,
+					exportedPaths: [clip.mp4Path],
+					durationSec: clip.durationSec,
+					width: clip.width,
+					height: clip.height,
+					fps: clip.fps,
+					footageSec: clip.footageSec,
+					footageStartSec: clip.footageStartSec,
+					hasAudio: clip.hasAudio,
+					cached: Boolean(clip.cached),
+					placed: placed ? { clipId: placed.clipId, where: placed.where, cleared: placed.cleared } : null,
+					checks: { ok: clip.check.ok, problems: clip.check.problems },
+					previewFrames: [...clip.check.framePaths, ...clip.stepFrames],
+					dropped: clip.dropped,
+					pageErrors: clip.pageErrors,
+					note: clip.check.ok
+						? "Rendered and checked. Read previewFrames (the step frames show each card) and fix anything cut off, covering the UI or mistimed by calling again with a corrected plan — an unchanged plan is reused, not re-rendered."
+						: "Rendered, but the automatic check found problems — fix the plan and render again.",
+				}),
+				summary: placed
+					? `showcase video (${clip.durationSec.toFixed(1)}s) ${placed.where}`
+					: `showcase video rendered (${clip.durationSec.toFixed(1)}s) for preview`,
 			};
 		}
 

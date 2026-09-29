@@ -71,6 +71,7 @@ const ARGS: Record<string, unknown> = {
 	createMotionGraphicPreview: { titles: ["Demo"] },
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
+	createShowcaseVideo: { place: "none" },
 	placeMotionClip: { videoPath: "/nonexistent/clip.mp4", place: "end", durationSec: 2 },
 	addMotionOverlay: { template: "cornerBadge", params: { text: "NEW" }, x: 80, y: 5, width: 14, height: 8, startSec: 1 },
 	setBrandKit: { primary: "#112233" },
@@ -336,7 +337,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "addMotionOverlay", "sampleFrames", "getVideoSummary"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {

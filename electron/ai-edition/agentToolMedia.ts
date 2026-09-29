@@ -40,6 +40,8 @@ import {
 	TEMPLATE_DEFAULT_SEC,
 } from "./motionStudio/templates";
 import { type MotionClipCheck, verifyMotionClip } from "./motionStudio/verify";
+import { showcaseArgsSchema } from "./showcase/plan";
+import { renderShowcase, type ShowcaseClip } from "./showcase/render";
 import {
 	bakeStillToMp4,
 	canvasSizeFromDocument,
@@ -80,6 +82,8 @@ export interface PreparedToolMedia {
 		posterPath: string;
 		pageErrors: string[];
 	};
+	/** createShowcaseVideo: the finished showcase MP4 and its check. */
+	showcaseClip?: ShowcaseClip;
 	/** createMotionClip: the rendered clip and its automatic check. */
 	motionClip?: {
 		mp4Path: string;
@@ -365,6 +369,25 @@ export async function prepareAgentToolMedia(
 		}
 	}
 
+	if (name === "createShowcaseVideo" && ffmpegPath) {
+		try {
+			const parsed = showcaseArgsSchema.safeParse(a);
+			if (parsed.success) {
+				const clip = await renderShowcase(document, parsed.data, kit, {
+					ffmpegPath,
+					generatedDir: resolveGeneratedGraphicsDir(document),
+					signal,
+					createFrameSource: options.createFrameSource,
+				});
+				prepared.showcaseClip = clip;
+				if (!clip.cached) discardOnFailure.push(clip.mp4Path);
+			}
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			prepared.renderError = err instanceof Error ? err.message : String(err);
+		}
+	}
+
 	if (name === "createMotionClip" && ffmpegPath) {
 		try {
 			const clip = await renderMotionClip(document, a, kit, {
@@ -640,7 +663,7 @@ async function withRecordingScreenshot(
 }
 
 /** Tools whose output uses the brand kit (so they read the video's colours when none is set). */
-const BRAND_KIT_TOOLS: ReadonlySet<string> = new Set(["listMotionTemplates", "createMotionClip", "addMotionOverlay"]);
+const BRAND_KIT_TOOLS: ReadonlySet<string> = new Set(["listMotionTemplates", "createMotionClip", "addMotionOverlay", "createShowcaseVideo"]);
 
 /** Remove files (or overlay frame folders) a refused/failed tool call left behind. */
 export function discardPreparedFiles(paths: string[]): void {

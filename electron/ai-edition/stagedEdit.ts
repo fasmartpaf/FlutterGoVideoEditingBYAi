@@ -77,6 +77,7 @@ const CAPTION_TOOLS = ["generateCaptions", "setCaptionSettings", "setWordText"] 
 
 const GRAPHICS_TOOLS = [
 	"createMotionClip",
+	"createShowcaseVideo",
 	"placeMotionClip",
 	"addMotionOverlay",
 	"setBrandKit",
@@ -173,6 +174,9 @@ const EXPLICIT_WHOLE = /\b(whole|entire|complete|full)\s+(video|edit|recording|t
 /** Names one part of the video — a targeted edit, not a whole-video one. */
 const PART =
 	/\b(intro|outro|opening|opener|ending|title|card|caption|subtitle|zoom|overlay|graphic|logo|thumbnail|cover|cta|call\s*to\s*action|lower\s*third|callout|badge|transition|music|audio|sound|background|wallpaper|blur|speed|crop|motion|animation|text|font|colou?r|section|part|scene|clip)s?\b/i;
+/** The recording itself restyled ("make it look premium", "better look", "motion graphics into it"): one showcase render, not the staged edit. */
+export const SHOWCASE_REQUEST =
+	/\b(showcase|premium|branded|branding|better\s+look\w*|look\w*\s+(?:better|amazing|premium|professional|beautiful|clean|attractive)|motion\s+graphics?\s+(?:in|into|on|over|to)\b)/i;
 const NARROW = /\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\b\d{1,2}:\d{2}\b|\b(?:this|that)\s+(?:zoom|caption|overlay|clip|title|graphic)\b/i;
 
 /**
@@ -184,6 +188,7 @@ export function isWholeVideoRequest(message: string): boolean {
 	const m = message.trim();
 	if (m.length < 12) return false;
 	if (m.endsWith("?") && !BROAD_VERB.test(m.split(/\s+/).slice(0, 3).join(" "))) return false;
+	if (SHOWCASE_REQUEST.test(m)) return false;
 	if (EXPLICIT_WHOLE.test(m)) return true;
 	if (NARROW.test(m) || PART.test(m)) return false;
 	return BROAD_VERB.test(m) && WHOLE_VIDEO.test(m);
@@ -274,6 +279,11 @@ export function previewTimeSec(document: AxcutDocument, stage: EditStage, durati
 // --- targeted requests --------------------------------------------------------
 
 const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
+	{
+		// The whole recording restyled: one render, plus the brand kit it uses.
+		match: SHOWCASE_REQUEST,
+		tools: ["createShowcaseVideo", "setBrandKit"],
+	},
 	{
 		match: /\b(motion|graphics?|intro|outro|opener|title|overlay|lower\s*third|callout|badge|cta|call\s*to\s*action|logo|animat\w*|thumbnail|cover|brand\w*|card)s?\b/i,
 		tools: GRAPHICS_TOOLS,
