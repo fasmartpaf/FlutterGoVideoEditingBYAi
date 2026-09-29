@@ -70,6 +70,7 @@ const OPENSCREEN_STATUS: Record<string, string> = {
 	setClipIncomingTransition: "Editing transitions",
 	registerCharacter: "Registering character",
 	exportProject: "Exporting",
+	createShowcaseVideo: "Making the showcase video",
 	record: "Recording",
 	recordScreen: "Recording the screen",
 };

@@ -41,7 +41,7 @@ import {
 } from "./motionStudio/templates";
 import { type MotionClipCheck, verifyMotionClip } from "./motionStudio/verify";
 import { showcaseArgsSchema } from "./showcase/plan";
-import { renderShowcase, type ShowcaseClip } from "./showcase/render";
+import { renderProgress, renderShowcase, type ShowcaseClip } from "./showcase/render";
 import {
 	bakeStillToMp4,
 	canvasSizeFromDocument,
@@ -214,6 +214,8 @@ export async function prepareAgentToolMedia(
 		createFrameSource?: () => Promise<FrameSource | null>;
 		/** Offscreen compositor for edited-timeline frames (the app's native addon). */
 		createCompositorSampler?: () => Promise<CompositedFrameSampler | null>;
+		/** Live progress for long renders ("Rendering 420 / 930 frames · ~40s left"). */
+		onProgress?: (detail: string) => void;
 	},
 ): Promise<PreparedToolCall> {
 	const { ffmpegPath, signal } = options;
@@ -378,6 +380,7 @@ export async function prepareAgentToolMedia(
 					generatedDir: resolveGeneratedGraphicsDir(document),
 					signal,
 					createFrameSource: options.createFrameSource,
+					onProgress: options.onProgress,
 				});
 				prepared.showcaseClip = clip;
 				if (!clip.cached) discardOnFailure.push(clip.mp4Path);
@@ -394,6 +397,7 @@ export async function prepareAgentToolMedia(
 				ffmpegPath,
 				signal,
 				createFrameSource: options.createFrameSource,
+				onProgress: options.onProgress,
 			});
 			if (clip) {
 				prepared.motionClip = clip;
@@ -487,6 +491,7 @@ async function renderMotionClip(
 		ffmpegPath: string;
 		signal?: AbortSignal;
 		createFrameSource?: () => Promise<FrameSource | null>;
+		onProgress?: (detail: string) => void;
 	},
 ): Promise<PreparedToolMedia["motionClip"] | null> {
 	const upgrade = upgradeOpener(document, str(a.template), a.params, kit);
@@ -541,6 +546,7 @@ async function renderMotionClip(
 			outPath: mp4Path,
 			ffmpegPath: options.ffmpegPath,
 			signal: options.signal,
+			onProgress: renderProgress(options.onProgress),
 		});
 		const check = await verifyMotionClip({
 			ffmpegPath: options.ffmpegPath,

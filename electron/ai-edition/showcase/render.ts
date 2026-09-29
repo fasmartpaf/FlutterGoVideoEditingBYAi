@@ -115,6 +115,26 @@ function writeCache(dir: string, key: string, value: ShowcaseClip): void {
 	}
 }
 
+/** "Rendering 420 / 930 frames · ~40s left", throttled to a few updates a second. */
+export function renderProgress(
+	report: ((detail: string) => void) | undefined,
+	label = "Rendering",
+	now: () => number = Date.now,
+): ((done: number, total: number) => void) | undefined {
+	if (!report) return undefined;
+	const started = now();
+	let last = Number.NEGATIVE_INFINITY;
+	return (done, total) => {
+		const t = now();
+		if (done < total && t - last < 400) return;
+		last = t;
+		const elapsed = (t - started) / 1000;
+		const left = done > 3 ? (elapsed / done) * (total - done) : null;
+		const eta = left === null ? "" : left >= 90 ? ` · ~${Math.round(left / 60)} min left` : ` · ~${Math.max(1, Math.round(left))}s left`;
+		report(`${label} ${done} / ${total} frames${done < total ? eta : ""}`);
+	};
+}
+
 const LOGO_EXTS = new Set([".png", ".svg", ".jpg", ".jpeg", ".webp"]);
 
 export async function renderShowcase(
@@ -128,6 +148,8 @@ export async function renderShowcase(
 		createFrameSource?: () => Promise<FrameSource | null>;
 		/** Stem for file names (tests pass a fixed one). */
 		stem?: string;
+		/** Live progress for the chat. */
+		onProgress?: (detail: string) => void;
 	},
 ): Promise<ShowcaseClip> {
 	const { ffmpegPath, signal } = options;
@@ -198,6 +220,7 @@ export async function renderShowcase(
 	const digits = 5;
 	try {
 		// 1. Footage frames (and audio) — cropped, enhanced, retimed.
+		options.onProgress?.("Preparing the recording");
 		const filter = buildFootageFilter({ segments, crop, fps, enhance: args.enhance, audio: withAudio });
 		const extract = await runProcess(
 			ffmpegPath,
@@ -267,6 +290,8 @@ export async function renderShowcase(
 				outPath: withAudio ? silentPath : mp4Path,
 				ffmpegPath,
 				signal,
+				maxDurationSec: 300,
+				onProgress: renderProgress(options.onProgress),
 			});
 		} finally {
 			composition.dispose();
@@ -274,6 +299,7 @@ export async function renderShowcase(
 
 		// 4. Sound: the retimed recording audio, starting with the footage, faded at the end.
 		if (withAudio) {
+			options.onProgress?.("Adding the sound");
 			const delayMs = Math.round(timing.footageStart * 1000);
 			const fadeAt = Math.max(0, timing.totalSec - 0.6);
 			const mux = await runProcess(
@@ -311,6 +337,7 @@ export async function renderShowcase(
 		}
 
 		// 5. Check it, and grab a still at each step card.
+		options.onProgress?.("Checking the video");
 		const check = await verifyMotionClip({
 			ffmpegPath,
 			mp4Path,

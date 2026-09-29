@@ -244,3 +244,22 @@ describe("placing a showcase", () => {
 		expect(added.document.timeline.clips).toHaveLength(2);
 	});
 });
+
+describe("render progress", () => {
+	it("reports frames and time left, a few times a second", async () => {
+		const { renderProgress } = await import("./render");
+		let t = 0;
+		const seen: string[] = [];
+		const tick = renderProgress((d) => seen.push(d), "Rendering", () => t)!;
+		t = 100;
+		tick(1, 100);
+		t = 200;
+		tick(2, 100); // throttled
+		t = 5000;
+		tick(50, 100);
+		t = 10000;
+		tick(100, 100);
+		expect(seen).toEqual(["Rendering 1 / 100 frames", "Rendering 50 / 100 frames · ~5s left", "Rendering 100 / 100 frames"]);
+		expect(renderProgress(undefined)).toBeUndefined();
+	});
+});

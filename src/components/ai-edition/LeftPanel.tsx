@@ -730,6 +730,24 @@ export function ChatStripPanel() {
 			if (event.kind === "status") {
 				if (event.sessionId && event.sessionId !== thinkingRunSessionRef.current) return;
 				if (event.phase === "connected") return;
+				if (event.phase === "tool_progress") {
+					// A long render reporting in: show it on the running action ("Rendering 420 / 930 frames").
+					try {
+						const { name, detail } = JSON.parse(event.detail ?? "{}") as { name?: string; detail?: string };
+						if (name && detail) {
+							setLiveTools((prev) => {
+								const i = prev.map((t) => t.name === name && t.ok === undefined).lastIndexOf(true);
+								if (i < 0) return prev;
+								const next = [...prev];
+								next[i] = { ...next[i]!, detail };
+								return next;
+							});
+						}
+					} catch {
+						// malformed progress is ignored
+					}
+					return;
+				}
 				if (event.phase === "turn_timing") {
 					// Latency marks for this turn (send → first status/text/tool → done).
 					console.debug("[chat-turn timing]", event.detail);

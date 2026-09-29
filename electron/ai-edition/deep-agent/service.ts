@@ -819,6 +819,8 @@ function documentTool<S extends z.ZodType>(
 						signal: runtime.abortSignal,
 						createFrameSource: runtime.createFrameSource ?? defaultFrameSource,
 						createCompositorSampler: runtime.createCompositorSampler ?? defaultCompositorSampler,
+						// Long renders report progress into the running action's line in the chat.
+						onProgress: (detail: string) => sink.status?.("tool_progress", JSON.stringify({ name, detail })),
 						mayMutate:
 							editsAllowed !== false &&
 							mutationMode !== "proposal_only" &&

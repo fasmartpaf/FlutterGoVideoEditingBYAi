@@ -48,6 +48,8 @@ export interface RenderCompositionInput {
 	ffmpegPath: string;
 	signal?: AbortSignal;
 	onProgress?: (done: number, total: number) => void;
+	/** Longest render allowed (default 60 s; a showcase of a whole recording is longer). */
+	maxDurationSec?: number;
 }
 
 export interface RenderCompositionResult {
@@ -147,7 +149,7 @@ export async function renderComposition(input: RenderCompositionInput): Promise<
 	const width = even(input.width);
 	const height = even(input.height);
 	const fps = Math.min(60, Math.max(12, Math.round(input.fps)));
-	const durationSec = Math.min(60, Math.max(0.5, input.durationSec));
+	const durationSec = Math.min(input.maxDurationSec ?? 60, Math.max(0.5, input.durationSec));
 	const total = Math.max(1, Math.round(durationSec * fps));
 	const encoderName = await pickH264Encoder(input.ffmpegPath, signal);
 	// Retina recordings (3024×1964…) make every frame a 5+ megapixel paint; the
