@@ -195,3 +195,57 @@ describe.skipIf(!posix)("long-lived Claude session", () => {
 		expect(spawns[1]!.argv).not.toContain("--session-id");
 	});
 });
+
+describe.skipIf(!posix)("live session failure", () => {
+	let dir: string;
+	beforeEach(() => {
+		dir = mkdtempSync(path.join(os.tmpdir(), "fake-live-fail-"));
+		delete process.env.OPENSCREEN_CLI_PERSISTENT;
+	});
+	afterEach(async () => {
+		closeAllLiveSessions();
+		const { resetLiveClaudeSessionsForTests } = await import("./local-cli-chat-model");
+		resetLiveClaudeSessionsForTests();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("shows the CLI's own error and falls back to one-shot spawns", async () => {
+		// Live mode (stream-json input) answers with an error result; one-shot mode works.
+		const bin = path.join(dir, "claude");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env node
+const live = process.argv.includes("--input-format");
+if (live) {
+  process.stdin.on("data", () => {
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["boom: bad flag"] }) + "\\n");
+  });
+} else {
+  let buf = ""; process.stdin.on("data", (d) => (buf += d));
+  process.stdin.on("end", () => {
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify({ message: "Hi from one-shot" }) }) + "\\n");
+  });
+}
+`,
+		);
+		chmodSync(bin, 0o755);
+		const progress: string[] = [];
+		const warn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (...a: unknown[]) => warnings.push(a.map(String).join(" "));
+		try {
+			const m = new LocalCliChatModel({
+				agentId: "claude",
+				binPath: bin,
+				cliSessionId: "55555555-5555-5555-5555-555555555555",
+				onProgress: (e) => progress.push(e.delta),
+			});
+			const r = await m.invoke([new HumanMessage("hi")]);
+			expect(r.content).toBe("Hi from one-shot");
+			expect(warnings.join("\n")).toContain("boom: bad flag");
+			expect(progress.join("")).toContain("one-shot mode");
+		} finally {
+			console.warn = warn;
+		}
+	});
+});

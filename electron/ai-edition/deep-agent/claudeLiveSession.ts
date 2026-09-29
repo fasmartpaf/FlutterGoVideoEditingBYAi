@@ -246,6 +246,8 @@ export class ClaudeLiveSession {
 			const line = `${JSON.stringify({
 				type: "user",
 				message: { role: "user", content: [{ type: "text", text }] },
+				// Same shape the Agent SDK sends (SDKUserMessage).
+				parent_tool_use_id: null,
 			})}\n`;
 			child.stdin!.write(line);
 		});
@@ -268,13 +270,19 @@ export class ClaudeLiveSession {
 			if (ev.kind === "text" && turn.firstTextAt === null) turn.firstTextAt = Date.now();
 			turn.options.onEvent(ev);
 		}
-		let type = "";
+		let parsedLine: {
+			type?: string;
+			subtype?: string;
+			is_error?: boolean;
+			result?: unknown;
+			errors?: unknown;
+		};
 		try {
-			type = (JSON.parse(line) as { type?: string }).type ?? "";
+			parsedLine = JSON.parse(line);
 		} catch {
 			return;
 		}
-		if (type !== "result") return;
+		if (parsedLine.type !== "result") return;
 		// End of this turn.
 		this.current = null;
 		turn.cleanup();
@@ -288,8 +296,24 @@ export class ClaudeLiveSession {
 			return;
 		}
 		const raw = (turn.state.result ?? "").trim() || turn.state.assistantText.trim();
-		if (!raw) {
-			turn.reject(new Error("Local CLI finished the turn without a reply."));
+		const failed = parsedLine.is_error === true || (parsedLine.subtype && parsedLine.subtype !== "success");
+		if (!raw || failed) {
+			// Surface what the CLI actually said instead of a generic message.
+			const errors = Array.isArray(parsedLine.errors) ? parsedLine.errors.map(String).join("; ") : "";
+			const detail = [
+				parsedLine.subtype ? `subtype ${parsedLine.subtype}` : "",
+				errors,
+				typeof parsedLine.result === "string" ? parsedLine.result : "",
+				this.stderrTail.trim().slice(-400),
+			]
+				.filter(Boolean)
+				.join(" — ");
+			console.warn(`[local-cli] live turn failed: ${line.slice(0, 2_000)}`);
+			const err = new Error(
+				formatLocalCliError(`Local CLI turn failed${detail ? `: ${detail}` : " without a reply."}`, turn.options.agentId),
+			);
+			err.name = "LiveTurnError";
+			turn.reject(err);
 			return;
 		}
 		turn.resolve(raw);

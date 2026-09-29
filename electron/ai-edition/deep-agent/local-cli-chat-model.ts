@@ -25,7 +25,7 @@ import {
 	MAX_STDOUT_CHARS,
 	HEARTBEAT_MS,
 } from "./claudeStream";
-import { acquireLiveSession } from "./claudeLiveSession";
+import { acquireLiveSession, closeLiveSession } from "./claudeLiveSession";
 import { ReplyStreamer } from "./replyStreamer";
 
 export interface PlanItem {
@@ -294,9 +294,26 @@ export function buildIncrementalPrompt(
 	return { kind: "delta", text: lines.join("\n"), fingerprints };
 }
 
-/** Live (long-lived) Claude sessions are on unless OPENSCREEN_CLI_PERSISTENT=0. */
+let liveDisabledReason: string | null = null;
+
+/** Turn live sessions off for the rest of this app session (after a failure). */
+export function disableLiveClaudeSessions(reason: string): void {
+	liveDisabledReason = reason;
+}
+
+/** Why live sessions were turned off this app session, if they were. */
+export function liveClaudeSessionsDisabledReason(): string | null {
+	return liveDisabledReason;
+}
+
+/** Test helper. */
+export function resetLiveClaudeSessionsForTests(): void {
+	liveDisabledReason = null;
+}
+
+/** Live (long-lived) Claude sessions are on unless OPENSCREEN_CLI_PERSISTENT=0 or one failed. */
 export function liveClaudeSessionsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	return env.OPENSCREEN_CLI_PERSISTENT !== "0";
+	return env.OPENSCREEN_CLI_PERSISTENT !== "0" && liveDisabledReason === null;
 }
 
 function parseModelJson(raw: string): {
@@ -665,16 +682,32 @@ export class LocalCliChatModel extends BaseChatModel {
 			}
 		};
 		const cwd = workDir && workDir.length > 0 ? workDir : os.tmpdir();
-		const raw =
-			this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled()
-				? await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward })
-				: await runCliStreaming(
+		let raw: string | null = null;
+		if (this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled()) {
+			try {
+				raw = await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward });
+			} catch (err) {
+				if ((err as Error)?.name === "AbortError" || this.abortSignal?.aborted) throw err;
+				// The long-lived process failed: keep the chat working on the proven
+				// one-spawn-per-step path for the rest of this app session, and say why.
+				disableLiveClaudeSessions(err instanceof Error ? err.message : String(err));
+				closeLiveSession(this.cliSessionId);
+				console.warn(`[local-cli] live session disabled, falling back: ${(err as Error)?.message}`);
+				forward({ kind: "progress", delta: "Live session failed — continuing in one-shot mode…\n" });
+				raw = null;
+			}
+		}
+		if (raw === null)
+			raw = await runCliStreaming(
 			this.binPath,
 			printArgvForAgent(this.agentId, prompt, {
 				addDirs,
 				outputFormat: streamJson ? "stream-json" : undefined,
 				model: this.cliModel,
-				cliSessionId: this.cliSessionId,
+				// After a live-session failure the Claude session on disk may be in an
+				// unknown state ("session id already in use"); run without session
+				// flags — the prompt carries the whole conversation anyway.
+				cliSessionId: liveClaudeSessionsDisabledReason() ? undefined : this.cliSessionId,
 				resumeCliSession,
 			}),
 			{
