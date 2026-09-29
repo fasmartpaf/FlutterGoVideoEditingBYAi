@@ -304,3 +304,50 @@ describe("draft showcases", () => {
 		expect(showcaseArgsSchema.parse({ quality: "draft" }).quality).toBe("draft");
 	});
 });
+
+describe("following a cover as the page scrolls", () => {
+	it("finds the vertical shift between two frames", async () => {
+		const { bestShift, cumulativeShifts, rowProfile } = await import("./track");
+		const w = 40;
+		const h = 60;
+		const frame = (offset: number) => {
+			const g = new Uint8Array(w * h);
+			for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = (((y - offset) * 37) % 200 + 200) % 200;
+			return g;
+		};
+		const p0 = rowProfile(frame(0), w, h, 0, w);
+		const up = rowProfile(frame(-7), w, h, 0, w);
+		expect(bestShift(p0, p0, 20)).toBe(0);
+		expect(bestShift(p0, up, 20)).toBe(-7);
+		expect(cumulativeShifts([[p0, up, rowProfile(frame(-12), w, h, 0, w)]], 2, 20)).toEqual([[0, -14, -24]]);
+	});
+
+	it("maps covers into the footage and draws them in the page", () => {
+		const tl = resolveTimeline(
+			{ covers: [{ startSec: 1, endSec: 3, x: 0.7, y: 0.8, width: 0.06, height: 0.1, mode: "image", useBrandLogo: true, follow: true }] },
+			buildSegments(0, 6),
+			{ x: 0, y: 0, width: 1920, height: 1080 },
+			{ width: 1920, height: 1080 },
+		);
+		expect(tl.covers[0]).toMatchObject({ in: 1, out: 3, at: 1, mode: "image", fill: "#ffffff", useBrandLogo: true });
+		const html = renderShowcasePage({
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			frameCount: 180,
+			frameDigits: 5,
+			timeline: { ...tl, covers: [{ ...tl.covers[0]!, image: "cover-0.png", track: [0, -3, -6] }] },
+			kit: brandKitSchema.parse({}),
+			name: "",
+			logoFile: null,
+			intro: false,
+			outro: false,
+			tagline: "",
+			url: "",
+			tags: [],
+			theme: "dark",
+		});
+		expect(html).toContain('"image":"cover-0.png"');
+		expect(html).toContain("cvs.forEach");
+	});
+});

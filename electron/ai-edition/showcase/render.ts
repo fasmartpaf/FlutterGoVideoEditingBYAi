@@ -12,7 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { extname, isAbsolute, join } from "node:path";
 import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
 import { getEditorSettings } from "../../../src/lib/ai-edition/store/editorSettings";
 import { runProcess } from "../mediaStudio";
@@ -33,6 +33,7 @@ import {
 	type ShowcaseTimeline,
 } from "./plan";
 import { renderShowcasePage, showcaseTiming } from "./template";
+import { trackBands } from "./track";
 
 export interface ShowcaseClip {
 	mp4Path: string;
@@ -190,6 +191,7 @@ export async function renderShowcase(
 	lost("highlights", args.highlights?.length, timeline.highlights.length);
 	lost("checks", args.checks?.length, timeline.checks.length);
 	lost("clicks", args.clicks?.length, timeline.clicks.length);
+	lost("covers", args.covers?.length, timeline.covers.length);
 
 	const hasBrand = Boolean(kit.name || (kit.logoPath && existsSync(kit.logoPath)));
 	const intro = args.intro ?? hasBrand;
@@ -264,6 +266,39 @@ export async function renderShowcase(
 		if (kit.logoPath && existsSync(kit.logoPath) && LOGO_EXTS.has(extname(kit.logoPath).toLowerCase())) {
 			logoFile = `logo${extname(kit.logoPath).toLowerCase()}`;
 			copyFileSync(kit.logoPath, join(work, logoFile));
+		}
+		// Covers: their pictures next to the page, and their spot followed as the page scrolls.
+		timeline.covers.forEach((c, i) => {
+			if (c.mode !== "image") return;
+			const src = c.useBrandLogo ? kit.logoPath : c.imagePath;
+			if (src && isAbsolute(src) && existsSync(src) && LOGO_EXTS.has(extname(src).toLowerCase())) {
+				c.image = `cover-${i}${extname(src).toLowerCase()}`;
+				copyFileSync(src, join(work, c.image));
+			} else {
+				dropped.push(`cover ${i + 1}: picture not found — drawn as a plain fill`);
+				c.mode = "fill";
+			}
+		});
+		const followed = timeline.covers.filter((c) => c.follow);
+		if (followed.length) {
+			options.onProgress?.("Following the covered spots");
+			const shifts = await trackBands({
+				ffmpegPath,
+				framesPattern: join(framesDir, `%0${digits}d.jpg`),
+				fps,
+				width: crop.width,
+				height: crop.height,
+				bands: followed.map((c) => ({ x0: c.x, x1: c.x + c.width })),
+				signal,
+			});
+			followed.forEach((c, k) => {
+				const all = shifts[k] ?? [];
+				const a = Math.min(all.length - 1, Math.max(0, Math.floor(c.in * fps)));
+				const b = Math.min(all.length - 1, Math.ceil(c.out * fps));
+				// Offsets are relative to the frame where the box was measured (atSec), before and after it.
+				const r = Math.min(b, Math.max(a, Math.round(c.at * fps)));
+				c.track = all.length ? all.slice(a, b + 1).map((v) => Math.round((v - all[r]!) * 10) / 10) : null;
+			});
 		}
 		const html = renderShowcasePage({
 			width: size.width,

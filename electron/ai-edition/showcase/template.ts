@@ -178,6 +178,18 @@ export function renderShowcasePage(input: ShowcasePageInput): string {
 		highlights: input.timeline.highlights,
 		checks: input.timeline.checks,
 		clicks: input.timeline.clicks,
+		covers: input.timeline.covers.map((c) => ({
+			in: c.in,
+			out: c.out,
+			x: c.x,
+			y: c.y,
+			width: c.width,
+			height: c.height,
+			mode: c.mode,
+			fill: c.fill,
+			image: c.image,
+			track: c.track,
+		})),
 		tags: input.tags.slice(0, 8),
 	};
 
@@ -235,6 +247,9 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 #sheen{position:absolute;top:-20%;height:140%;left:0;width:300px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-18deg);mix-blend-mode:screen;opacity:0}
 .rip{position:absolute;width:64px;height:64px;margin:-32px 0 0 -32px;border-radius:50%;border:3px solid ${readableOnLight(p)};background:${rgba(s, 0.15)};opacity:0}
 .hl{position:absolute;border-radius:12px;border:3px solid ${readableOnLight(p)};box-shadow:0 0 0 6px ${rgba(p, 0.16)},0 10px 30px -8px ${rgba(p, 0.5)};opacity:0}
+.cov{position:absolute;border-radius:8px;opacity:0;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.cov.blur{backdrop-filter:blur(14px) saturate(.9);-webkit-backdrop-filter:blur(14px);background:rgba(255,255,255,.18)}
+.cov img{width:88%;height:88%;object-fit:contain}
 .chk{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;background:linear-gradient(135deg,#22C55E,#15803D);box-shadow:0 0 0 5px rgba(34,197,94,.18),0 6px 14px -4px rgba(21,128,61,.6);opacity:0;display:flex;align-items:center;justify-content:center}
 .chk svg{width:20px;height:20px}
 .co{position:absolute;left:${card.x}px;width:${card.w}px;padding:30px 32px 32px 38px;border-radius:26px;opacity:0;
@@ -301,6 +316,9 @@ const hls=C.highlights.map(h=>{const d=mk('hl');d.style.left=(h.x*SX-6)+'px';d.s
 const TICK='<svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const cks=C.checks.map(c=>{const d=mk('chk',TICK);d.style.left=(c.x*SX)+'px';d.style.top=(c.y*SY)+'px';return {c,d}});
 const rps=C.clicks.map(c=>{const d=mk('rip');d.style.left=(c.x*SX)+'px';d.style.top=(c.y*SY)+'px';return {c,d}});
+const cvs=C.covers.map(c=>{const d=mk('cov '+c.mode);d.style.left=(c.x*SX)+'px';d.style.width=(c.width*SX)+'px';d.style.height=(c.height*SY)+'px';
+ if(c.mode!=='blur')d.style.background=c.fill;if(c.mode==='image'&&c.image){const im=document.createElement('img');im.src=c.image;im.alt='';d.appendChild(im)}
+ marks.insertBefore(d,marks.firstChild);return {c,d}});
 const K=C.camera;
 function cam(t){let i=0;while(i<K.length-2&&t>K[i+1][0])i++;const a=K[i],b=K[i+1]||a,e=eio(lin(t,a[0],b[0]));
  return [a[1]+(b[1]-a[1])*e,a[2]+(b[2]-a[2])*e,a[3]+(b[3]-a[3])*e]}
@@ -334,6 +352,8 @@ window.render=async(T)=>{
  // camera
  let [z,fx,fy]=cam(ft);fx*=SX;fy*=SY;let tx=C.vw/2-fx*z,ty2=C.vh/2-fy*z;tx=Math.min(0,Math.max(C.vw-C.vw*z,tx));ty2=Math.min(0,Math.max(C.vh-C.vh*z,ty2));
  $('cam').style.transform='translate('+tx.toFixed(2)+'px,'+ty2.toFixed(2)+'px) scale('+z.toFixed(4)+')';
+ cvs.forEach(({c,d})=>{const on=ft>=c.in&&ft<=c.out;d.style.opacity=on?1:0;
+  if(!on)return;const k=Math.max(0,i-Math.floor(c.in*C.fps));const off=c.track&&c.track.length?c.track[Math.min(c.track.length-1,k)]:0;d.style.top=((c.y+off)*SY)+'px'});
  rps.forEach(({c,d})=>{const r=(ft-c.at)/0.6;d.style.opacity=(r>0&&r<1)?(1-r).toFixed(3):0;d.style.transform='scale('+(0.4+clamp(r)*1.2).toFixed(3)+')'});
  hls.forEach(({h,d})=>{const o=eout(lin(ft,h.in,h.in+.4))*(1-lin(ft,h.out-.25,h.out));d.style.opacity=o.toFixed(3);d.style.transform='scale('+(1.06-0.06*back(lin(ft,h.in,h.in+.5))).toFixed(4)+')'});
  let done=[];cks.forEach(({c,d})=>{const a=lin(ft,c.at,c.at+.3);if(a>=.5&&ft<c.until)done.push(c.at);const o=clamp(a*2)*(1-lin(ft,c.until-.15,c.until));d.style.opacity=o.toFixed(3);d.style.transform='scale('+(a>0?back(a):0).toFixed(3)+')'});

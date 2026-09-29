@@ -61,6 +61,34 @@ export const showcaseArgsSchema = z.object({
 	checks: z.array(z.object({ atSec: sec, x: frac, y: frac, untilSec: sec.optional() })).max(20).optional(),
 	/** Click ripples. */
 	clicks: z.array(z.object({ atSec: sec, x: frac, y: frac })).max(20).optional(),
+	/**
+	 * Cover something in the recording — hide it (blur), paint over it (fill) or
+	 * put an image on it (image: e.g. the new logo over an old one). follow
+	 * (default true) keeps the cover on its spot as the page scrolls.
+	 */
+	covers: z
+		.array(
+			boxSchema.extend({
+				startSec: sec,
+				endSec: sec,
+				/** When the box above is exactly right (a frame where you can see it). Default startSec. */
+				atSec: sec.optional(),
+				mode: z.enum(["blur", "fill", "image"]).default("blur"),
+				/** For mode image: an absolute path to the picture. */
+				imagePath: z.string().trim().min(1).optional(),
+				/** For mode image: use the brand kit's logo. */
+				useBrandLogo: z.boolean().optional(),
+				/** Background behind an image, or the fill colour (hex). Default white. */
+				fill: z
+					.string()
+					.trim()
+					.regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
+					.optional(),
+				follow: z.boolean().default(true),
+			}),
+		)
+		.max(12)
+		.optional(),
 	/** Floating tags in the background (product words: "Dart", "iOS", "AI agent"). */
 	tags: z.array(z.string().trim().min(1).max(24)).max(8).optional(),
 	/** Line under the logo at the end, e.g. "From brief to build plan." */
@@ -182,6 +210,26 @@ export interface ShowcaseTimeline {
 	highlights: Array<{ in: number; out: number; x: number; y: number; width: number; height: number }>;
 	checks: Array<{ at: number; until: number; x: number; y: number }>;
 	clicks: Array<{ at: number; x: number; y: number }>;
+	covers: Array<{
+		in: number;
+		out: number;
+		/** Footage time the box position refers to. */
+		at: number;
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+		mode: "blur" | "fill" | "image";
+		fill: string;
+		/** Picture file next to the page (mode image), set by the renderer. */
+		image: string | null;
+		/** Where that picture comes from (the renderer copies it next to the page). */
+		imagePath?: string;
+		useBrandLogo?: boolean;
+		follow: boolean;
+		/** Vertical offset per footage frame from `in` (set by the renderer when following). */
+		track: number[] | null;
+	}>;
 }
 
 const EASE_SEC = 0.7;
@@ -192,7 +240,7 @@ const EASE_SEC = 0.7;
  * outside the crop or the trim are dropped.
  */
 export function resolveTimeline(
-	args: Pick<ShowcaseArgs, "focus" | "steps" | "highlights" | "checks" | "clicks">,
+	args: Pick<ShowcaseArgs, "focus" | "steps" | "highlights" | "checks" | "clicks"> & Partial<Pick<ShowcaseArgs, "covers">>,
 	segments: TimeSegment[],
 	crop: { x: number; y: number; width: number; height: number },
 	source: { width: number; height: number },
@@ -262,7 +310,26 @@ export function resolveTimeline(
 		.map((c) => ({ at: T(c.atSec), x: px(c.x), y: py(c.y) }))
 		.filter((c) => inside(c.x, c.y));
 
-	return { footageSec, footage: { width: crop.width, height: crop.height }, camera, steps, highlights, checks, clicks };
+	const covers = (args.covers ?? [])
+		.map((c) => ({
+			in: T(c.startSec),
+			out: T(c.endSec),
+			at: T(Math.min(c.endSec, Math.max(c.startSec, c.atSec ?? c.startSec))),
+			x: px(c.x),
+			y: py(c.y),
+			width: c.width * source.width,
+			height: c.height * source.height,
+			mode: c.mode,
+			fill: c.fill ?? "#ffffff",
+			image: null as string | null,
+			imagePath: c.imagePath,
+			useBrandLogo: c.useBrandLogo,
+			follow: c.follow,
+			track: null as number[] | null,
+		}))
+		.filter((c) => c.out - c.in >= 0.1 && c.x + c.width > 0 && c.y + c.height > 0 && c.x < crop.width && c.y < crop.height);
+
+	return { footageSec, footage: { width: crop.width, height: crop.height }, camera, steps, highlights, checks, clicks, covers };
 }
 
 /** atempo only accepts 0.5–2 per stage: chain stages for larger rates. */
