@@ -51,7 +51,7 @@ const ADD_GRAPHIC_LIKE = /^(addGraphic|addAnnotation|addBeatGraphics)$/i;
 const ADD_ZOOM_LIKE = /^(addZoom|updateZoom)$/i;
 const MEDIA_LIKE = /^(importMedia|insertStartThumbnail|createMotionGraphicPreview|createMotionClip|placeMotionClip|addMotionOverlay)$/i;
 const INSPECT_LIKE =
-	/^(getCurrentDocument|listSources|listTransitions|getTranscript|getTranscriptWords|getCursorTrack|listCharacters|listMotionTemplates|sampleFrames)$/i;
+	/^(getCurrentDocument|listSources|listTransitions|getTranscript|getTranscriptWords|getCursorTrack|listCharacters|listMotionTemplates|sampleFrames|listCursorThemes)$/i;
 
 function batchLabel(name: string, count: number, sampleSummary?: string): string {
 	if (REMOVE_LIKE.test(name)) {

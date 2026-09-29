@@ -88,6 +88,7 @@ import {
 	listMotionTemplatesArgs,
 	placeMotionClipArgs,
 	sampleFramesArgs,
+	listCursorThemesArgs,
 	addMotionOverlayArgs,
 	setBrandKitArgs,
 } from "../agent-tools";
@@ -504,6 +505,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
 	importMedia:
 		"Import a video or audio file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk.",
+	listCursorThemes:
+		"List the installed cursor themes (ids + names) and the current cursor look (theme, size, smoothing, motion blur, click bounce). Set them with setEditorSettings.",
 	sampleFrames:
 		"Look at the result. Returns JPEG stills you can Read: from:'timeline' (default) = the EDITED programme as the viewer will see it (zooms, overlays, captions, background — same renderer as export), 'export' = a finished file (pass exportPath from exportProject), 'recording' = the raw source. times (seconds, max 8) or count (evenly spaced, default 4). Use it after edits and before telling the user you're done; fix what looks wrong and sample again. Frames marked approximate lack effects.",
 	listMotionTemplates:
@@ -568,7 +571,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setCaptionSettings:
 		"Enable/style burn-in captions (transcript stays SSOT). Pass only fields to change: enabled, fontSize, fontWeight, color, backgroundEnabled/Color/Opacity, anchorV (bottom|top), anchorH (left|center|right), insetY/insetX (%), min/maxWordsPerLine, captionLane (recording|voiceover). Use after generateCaptions, or to toggle/restyle existing captions. Not for rewriting spoken words — use setWordText for that.",
 	setEditorSettings:
-		"Edit composition look (Effects + Layout panes): padding, borderRadius, shadowIntensity, showBlur, motionBlurAmount, audioGainDb, autoFocusAll, webcamLayoutPreset (picture-in-picture|vertical-stack|dual-frame|no-webcam), webcam mask/mirror/size, webcamBackgroundMode (none|transparent|blur|custom) + webcamBlurIntensity, cursorShow/theme/size/smoothing. fitClip:true zeros pad/round/shadow and sets aspect to fitClipAspect (default native) for edge-to-edge. Pass only fields you want to change. Prefer this over inventing zooms when the user asks for a cleaner/professional frame.",
+		"Edit composition look (Effects + Layout panes): padding, borderRadius, shadowIntensity, showBlur, motionBlurAmount, audioGainDb, autoFocusAll, webcamLayoutPreset (picture-in-picture|vertical-stack|dual-frame|no-webcam), webcam mask/mirror/size, webcamBackgroundMode (none|transparent|blur|custom) + webcamBlurIntensity, cursor: cursorShow, cursorTheme (listCursorThemes), cursorSize, cursorSmoothing (0–1), cursorMotionBlur (0–1), cursorClickBounce (0–5), cursorClipToBounds. fitClip:true zeros pad/round/shadow and sets aspect to fitClipAspect (default native) for edge-to-edge. Pass only fields you want to change. Prefer this over inventing zooms when the user asks for a cleaner/professional frame.",
 	listSources:
 		"List capturable displays, windows and microphones on this computer via the local OpenScreen CLI. Use this before recordScreen so the user can pick a source.",
 	recordScreen:
@@ -915,6 +918,7 @@ export function buildTools(
 		build("getTranscriptWords", getTranscriptWordsArgs),
 		build("getCursorTrack", getCursorTrackArgs),
 		build("listCharacters", listCharactersArgs),
+		build("listCursorThemes", listCursorThemesArgs),
 		build("sampleFrames", sampleFramesArgs),
 		build("createMotionGraphicPreview", createMotionGraphicPreviewArgs),
 		build("listMotionTemplates", listMotionTemplatesArgs),

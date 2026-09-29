@@ -681,7 +681,12 @@ async function runChatTimed(
 			});
 			result = staged;
 		} else {
+			// A targeted ask ("make the intro amazing") only gets the tools for
+			// what it names — no surprise cuts, captions or zooms.
+			const { requestToolScope } = await import("./stagedEdit");
+			const scope = effectiveConfig.provider === "local-cli" ? requestToolScope(message) : null;
 			result = await invokeOpenScreenAgent({
+				...(scope ? { allowedToolNames: scope } : {}),
 				document: workingDocument ?? emptyDocumentForTextOnly(projectId),
 				model: modelConfig,
 				history,

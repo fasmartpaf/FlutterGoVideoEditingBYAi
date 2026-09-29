@@ -1,9 +1,10 @@
 // Staged whole-video edits: which requests use them, and how the stages run.
 import { describe, expect, it } from "vitest";
 import { type AxcutDocument, createEmptyDocument } from "../../src/lib/ai-edition/schema";
-import { OPENSCREEN_TOOL_NAMES } from "./agent-tools";
+import { executeAgentTool, OPENSCREEN_TOOL_NAMES } from "./agent-tools";
+import { getEditorSettings } from "../../src/lib/ai-edition/store/editorSettings";
 import type { InvokeResult } from "./deep-agent/service";
-import { EDIT_STAGES, isWholeVideoRequest, stagedFinalMessage, stageToolNames } from "./stagedEdit";
+import { EDIT_STAGES, isWholeVideoRequest, requestToolScope, stagedFinalMessage, stageToolNames } from "./stagedEdit";
 import { runStagedEdit, type StageRun } from "./stagedEditRunner";
 
 describe("which requests run as a staged edit", () => {
@@ -173,3 +174,54 @@ describe("stagedFinalMessage", () => {
 		expect(text).not.toContain("plan");
 	});
 });
+
+describe("targeted requests only get the tools they name", () => {
+	it("a motion-graphics ask cannot cut, caption or zoom", () => {
+		const tools = requestToolScope("create the motion graphics for the intro, show SaaS things")!;
+		expect(tools).toContain("createMotionClip");
+		expect(tools).toContain("addMotionOverlay");
+		expect(tools).toContain("sampleFrames");
+		for (const t of ["addTrims", "tightenPacing", "setCaptionSettings", "generateCaptions", "addZoom", "addZooms"]) {
+			expect(tools, t).not.toContain(t);
+		}
+	});
+
+	it("names several areas → gets each of them", () => {
+		const tools = requestToolScope("make it shorter and zoom in on the clicks")!;
+		expect(tools).toContain("tightenPacing");
+		expect(tools).toContain("addZooms");
+		expect(tools).not.toContain("createMotionClip");
+	});
+
+	it("cursor polish reaches the cursor settings", () => {
+		expect(requestToolScope("make the cursor look better")).toContain("setEditorSettings");
+	});
+
+	it("a request that names no area keeps every tool", () => {
+		expect(requestToolScope("make it better")).toBeNull();
+	});
+
+	it("every scoped tool exists", () => {
+		const known = new Set<string>(OPENSCREEN_TOOL_NAMES);
+		for (const m of ["intro", "captions", "zoom", "cut", "music", "blur", "export"]) {
+			for (const t of requestToolScope(m) ?? []) expect(known.has(t), `${m}: ${t}`).toBe(true);
+		}
+	});
+});
+
+describe("cursor settings the agent can reach", () => {
+	it("sets motion blur, click bounce and clip-to-frame, and rejects unknown themes", () => {
+		const d = doc("cursor");
+		const r = executeAgentTool(d, "setEditorSettings", JSON.stringify({ cursorMotionBlur: 0.3, cursorClickBounce: 2.5, cursorClipToBounds: true, cursorSmoothing: 0.6 }));
+		expect(r.ok).toBe(true);
+		const look = getEditorSettings(r.document!);
+		expect(look.cursor).toMatchObject({ motionBlur: 0.3, clickBounce: 2.5, clipToBounds: true, smoothing: 0.6 });
+		const bad = executeAgentTool(d, "setEditorSettings", JSON.stringify({ cursorTheme: "sparkly-unicorn" }));
+		expect(bad.ok).toBe(false);
+		expect(bad.resultJson).toMatch(/Installed themes: default/);
+		const themes = JSON.parse(executeAgentTool(d, "listCursorThemes", "{}").resultJson);
+		expect(themes.themes[0].id).toBe("default");
+		expect(themes.themes.length).toBeGreaterThan(5);
+	});
+});
+

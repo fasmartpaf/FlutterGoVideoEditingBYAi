@@ -92,6 +92,7 @@ import {
 import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentToolMedia";
 import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
+import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
 import { brandKitPatchSchema, readBrandKit, storedBrandKit, writeBrandKit } from "./motionStudio/brandKit";
 
 /** First graphic in a project without a brand kit: keep the colours it was drawn with (the video's). */
@@ -945,6 +946,8 @@ export const setBrandKitArgs = brandKitPatchSchema.extend({
 
 export const listMotionTemplatesArgs = z.object({});
 
+export const listCursorThemesArgs = z.object({});
+
 /**
  * Stills the agent looks at to check its work: the EDITED timeline (what the
  * viewer will see), a finished export, or the raw recording.
@@ -1133,9 +1136,16 @@ export const setEditorSettingsArgs = z.object({
 	webcamBackgroundMode: z.enum(["none", "transparent", "blur", "custom"]).optional(),
 	webcamBlurIntensity: z.number().min(0).max(1).optional(),
 	cursorShow: z.boolean().optional(),
+	/** One of the installed cursor packs (listCursorThemes lists them). */
 	cursorTheme: z.string().min(1).optional(),
 	cursorSize: z.number().min(0.5).max(8).optional(),
 	cursorSmoothing: z.number().min(0).max(1).optional(),
+	/** Motion blur on the cursor as it moves (0–1). */
+	cursorMotionBlur: z.number().min(0).max(1).optional(),
+	/** How much the cursor "bounces" on a click (0 = none, 5 = strong). */
+	cursorClickBounce: z.number().min(0).max(5).optional(),
+	/** Keep the cursor inside the recording frame. */
+	cursorClipToBounds: z.boolean().optional(),
 	/** Zero pad/round/shadow and set aspect to fitClipAspect (default native). */
 	fitClip: z.boolean().optional(),
 	fitClipAspect: z.string().min(1).optional(),
@@ -1194,6 +1204,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"getTranscriptWords",
 	"getCursorTrack",
 	"listCharacters",
+	"listCursorThemes",
 	"sampleFrames",
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
@@ -3876,6 +3887,26 @@ export function executeAgentTool(
 			};
 		}
 
+		case "listCursorThemes": {
+			const look = getEditorSettings(document);
+			return {
+				ok: true,
+				resultJson: JSON.stringify({
+					current: {
+						theme: look.cursorTheme,
+						show: look.cursorShow,
+						size: look.cursor.size,
+						smoothing: look.cursor.smoothing,
+						motionBlur: look.cursor.motionBlur,
+						clickBounce: look.cursor.clickBounce,
+					},
+					themes: [{ id: "default", name: "System cursor (clean, professional)" }, ...CURSOR_THEMES.map((t) => ({ id: t.id, name: t.name }))],
+					advice:
+						"Product demos / SaaS / tutorials: keep 'default' (or a clean arrow) — a novelty cursor only when the user asks for fun or a theme. Set via setEditorSettings({cursorTheme}).",
+				}),
+			};
+		}
+
 		case "sampleFrames": {
 			const parsed = sampleFramesArgs.safeParse(args ?? {});
 			if (!parsed.success) return failure(parsed.error.message);
@@ -4887,6 +4918,14 @@ export function executeAgentTool(
 			if (data.cursorTheme !== undefined) cursorPatch.theme = data.cursorTheme;
 			if (data.cursorSize !== undefined) cursorPatch.size = data.cursorSize;
 			if (data.cursorSmoothing !== undefined) cursorPatch.smoothing = data.cursorSmoothing;
+			if (data.cursorMotionBlur !== undefined) cursorPatch.motionBlur = data.cursorMotionBlur;
+			if (data.cursorClickBounce !== undefined) cursorPatch.clickBounce = data.cursorClickBounce;
+			if (data.cursorClipToBounds !== undefined) cursorPatch.clipToBounds = data.cursorClipToBounds;
+			if (data.cursorTheme !== undefined && !CURSOR_THEME_IDS.has(data.cursorTheme)) {
+				return failure(
+					`Unknown cursorTheme "${data.cursorTheme}". Installed themes: ${[...CURSOR_THEME_IDS].join(", ")}.`,
+				);
+			}
 			if (Object.keys(cursorPatch).length > 0) patch.cursor = cursorPatch;
 			if (Object.keys(patch).length === 0) {
 				return failure("setEditorSettings needs at least one field to change");

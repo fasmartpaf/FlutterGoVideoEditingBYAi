@@ -37,6 +37,7 @@ export const READ_TOOLS = [
 	"listMotionTemplates",
 	"listTransitions",
 	"listCharacters",
+	"listCursorThemes",
 ] as const;
 
 const PACING_TOOLS = [
@@ -116,7 +117,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		id: "camera",
 		title: "Zoom & camera",
 		instruction:
-			"Following your plan: zoom in on the key actions (use the cursor track so the zoom lands where the action is; addZooms for several at once), speed up slow waiting parts, and set crop / aspect ratio / frame look only if the request or the platform needs it. All in one or two replies.",
+			"Following your plan: zoom in on the key actions (use the cursor track so the zoom lands where the action is; addZooms for several at once), speed up slow waiting parts, and polish the cursor for a screen recording: setEditorSettings with cursorSmoothing ~0.6, cursorSize ~1.4–1.8 (readable when zoomed out), cursorMotionBlur ~0.3, cursorClickBounce ~2.5, a clean theme unless the user wants a fun one (listCursorThemes); addCursorHighlight on the few clicks that matter. Set crop / aspect ratio / frame look only if the request or the platform needs it. All in one or two replies.",
 		tools: CAMERA_TOOLS,
 		budget: budget(3, 4, 6, 2, 4),
 		preview: true,
@@ -259,4 +260,38 @@ export function previewTimeSec(document: AxcutDocument, stage: EditStage, durati
 		return Math.min(durationSec - 0.1, 1.5);
 	}
 	return Math.max(0, durationSec * 0.4);
+}
+
+// --- targeted requests --------------------------------------------------------
+
+const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
+	{
+		match: /\b(motion|graphics?|intro|outro|opener|title|overlay|lower\s*third|callout|badge|cta|call\s*to\s*action|logo|animat\w*|thumbnail|cover|brand\w*|card)s?\b/i,
+		tools: GRAPHICS_TOOLS,
+	},
+	{ match: /\b(captions?|subtitles?|transcript)\b/i, tools: CAPTION_TOOLS },
+	{
+		match: /\b(zoom\w*|camera|cursor|mouse|crop\w*|aspect|vertical|portrait|square|9:16|1:1|16:9|background|wallpaper|padding|shadow|rounded|frame\s+look|speed\s*up|slow\s*down)\b/i,
+		tools: CAMERA_TOOLS,
+	},
+	{
+		match: /\b(cut\w*|trim\w*|shorter|shorten|silences?|dead\s*air|pauses?|filler|tighten|pacing|remove\s+the\s+part|length)\b/i,
+		tools: PACING_TOOLS,
+	},
+	{ match: /\b(music|audio|sound|volume|voice)\b/i, tools: ["addAudio", "setAudio", "importMedia", "removeModifier"] },
+	{ match: /\b(blur|hide|privacy|redact|email|password)\b/i, tools: ["addPrivacyCover", "addAnnotation", "setAnnotation", "removeModifier"] },
+	{ match: /\b(export\w*|render\s+the\s+video|mp4|gif|download)\b/i, tools: ["exportProject"] },
+];
+
+/**
+ * A targeted request only gets the tools for what it names: "make the intro
+ * amazing" can render and place motion graphics, but cannot cut, caption or
+ * zoom. Null when the request names no specific area (the agent keeps every
+ * tool). Read tools are always included.
+ */
+export function requestToolScope(message: string): string[] | null {
+	const tools = new Set<string>();
+	for (const scope of SCOPES) if (scope.match.test(message)) for (const t of scope.tools) tools.add(t);
+	if (tools.size === 0) return null;
+	return [...new Set([...READ_TOOLS, ...tools])];
 }
