@@ -122,6 +122,14 @@ describe("buildIncrementalPrompt", () => {
 		expect(next.text).not.toContain("TOOL RESULT");
 	});
 
+	it("a short message with project memory appended is still the same message next turn", () => {
+		const sent = { fingerprints: ["x"], frameKey: "", toolsKey: "", humanKeys: ["add zoom\n\nPROJECT MEMORY — earlier turns"] };
+		const next = buildIncrementalPrompt([new HumanMessage("add zoom"), new AIMessage("done"), new HumanMessage("now captions")], [], sent);
+		expect(next.kind).toBe("delta");
+		const other = buildIncrementalPrompt([new HumanMessage("add blur"), new HumanMessage("now captions")], [], sent);
+		expect(other.kind).toBe("diverged");
+	});
+
 	it("a user message with context appended on one side still counts as the same message", () => {
 		const long = "make the intro amazing and show some saas type things on it, not just a simple text card";
 		const sent = { fingerprints: ["x"], frameKey: "", toolsKey: "", humanKeys: [long] };

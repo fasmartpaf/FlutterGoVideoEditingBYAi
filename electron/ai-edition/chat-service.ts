@@ -406,6 +406,23 @@ const NOOP_SINK: Required<ChatEventSink> = {
 	plan: noop,
 };
 
+/** Add a finished turn to the project journal (best effort — never fails the turn). */
+async function rememberTurn(
+	document: AxcutDocument | null | undefined,
+	userMessageId: string,
+	request: string,
+	toolCalls: AiEditionToolCallSummary[],
+	outcome: string,
+): Promise<void> {
+	if (!document) return;
+	try {
+		const [{ recordTurn }, { turnReceiptItems }] = await Promise.all([import("./projectJournal"), import("./editReceipt")]);
+		recordTurn(document, { userMessageId, request, changes: turnReceiptItems(toolCalls), outcome });
+	} catch (err) {
+		console.warn("[journal] could not record the turn:", err instanceof Error ? err.message : err);
+	}
+}
+
 export async function runChat(
 	projectId: string,
 	sessionId: string,
@@ -669,6 +686,12 @@ async function runChatTimed(
 				effectiveConfig.localAgentPermission === "always" ||
 				llmConfig.isSessionWatchGranted?.() === true,
 		};
+		// Project memory: what earlier turns did + the user's standing instructions.
+		// Appended (never prepended) so the live Claude session still recognises
+		// the message as the same one next turn.
+		const { journalContext } = await import("./projectJournal");
+		const memory = workingDocument ? journalContext(workingDocument) : "";
+		const messageForAgent = memory ? `${message}\n\n${memory}` : message;
 		const { isWholeVideoRequest } = await import("./stagedEdit");
 		stagedRun =
 			effectiveConfig.provider === "local-cli" &&
@@ -694,6 +717,7 @@ async function runChatTimed(
 					}),
 				document: workingDocument,
 				request: message,
+				projectNotes: memory,
 				abortSignal,
 				emit,
 				onPlan: (items) => {
@@ -714,7 +738,7 @@ async function runChatTimed(
 				document: workingDocument ?? emptyDocumentForTextOnly(projectId),
 				model: modelConfig,
 				history,
-				userMessage: message,
+				userMessage: messageForAgent,
 				sink: agentSink,
 				editsAllowed,
 				cursor: env.cursor,
@@ -767,6 +791,7 @@ async function runChatTimed(
 			};
 			session.messages.push(assistantMessage);
 			persistProject(projectId);
+			await rememberTurn(result.document ?? workingDocument, userMessage.id, message, appliedToolCalls, content);
 			return {
 				success: true,
 				status: "completed",
@@ -823,6 +848,7 @@ async function runChatTimed(
 	};
 	session.messages.push(assistantMessage);
 	persistProject(projectId);
+	await rememberTurn(result.document ?? workingDocument, userMessage.id, message, appliedToolCalls, rawText);
 
 	return {
 		success: true,
@@ -920,6 +946,7 @@ export function rewindToMessage(
 		};
 	}
 
+	const dropped = session.messages.slice(messageIndex);
 	const survived = session.messages.slice(0, messageIndex + 1).map((m) => ({
 		...m,
 		toolCalls: m.toolCalls ? [...m.toolCalls] : undefined,
@@ -933,6 +960,11 @@ export function rewindToMessage(
 	}
 	dropCheckpointsFrom(projectId, sessionId, target.checkpointId);
 	persistProject(projectId);
+	// The rewound turn and everything after it no longer happened.
+	const undone = new Set(
+		dropped.filter((m) => m.role === "user").map((m) => m.id),
+	);
+	void import("./projectJournal").then(({ forgetTurns }) => forgetTurns(cp.document, undone)).catch(() => {});
 
 	return {
 		success: true,

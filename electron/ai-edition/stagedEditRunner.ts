@@ -42,6 +42,8 @@ export interface StagedEditInput {
 	invoke: (stage: StageRun) => Promise<InvokeResult>;
 	document: AxcutDocument;
 	request: string;
+	/** Project memory (earlier turns, standing instructions) — given to the first stage. */
+	projectNotes?: string;
 	abortSignal?: AbortSignal;
 	emit: {
 		plan: (items: AiEditionPlanItem[]) => void;
@@ -94,7 +96,9 @@ export async function runStagedEdit(input: StagedEditInput): Promise<InvokeResul
 		input.emit.status("stage", `${stage.title} (${index + 1}/${stages.length})`);
 		if (index > 0) input.emit.text("\n\n");
 		let r: InvokeResult;
-		const prompt = stagePrompt(stage, index, input.request, outcomes, stages.length);
+		const prompt =
+			stagePrompt(stage, index, input.request, outcomes, stages.length) +
+			(index === 0 && input.projectNotes ? `\n\n${input.projectNotes}` : "");
 		try {
 			r = await input.invoke({
 				stage,

@@ -282,8 +282,9 @@ function humanKey(message: BaseMessage): string {
 /** Same user message, allowing for context appended to it on one side (frames, packets). */
 function sameHuman(a: string, b: string): boolean {
 	if (a === b) return true;
-	const n = Math.min(200, a.length, b.length);
-	return n >= 20 && a.slice(0, n) === b.slice(0, n);
+	const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+	// One is the other plus appended context (project memory, frames).
+	return shorter.length > 0 && longer.startsWith(shorter.slice(0, 200));
 }
 
 /**
