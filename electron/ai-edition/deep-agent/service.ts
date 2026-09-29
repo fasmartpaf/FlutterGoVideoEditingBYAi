@@ -84,9 +84,14 @@ import {
 	splitClipArgs,
 	tightenPacingArgs,
 	insertStartThumbnailArgs,
+	createMotionClipArgs,
+	listMotionTemplatesArgs,
+	placeMotionClipArgs,
+	setBrandKitArgs,
 } from "../agent-tools";
 import { overagentCookbookSection } from "../overagentEditCookbook";
 import { resolveFfmpeg } from "../../media/audioPeaks";
+import type { FrameSource } from "../motionStudio/render";
 import {
 	discardPreparedFiles,
 	type PreparedToolMedia,
@@ -496,6 +501,14 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
 	importMedia:
 		"Import a video or audio file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk.",
+	listMotionTemplates:
+		"List built-in motion templates (titleCard, sectionCard, outroCta, kineticText, statHighlight, bulletList, logoReveal) with their params, plus the project brand kit. Call before createMotionClip.",
+	createMotionClip:
+		"Render a full-frame animated MP4 at the project's size: an intro, section card, stat, bullet list, outro CTA… Use a template (+ params) or write your own html/htmlPath composition (CSS/Web Animations, requestAnimationFrame, or window.render(t) on a canvas — time starts at 0, no network). Uses the brand kit. Returns checks + previewFrames (stills you can look at). place: none (preview only, default) | start | end | {beforeClipId} | {afterClipId} | {atSec} — atSec is snapped to a pause in the speech so it never cuts mid-word. Prefer preview first, then place with placeMotionClip.",
+	placeMotionClip:
+		"Put an already rendered motion MP4 (videoPath from createMotionClip) on the timeline as its own full-frame clip: start | end | {beforeClipId} | {afterClipId} | {atSec} (snapped to a speech pause).",
+	setBrandKit:
+		"Set the project brand kit used by every generated graphic: primary / secondary / background / text (hex), fontFamily (installed font), logoPath (absolute), style (clean|bold|playful|tech). Partial updates are fine.",
 	insertStartThumbnail:
 		"Put a FULL-FRAME opening segment at the START of the timeline (its own clip), then the recording plays after it. Use for thumbnail / cover / start frame — NEVER addGraphic for that (addGraphic is an overlay ON the take and hides part of the video). Pass imagePath or image (data URI), or text/subtext to bake a title plate. durationSec default 2.5. Matches project canvas size. Removes leftover full-bleed start overlays by default. If projectQueue.hasStartThumbnail is true, do NOT call this for polish/attractive asks — keep the existing opener, or pass replace:true only when the user asks to change the cover.",
 	listTransitions:
@@ -608,6 +621,21 @@ interface ToolRuntime {
 	visualFramesSupplied?: boolean;
 	/** Chat Stop — aborts in-flight media renders (ffmpeg) for this turn. */
 	abortSignal?: AbortSignal;
+	/** Page renderer for HTML motion graphics. */
+	createFrameSource?: () => Promise<FrameSource | null>;
+}
+
+/**
+ * The page renderer for motion graphics: an off-screen Electron window in the
+ * app, headless Chromium (Playwright) elsewhere (tests, CLI tooling).
+ */
+export async function defaultFrameSource(): Promise<FrameSource | null> {
+	if (process.versions.electron) {
+		const { createElectronFrameSource } = await import("../motionStudio/electronFrameSource");
+		return createElectronFrameSource();
+	}
+	const { createPlaywrightFrameSource } = await import("../motionStudio/playwrightFrameSource");
+	return createPlaywrightFrameSource();
 }
 
 /**
@@ -619,6 +647,8 @@ const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
 	"importMedia",
 	"insertStartThumbnail",
 	"createMotionGraphicPreview",
+	"createMotionClip",
+	"placeMotionClip",
 	"addGraphic",
 	"registerCharacter",
 	"addCursorHighlight",
@@ -732,6 +762,7 @@ function documentTool<S extends z.ZodType>(
 					const prep = await prepareAgentToolMedia(holder.current, name, args, {
 						ffmpegPath: resolveFfmpeg()?.trim() || null,
 						signal: runtime.abortSignal,
+						createFrameSource: runtime.createFrameSource ?? defaultFrameSource,
 						mayMutate:
 							editsAllowed !== false &&
 							mutationMode !== "proposal_only" &&
@@ -842,6 +873,10 @@ export function buildTools(
 		build("getCursorTrack", getCursorTrackArgs),
 		build("listCharacters", listCharactersArgs),
 		build("createMotionGraphicPreview", createMotionGraphicPreviewArgs),
+		build("listMotionTemplates", listMotionTemplatesArgs),
+		build("createMotionClip", createMotionClipArgs),
+		build("placeMotionClip", placeMotionClipArgs),
+		build("setBrandKit", setBrandKitArgs),
 		build("setWordText", setWordTextArgs),
 		build("addTrim", addTrimArgs),
 		build("addTrims", addTrimsArgs),

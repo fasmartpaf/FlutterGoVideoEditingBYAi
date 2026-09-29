@@ -49,9 +49,9 @@ const REMOVE_LIKE =
 	/^(removeModifier|removeAnnotation|removeGraphic|removeZoom|removeCursorHighlight|removePrivacyCover|removeClip)$/i;
 const ADD_GRAPHIC_LIKE = /^(addGraphic|addAnnotation|addBeatGraphics)$/i;
 const ADD_ZOOM_LIKE = /^(addZoom|updateZoom)$/i;
-const MEDIA_LIKE = /^(importMedia|insertStartThumbnail|createMotionGraphicPreview)$/i;
+const MEDIA_LIKE = /^(importMedia|insertStartThumbnail|createMotionGraphicPreview|createMotionClip|placeMotionClip)$/i;
 const INSPECT_LIKE =
-	/^(getCurrentDocument|listSources|listTransitions|getTranscript|getTranscriptWords|getCursorTrack|listCharacters)$/i;
+	/^(getCurrentDocument|listSources|listTransitions|getTranscript|getTranscriptWords|getCursorTrack|listCharacters|listMotionTemplates)$/i;
 
 function batchLabel(name: string, count: number, sampleSummary?: string): string {
 	if (REMOVE_LIKE.test(name)) {
@@ -75,8 +75,12 @@ function batchLabel(name: string, count: number, sampleSummary?: string): string
 				: `Created ${count} motion graphic previews.`;
 		}
 		if (name === "insertStartThumbnail") return "Updated the start cover.";
+		if (name === "createMotionClip" || name === "placeMotionClip") {
+			return count === 1 ? "Added a motion graphic." : `Added ${count} motion graphics.`;
+		}
 		return count === 1 ? "Imported media onto the timeline." : `Imported media (${count}).`;
 	}
+	if (name === "setBrandKit") return "Updated the brand kit.";
 	if (INSPECT_LIKE.test(name)) {
 		return count === 1 ? "Inspected the project." : `Inspected the project (${count} reads).`;
 	}

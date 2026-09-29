@@ -8,7 +8,7 @@
  * The executor then only consumes finished files via `options.prepared`.
  */
 
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import {
@@ -21,6 +21,16 @@ import {
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from "./mediaStudio";
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
+import { readBrandKit } from "./motionStudio/brandKit";
+import { writeComposition } from "./motionStudio/composition";
+import { type FrameSource, renderComposition } from "./motionStudio/render";
+import {
+	MOTION_TEMPLATE_IDS,
+	type MotionTemplateId,
+	renderTemplate,
+	TEMPLATE_DEFAULT_SEC,
+} from "./motionStudio/templates";
+import { type MotionClipCheck, verifyMotionClip } from "./motionStudio/verify";
 import {
 	bakeStillToMp4,
 	canvasSizeFromDocument,
@@ -43,6 +53,17 @@ export interface PreparedToolMedia {
 	mediaDurationSec?: number | null;
 	/** A render was attempted and failed — the executor reports this message. */
 	renderError?: string;
+	/** createMotionClip: the rendered clip and its automatic check. */
+	motionClip?: {
+		mp4Path: string;
+		durationSec: number;
+		width: number;
+		height: number;
+		fps: number;
+		label: string;
+		check: MotionClipCheck;
+		pageErrors: string[];
+	};
 }
 
 export interface PreparedToolCall {
@@ -154,6 +175,8 @@ export async function prepareAgentToolMedia(
 		signal?: AbortSignal;
 		/** False when this turn may not mutate — skip renders nobody can place. */
 		mayMutate: boolean;
+		/** Opens a page renderer for HTML motion graphics (Electron off-screen in the app). */
+		createFrameSource?: () => Promise<FrameSource | null>;
 	},
 ): Promise<PreparedToolCall> {
 	const { ffmpegPath, signal } = options;
@@ -162,8 +185,8 @@ export async function prepareAgentToolMedia(
 	const nextArgs = await shrinkImageArgs(document, name, args, ffmpegPath, signal);
 	const a = (nextArgs ?? {}) as Record<string, unknown>;
 
-	if (name === "importMedia") {
-		const path = str(a.path);
+	if (name === "importMedia" || name === "placeMotionClip") {
+		const path = str(a.path) ?? str(a.videoPath);
 		if (path && ffmpegPath) {
 			try {
 				const abs = assertSafeLocalMediaPath(path, "importMedia path");
@@ -251,7 +274,98 @@ export async function prepareAgentToolMedia(
 		}
 	}
 
+	if (name === "createMotionClip" && ffmpegPath) {
+		try {
+			const clip = await renderMotionClip(document, a, {
+				ffmpegPath,
+				signal,
+				createFrameSource: options.createFrameSource,
+			});
+			if (clip) {
+				prepared.motionClip = clip;
+				discardOnFailure.push(clip.mp4Path);
+			}
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			prepared.renderError = err instanceof Error ? err.message : String(err);
+		}
+	}
+
 	return { args: nextArgs, prepared, discardOnFailure };
+}
+
+/** createMotionClip: template or agent HTML → MP4 in the project folder, then checked. */
+async function renderMotionClip(
+	document: AxcutDocument,
+	a: Record<string, unknown>,
+	options: {
+		ffmpegPath: string;
+		signal?: AbortSignal;
+		createFrameSource?: () => Promise<FrameSource | null>;
+	},
+): Promise<PreparedToolMedia["motionClip"] | null> {
+	const template = str(a.template);
+	const html = typeof a.html === "string" && a.html.trim() ? a.html : undefined;
+	const htmlPath = str(a.htmlPath);
+	if (!template && !html && !htmlPath) return null; // executor explains the missing input
+	if (template && !(MOTION_TEMPLATE_IDS as readonly string[]).includes(template)) {
+		throw new Error(`Unknown template "${template}". Use one of: ${MOTION_TEMPLATE_IDS.join(", ")}`);
+	}
+	if (!options.createFrameSource) throw new Error("The motion renderer is not available in this build.");
+	const canvas = canvasSizeFromDocument(document);
+	const width = Math.round(canvas.width || 1920);
+	const height = Math.round(canvas.height || 1080);
+	const fps = Math.min(60, Math.max(24, Math.round(num(a.fps) ?? 30)));
+	const durationSec = Math.min(
+		30,
+		Math.max(0.8, num(a.durationSec) ?? (template ? TEMPLATE_DEFAULT_SEC[template as MotionTemplateId] : 3)),
+	);
+	const kit = readBrandKit(document);
+	const source = template
+		? { html: renderTemplate(template as MotionTemplateId, a.params ?? {}, kit, { width, height, durationSec }) }
+		: htmlPath
+			? { htmlPath }
+			: { html: html! };
+	const frameSource = await options.createFrameSource();
+	if (!frameSource) throw new Error("Could not start the motion renderer.");
+	const composition = writeComposition(source, { width, height, background: kit.background });
+	const outDir = resolveGeneratedGraphicsDir(document);
+	const stem = uniqueStem(`motion-${template ?? "custom"}`);
+	const mp4Path = join(outDir, `${stem}.mp4`);
+	try {
+		mkdirSync(outDir, { recursive: true });
+		const rendered = await renderComposition({
+			source: frameSource,
+			compositionPath: composition.path,
+			width,
+			height,
+			fps,
+			durationSec,
+			outPath: mp4Path,
+			ffmpegPath: options.ffmpegPath,
+			signal: options.signal,
+		});
+		const check = await verifyMotionClip({
+			ffmpegPath: options.ffmpegPath,
+			mp4Path,
+			expected: { width: rendered.width, height: rendered.height, fps: rendered.fps, durationSec: rendered.durationSec },
+			framesDir: join(outDir, ".frames"),
+			stem,
+			signal: options.signal,
+		});
+		return {
+			mp4Path,
+			durationSec: rendered.durationSec,
+			width: rendered.width,
+			height: rendered.height,
+			fps: rendered.fps,
+			label: str(a.label) ?? (template ? `${template} graphic` : "Motion graphic"),
+			check,
+			pageErrors: rendered.pageErrors,
+		};
+	} finally {
+		composition.dispose();
+	}
 }
 
 /** Remove files a refused/failed tool call left behind. */

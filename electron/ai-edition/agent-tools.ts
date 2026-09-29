@@ -92,6 +92,9 @@ import {
 import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentToolMedia";
 import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
+import { brandKitSchema, readBrandKit, writeBrandKit } from "./motionStudio/brandKit";
+import { type MotionPlacement, placeMotionClip } from "./motionStudio/placement";
+import { MOTION_TEMPLATE_IDS, TEMPLATE_DEFAULT_SEC, TEMPLATE_DESCRIPTIONS } from "./motionStudio/templates";
 import {
 	BUILTIN_CHARACTERS,
 	listCharactersCatalog,
@@ -875,6 +878,56 @@ export const addBeatGraphicsArgs = z.object({
  * Does NOT place on the timeline — use importMedia / insertStartThumbnail / addGraphic
  * when the user says "use on video".
  */
+const motionPlacementSchema = z
+	.union([
+		z.enum(["none", "start", "end"]),
+		z.object({ beforeClipId: z.string().min(1) }),
+		z.object({ afterClipId: z.string().min(1) }),
+		z.object({ atSec: z.number().nonnegative() }),
+	])
+	.default("none");
+
+/**
+ * Render a full-frame motion graphic (MP4 at the project's size) from a
+ * built-in template or from HTML the agent wrote, check it, and optionally
+ * place it on the timeline. Rendering happens in the async media step.
+ */
+export const createMotionClipArgs = z
+	.object({
+		template: z.enum(MOTION_TEMPLATE_IDS).optional(),
+		/** Template fields — see listMotionTemplates. */
+		params: z.record(z.string(), z.unknown()).optional(),
+		/** A complete HTML composition (CSS/Web Animations, rAF, or window.render(t) on a canvas). */
+		html: z.string().min(1).max(8_000_000).optional(),
+		/** Absolute path to an .html composition on disk (relative assets resolve next to it). */
+		htmlPath: z.string().min(1).optional(),
+		durationSec: z.number().min(0.8).max(30).optional(),
+		fps: z.number().int().min(24).max(60).optional(),
+		label: z.string().max(80).optional(),
+		/** none = preview in chat only; start / end; next to a clip; or at a playback time (snapped to a speech pause). */
+		place: motionPlacementSchema,
+	})
+	.refine((v) => Boolean(v.template || v.html || v.htmlPath), {
+		message: "createMotionClip needs template, html or htmlPath",
+	});
+
+/** Place an already-rendered MP4 (e.g. from createMotionClip with place:none) on the timeline. */
+export const placeMotionClipArgs = z.object({
+	videoPath: z.string().min(1),
+	place: z.union([
+		z.enum(["start", "end"]),
+		z.object({ beforeClipId: z.string().min(1) }),
+		z.object({ afterClipId: z.string().min(1) }),
+		z.object({ atSec: z.number().nonnegative() }),
+	]),
+	label: z.string().max(80).optional(),
+	durationSec: z.number().positive().max(120).optional(),
+});
+
+export const setBrandKitArgs = brandKitSchema.partial();
+
+export const listMotionTemplatesArgs = z.object({});
+
 export const createMotionGraphicPreviewArgs = z.object({
 	titles: z.array(z.string().min(1)).min(1).max(12),
 	/** Seconds per title card (default 1.8). */
@@ -1082,6 +1135,10 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"getCursorTrack",
 	"listCharacters",
 	"createMotionGraphicPreview",
+	"listMotionTemplates",
+	"createMotionClip",
+	"placeMotionClip",
+	"setBrandKit",
 	"setWordText",
 	"addTrim",
 	"addTrims",
@@ -1202,6 +1259,9 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"createMotionClip",
+	"placeMotionClip",
+	"setBrandKit",
 	"addGraphic",
 	"setAnnotation",
 	"addCameraFullscreen",
@@ -3616,6 +3676,134 @@ export function executeAgentTool(
 				}),
 				summary: `cursor ${parsed.data.style}${characterMeta ? `:${characterMeta.characterId}` : ""} ×${appliedIds.length} (${formatSec(winStart)} – ${formatSec(winEnd)})`,
 			};
+		}
+
+		case "listMotionTemplates": {
+			return {
+				ok: true,
+				resultJson: JSON.stringify({
+					templates: MOTION_TEMPLATE_IDS.map((id) => ({
+						id,
+						params: TEMPLATE_DESCRIPTIONS[id],
+						defaultSec: TEMPLATE_DEFAULT_SEC[id],
+					})),
+					brandKit: readBrandKit(document),
+					customHtml:
+						"Or write your own composition: html (or htmlPath) with CSS/Web Animations, requestAnimationFrame, or window.render(t) drawing a canvas. " +
+						"Time starts at 0 on load and is stepped frame by frame; no network. Page size = project canvas.",
+				}),
+			};
+		}
+
+		case "setBrandKit": {
+			const parsed = setBrandKitArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const patch = { ...parsed.data };
+			if (patch.logoPath) {
+				try {
+					patch.logoPath = assertSafeLocalMediaPath(patch.logoPath, "logoPath");
+				} catch (err) {
+					return failure(err instanceof Error ? err.message : String(err));
+				}
+				if (!existsSync(patch.logoPath)) return failure(`logoPath not found: ${patch.logoPath}`);
+			}
+			const { document: next, kit } = writeBrandKit(document, patch);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ brandKit: kit }),
+				summary: `brand kit set (${kit.primary} / ${kit.secondary}, ${kit.fontFamily}, ${kit.style})`,
+			};
+		}
+
+		case "createMotionClip": {
+			const parsed = createMotionClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const clip = options?.prepared?.motionClip;
+			if (!clip) {
+				if (options?.prepared?.renderError) {
+					return failure(`Could not render the motion graphic: ${options.prepared.renderError}`);
+				}
+				return failure(
+					resolveFfmpeg()?.trim()
+						? "createMotionClip renders video, so it must be called directly as an agent tool (not inside a batch)."
+						: "createMotionClip needs ffmpeg (bundled OpenScreen ffmpeg missing).",
+				);
+			}
+			const place = parsed.data.place as MotionPlacement;
+			let placed: ReturnType<typeof placeMotionClip> | null = null;
+			try {
+				placed =
+					place === "none"
+						? null
+						: placeMotionClip(
+								document,
+								{ mp4Path: clip.mp4Path, durationSec: clip.durationSec, label: clip.label },
+								place,
+							);
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			return {
+				ok: true,
+				...(placed ? { document: placed.document } : {}),
+				resultJson: JSON.stringify({
+					videoPath: clip.mp4Path,
+					exportedPaths: [clip.mp4Path],
+					durationSec: clip.durationSec,
+					width: clip.width,
+					height: clip.height,
+					fps: clip.fps,
+					placed: placed
+						? { clipId: placed.clipId, where: placed.where, snappedToSec: placed.snappedToSec }
+						: null,
+					checks: { ok: clip.check.ok, problems: clip.check.problems },
+					previewFrames: clip.check.framePaths,
+					pageErrors: clip.pageErrors,
+					note: clip.check.ok
+						? placed
+							? "Rendered, checked and placed. Look at previewFrames to confirm it reads well."
+							: "Rendered and checked — preview only. Place it with placeMotionClip(videoPath, place) when it looks right."
+						: "Rendered, but the automatic check found problems — fix the composition and render again before placing.",
+				}),
+				summary: placed
+					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
+					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "placeMotionClip": {
+			const parsed = placeMotionClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			let videoPath: string;
+			try {
+				videoPath = assertSafeLocalMediaPath(parsed.data.videoPath, "videoPath");
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			if (!existsSync(videoPath)) return failure(`videoPath not found: ${videoPath}`);
+			const probed = options?.prepared?.mediaDurationSec;
+			const durationSec = typeof probed === "number" && probed > 0 ? probed : parsed.data.durationSec;
+			if (!durationSec) return failure("Could not read the clip length. Pass durationSec.");
+			try {
+				const placed = placeMotionClip(
+					document,
+					{ mp4Path: videoPath, durationSec, label: parsed.data.label ?? basename(videoPath) },
+					parsed.data.place as MotionPlacement,
+				);
+				return {
+					ok: true,
+					document: placed.document,
+					resultJson: JSON.stringify({
+						clipId: placed.clipId,
+						where: placed.where,
+						snappedToSec: placed.snappedToSec,
+					}),
+					summary: `placed motion graphic ${placed.where}`,
+				};
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
 		}
 
 		case "listCharacters": {
