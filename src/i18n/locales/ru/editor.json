@@ -267,6 +267,8 @@
 		"copyFailed": "Не удалось скопировать",
 		"appliedPrefix": "применено:",
 		"thinking": "Думаю…",
+		"plan": "План",
+		"undoTurn": "Отменить",
 		"composerPlaceholder": "Опишите нужную правку.",
 		"composerDisabledNoProvider": "Подключите провайдера, чтобы начать чат.",
 		"modelLabel": "Модель",

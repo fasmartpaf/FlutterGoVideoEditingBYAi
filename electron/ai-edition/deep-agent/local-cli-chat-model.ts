@@ -2,7 +2,8 @@
 // (claude / codex / cursor-agent / gemini). HTTP local servers (Ollama,
 // LM Studio) stay on the OpenAI-compatible ChatOpenAI path.
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -15,7 +16,37 @@ import {
 	localCliSpawnEnv,
 	printArgvForAgent,
 } from "../local-agents";
-import { toolActivityProgressLine } from "../toolActivityLabels";
+import {
+	consumeClaudeStreamJsonLine,
+	killProcessTree,
+	LOCAL_CLI_HARD_TIMEOUT_MS,
+	LOCAL_CLI_IDLE_TIMEOUT_MS,
+	type LocalCliProgressEvent,
+	MAX_STDOUT_CHARS,
+	HEARTBEAT_MS,
+} from "./claudeStream";
+import { acquireLiveSession } from "./claudeLiveSession";
+import { ReplyStreamer } from "./replyStreamer";
+
+export interface PlanItem {
+	text: string;
+	status: "pending" | "in_progress" | "done" | "skipped";
+}
+
+/** Validate a model-supplied plan: 1–8 steps of short text with a known status. */
+export function normalizePlan(value: unknown): PlanItem[] | null {
+	if (!Array.isArray(value)) return null;
+	const statuses = new Set(["pending", "in_progress", "done", "skipped"]);
+	const items: PlanItem[] = [];
+	for (const raw of value.slice(0, 8)) {
+		if (!raw || typeof raw !== "object") continue;
+		const text = String((raw as { text?: unknown }).text ?? "").trim().slice(0, 120);
+		if (!text) continue;
+		const status = String((raw as { status?: unknown }).status ?? "pending");
+		items.push({ text, status: (statuses.has(status) ? status : "pending") as PlanItem["status"] });
+	}
+	return items.length ? items : null;
+}
 
 interface BoundTool {
 	name: string;
@@ -23,10 +54,6 @@ interface BoundTool {
 	schema?: unknown;
 }
 
-export interface LocalCliProgressEvent {
-	kind: "progress" | "text";
-	delta: string;
-}
 
 export interface LocalCliChatModelFields {
 	agentId: string;
@@ -53,6 +80,8 @@ export interface LocalCliChatModelFields {
 	workspaceRoot?: string;
 	/** Called after a CLI spawn finishes so the host can mark the session started. */
 	onCliSpawnComplete?: () => void;
+	/** The reply carried a `plan` checklist — publish it to the chat. */
+	onPlan?: (items: PlanItem[]) => void;
 	/**
 	 * Read at EVERY spawn: true once this chat's CLI session exists, so the
 	 * second tool round of the same turn resumes instead of re-creating it.
@@ -65,36 +94,6 @@ export interface LocalCliChatModelFields {
 	 * workspace root is known. Defaults to "granted iff mediaDirs is non-empty".
 	 */
 	watchGranted?: boolean;
-}
-
-/** Cap on buffered stdout (stream-json with --verbose can be very chatty). */
-const MAX_STDOUT_CHARS = 4 * 1024 * 1024;
-
-/**
- * Kill the CLI AND everything it started (ffmpeg, node, shells). The child is
- * spawned as a process-group leader on POSIX so a negative pid reaches the
- * whole tree; on Windows `taskkill /T` walks the tree.
- */
-export function killProcessTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
-	const pid = child.pid;
-	if (pid == null) return;
-	try {
-		if (process.platform === "win32") {
-			spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" }).on(
-				"error",
-				() => {},
-			);
-			return;
-		}
-		process.kill(-pid, signal);
-	} catch {
-		// Group already gone, or not a group leader — fall back to the child.
-		try {
-			child.kill(signal);
-		} catch {
-			// already exited
-		}
-	}
 }
 
 function messageText(message: BaseMessage): string {
@@ -190,6 +189,7 @@ function buildPrompt(
 		"Reply with ONE JSON object and nothing else.",
 		'If you need an OpenScreen edit tool: {"tool_calls":[{"name":"<tool>","args":{...}}]}',
 		'If you are done talking to the user: {"message":"<plain text>"}',
+		'Live checklist: for asks that need 2+ steps, add "plan":[{"text":"Cut dead air","status":"in_progress"},{"text":"Add intro title","status":"pending"}] to your FIRST reply, and re-send it with updated statuses (pending|in_progress|done|skipped) whenever a step changes. 2–6 short plain-language steps; no tool names, ids or paths. It can ride along with tool_calls or message.',
 		"For greetings, reply briefly about what you can do — not a clinical 'no mutation' notice.",
 		"insertStartThumbnail only if no start cover exists (or replace:true when user asks to change it). Never stack a second opener.",
 		"The user can rewind a chat turn to undo OpenScreen timeline mutations.",
@@ -214,9 +214,95 @@ function buildPrompt(
 	return lines.join("\n");
 }
 
+/** Stable identity of one conversation message (role + content + tool call id). */
+export function messageFingerprint(message: BaseMessage): string {
+	const role = ToolMessage.isInstance(message) ? "tool" : message.getType();
+	const callId = ToolMessage.isInstance(message) ? message.tool_call_id : "";
+	return `${role}:${callId}:${createHash("sha1").update(messageText(message)).digest("hex").slice(0, 16)}`;
+}
+
+function isSystem(message: BaseMessage): boolean {
+	return message.getType() === "system";
+}
+
+export type IncrementalPrompt =
+	| { kind: "full"; text: string; fingerprints: string[] }
+	| { kind: "delta"; text: string; fingerprints: string[] }
+	| { kind: "diverged" };
+
+/**
+ * What to send to a live Claude process that already saw `sentFingerprints`.
+ *  - nothing sent yet            → the full prompt
+ *  - same history + new messages → only the new messages (tool results, the
+ *                                  next user message) and, when it changed,
+ *                                  the refreshed project state (SYSTEM)
+ *  - history rewritten (rewind / compaction) → "diverged": start over
+ * Claude's own replies are never re-sent — they are already in its context.
+ */
+export function buildIncrementalPrompt(
+	messages: BaseMessage[],
+	tools: BoundTool[],
+	sent: { fingerprints: string[]; frameKey: string; toolsKey: string },
+	options?: { framePaths?: string[] },
+): IncrementalPrompt {
+	const fingerprints = messages.map(messageFingerprint);
+	if (sent.fingerprints.length === 0) {
+		return { kind: "full", text: buildPrompt(messages, tools, options), fingerprints };
+	}
+	const sentSet = new Set(sent.fingerprints);
+	const sentHistory = sent.fingerprints.filter((fp) => !fp.startsWith("system:"));
+	const nowHistory = messages
+		.map((m, i) => ({ m, fp: fingerprints[i]! }))
+		.filter(({ m }) => !isSystem(m));
+	// Every non-system message Claude saw must still be there, in order.
+	for (let i = 0; i < sentHistory.length; i++) {
+		if (nowHistory[i]?.fp !== sentHistory[i]) return { kind: "diverged" };
+	}
+	const lines: string[] = [];
+	const changedSystem = messages.filter((m, i) => isSystem(m) && !sentSet.has(fingerprints[i]!));
+	for (const m of changedSystem) {
+		lines.push(`UPDATED OPENSCREEN PROJECT STATE (replaces the earlier SYSTEM message):\n${messageText(m)}`);
+	}
+	const toolsKey = JSON.stringify(tools.map((t) => t.name));
+	if (tools.length > 0 && toolsKey !== sent.toolsKey) {
+		lines.push("Available OpenScreen tools (updated):");
+		lines.push(JSON.stringify(tools, null, 2));
+	}
+	const frameKey = (options?.framePaths ?? []).join("\n");
+	if (frameKey && frameKey !== sent.frameKey) {
+		lines.push(framePathSection(options?.framePaths ?? []).trimEnd());
+	}
+	let sawToolResult = false;
+	for (const { m } of nowHistory.slice(sentHistory.length)) {
+		if (ToolMessage.isInstance(m) || m.getType() === "tool") {
+			sawToolResult = true;
+			lines.push(`TOOL RESULT: ${messageText(m)}`);
+		} else if (m.getType() === "human") {
+			const t = messageText(m);
+			if (t) lines.push(`USER: ${t}`);
+		}
+		// AI messages are Claude's own earlier replies — already in its context.
+	}
+	if (sawToolResult) {
+		lines.push(
+			'Continue the loop if the user objective is not yet verified. When it is met, reply ONLY with {"message":"…"}. Do NOT retry a failing tool with the same args.',
+		);
+	}
+	lines.push(
+		'Reply with ONE JSON object and nothing else: {"tool_calls":[…]} or {"message":"…"}.',
+	);
+	return { kind: "delta", text: lines.join("\n"), fingerprints };
+}
+
+/** Live (long-lived) Claude sessions are on unless OPENSCREEN_CLI_PERSISTENT=0. */
+export function liveClaudeSessionsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.OPENSCREEN_CLI_PERSISTENT !== "0";
+}
+
 function parseModelJson(raw: string): {
 	message?: string;
 	tool_calls?: Array<{ name: string; args: unknown }>;
+	plan?: unknown;
 } {
 	const trimmed = raw.trim();
 	const start = trimmed.indexOf("{");
@@ -230,125 +316,6 @@ function parseModelJson(raw: string): {
 	} catch {
 		return { message: trimmed };
 	}
-}
-
-/** Hard cap for one Claude/Codex spawn. Watching a recording (ffmpeg stills
- *  + Read) plus a first JSON reply routinely exceeds the old 180s wall clock. */
-export const LOCAL_CLI_HARD_TIMEOUT_MS = 10 * 60 * 1000;
-/** Kill only after this long with no stdout/stderr. Claude's text print mode
- *  is silent until the end, so this must stay longer than a typical watch. */
-export const LOCAL_CLI_IDLE_TIMEOUT_MS = 6 * 60 * 1000;
-
-const HEARTBEAT_MS = 2_000;
-
-export type LocalCliStreamEvent =
-	| { kind: "progress"; delta: string }
-	| { kind: "text"; delta: string }
-	| { kind: "done"; raw: string };
-
-/**
- * Parse one NDJSON line from Claude `--output-format stream-json`.
- * Returns progress/text deltas and optionally a final result string.
- */
-export function consumeClaudeStreamJsonLine(
-	line: string,
-	state: {
-		assistantText: string;
-		result: string | null;
-		fromDeltas?: boolean;
-		apiError?: string | null;
-	},
-): LocalCliProgressEvent[] {
-	const trimmed = line.trim();
-	if (!trimmed.startsWith("{")) return [];
-	let parsed: Record<string, unknown>;
-	try {
-		parsed = JSON.parse(trimmed) as Record<string, unknown>;
-	} catch {
-		return [];
-	}
-	const events: LocalCliProgressEvent[] = [];
-	const type = typeof parsed.type === "string" ? parsed.type : "";
-
-	if (type === "assistant") {
-		const message = parsed.message as { content?: unknown } | undefined;
-		const content = message?.content;
-		if (Array.isArray(content)) {
-			for (const part of content) {
-				if (!part || typeof part !== "object") continue;
-				const p = part as { type?: string; text?: string; name?: string };
-				if (p.type === "text" && typeof p.text === "string" && p.text) {
-					// Verbose stream-json also emits content_block_delta tokens.
-					// Prefer those for live text; treat assistant snapshots as sync only
-					// so the chat bubble does not double every sentence.
-					if (state.fromDeltas) {
-						if (p.text.length >= state.assistantText.length) {
-							state.assistantText = p.text;
-						}
-						continue;
-					}
-					const prior = state.assistantText;
-					if (p.text.startsWith(prior)) {
-						const delta = p.text.slice(prior.length);
-						state.assistantText = p.text;
-						if (delta) events.push({ kind: "text", delta });
-					} else if (prior.startsWith(p.text)) {
-						// Older snapshot — ignore.
-					} else {
-						state.assistantText += p.text;
-						events.push({ kind: "text", delta: p.text });
-					}
-				} else if (p.type === "tool_use" && typeof p.name === "string") {
-					events.push({ kind: "progress", delta: `${toolActivityProgressLine(p.name)}\n` });
-				}
-			}
-		}
-	} else if (type === "content_block_delta") {
-		const delta = parsed.delta as { type?: string; text?: string } | undefined;
-		if (delta?.type === "text_delta" && typeof delta.text === "string" && delta.text) {
-			state.fromDeltas = true;
-			state.assistantText += delta.text;
-			events.push({ kind: "text", delta: delta.text });
-		}
-	} else if (type === "result") {
-		const result =
-			typeof parsed.result === "string"
-				? parsed.result
-				: typeof (parsed as { result?: { result?: string } }).result === "object"
-					? String((parsed as { result?: { result?: string } }).result?.result ?? "")
-					: "";
-		if (result) state.result = result;
-		const apiErrorStatus =
-			typeof (parsed as { api_error_status?: unknown }).api_error_status === "number"
-				? (parsed as { api_error_status: number }).api_error_status
-				: null;
-		if (apiErrorStatus != null && apiErrorStatus >= 400) {
-			state.apiError = result || `Claude API error ${apiErrorStatus}`;
-			events.push({
-				kind: "progress",
-				delta: `Local CLI API error ${apiErrorStatus}\n`,
-			});
-		}
-		const subtype = typeof parsed.subtype === "string" ? parsed.subtype : "";
-		if (subtype && subtype !== "success") {
-			events.push({ kind: "progress", delta: `Local CLI result: ${subtype}\n` });
-		}
-	} else if (type === "system") {
-		const subtype = typeof parsed.subtype === "string" ? parsed.subtype : "";
-		if (subtype === "init") {
-			const modelId =
-				typeof parsed.model === "string"
-					? parsed.model
-					: typeof (parsed as { model?: unknown }).model === "string"
-						? String((parsed as { model: string }).model)
-						: "";
-			const modelNote = modelId ? ` (${modelId})` : "";
-			events.push({ kind: "progress", delta: `Local CLI started${modelNote}…\n` });
-		}
-	} else if (type === "user" || type === "tool_progress") {
-		events.push({ kind: "progress", delta: "Local CLI working…\n" });
-	}
-	return events;
 }
 
 function runCliStreaming(
@@ -393,6 +360,10 @@ function runCliStreaming(
 		};
 		const startedAt = Date.now();
 		let lastProgressAt = Date.now();
+		// Latency marks for this spawn (logged on exit): process start → first
+		// byte of output → first reply token.
+		let firstOutputAt: number | null = null;
+		let firstTextAt: number | null = null;
 		const agentId = options.agentId;
 		// Cursor / Codex / Gemini print nothing until the end — an idle kill would
 		// always fire before a real reply. Only Claude stream-json gets idle timeout.
@@ -457,6 +428,7 @@ function runCliStreaming(
 		heartbeatTimer.unref?.();
 
 		const handleStdoutChunk = (chunk: string) => {
+			if (firstOutputAt === null && chunk) firstOutputAt = Date.now();
 			stdout += chunk;
 			if (stdout.length > MAX_STDOUT_CHARS) stdout = stdout.slice(-MAX_STDOUT_CHARS);
 			bumpIdle();
@@ -470,6 +442,7 @@ function runCliStreaming(
 			lineBuf = lines.pop() ?? "";
 			for (const line of lines) {
 				for (const ev of consumeClaudeStreamJsonLine(line, streamState)) {
+					if (ev.kind === "text" && firstTextAt === null) firstTextAt = Date.now();
 					options.onEvent(ev);
 				}
 			}
@@ -512,6 +485,11 @@ function runCliStreaming(
 		}, LOCAL_CLI_HARD_TIMEOUT_MS);
 		bumpIdle();
 		child.on("close", (code) => {
+			const since = (t: number | null) => (t === null ? "—" : `${t - startedAt}ms`);
+			console.info(
+				`[local-cli] ${pathName(binPath)} exit ${code}: first output ${since(firstOutputAt)} · ` +
+					`first text ${since(firstTextAt)} · total ${Date.now() - startedAt}ms`,
+			);
 			const tail = stdoutDecoder.end();
 			if (tail) handleStdoutChunk(tail);
 			if (options.streamJson && lineBuf.trim()) {
@@ -590,6 +568,7 @@ export class LocalCliChatModel extends BaseChatModel {
 	readonly resumeCliSession?: boolean;
 	readonly workspaceRoot?: string;
 	readonly onCliSpawnComplete?: () => void;
+	readonly onPlan?: (items: PlanItem[]) => void;
 	readonly isCliSessionStarted?: () => boolean;
 	readonly watchGranted: boolean;
 
@@ -607,6 +586,7 @@ export class LocalCliChatModel extends BaseChatModel {
 		this.resumeCliSession = fields.resumeCliSession;
 		this.workspaceRoot = fields.workspaceRoot;
 		this.onCliSpawnComplete = fields.onCliSpawnComplete;
+		this.onPlan = fields.onPlan;
 		this.isCliSessionStarted = fields.isCliSessionStarted;
 		this.watchGranted = fields.watchGranted ?? this.mediaDirs.length > 0;
 	}
@@ -629,6 +609,7 @@ export class LocalCliChatModel extends BaseChatModel {
 			resumeCliSession: this.resumeCliSession,
 			workspaceRoot: this.workspaceRoot,
 			onCliSpawnComplete: this.onCliSpawnComplete,
+			onPlan: this.onPlan,
 			isCliSessionStarted: this.isCliSessionStarted,
 			watchGranted: this.watchGranted,
 		});
@@ -654,7 +635,7 @@ export class LocalCliChatModel extends BaseChatModel {
 				].filter(Boolean)
 			: [];
 		const resumeCliSession = this.isCliSessionStarted?.() ?? this.resumeCliSession;
-		const forward = (event: LocalCliProgressEvent) => {
+		const deliver = (event: LocalCliProgressEvent) => {
 			onEvent?.(event);
 			// When LangChain is streaming (`onEvent` set), text/thinking chunks are
 			// yielded once via `_streamResponseChunks`. Only fan progress/heartbeats
@@ -663,7 +644,31 @@ export class LocalCliChatModel extends BaseChatModel {
 				this.onProgress?.(event);
 			}
 		};
-		const raw = await runCliStreaming(
+		// Raw assistant tokens → only what the user should read (the decoded
+		// `message` of a JSON reply, or prose). JSON syntax never reaches the chat.
+		const reply = new ReplyStreamer();
+		const forward = (event: LocalCliProgressEvent) => {
+			if (event.kind === "boundary") {
+				reply.reset();
+				return;
+			}
+			if (event.kind !== "text") {
+				deliver(event);
+				return;
+			}
+			for (const out of reply.push(event.delta)) {
+				deliver(
+					out.kind === "text"
+						? { kind: "text", delta: out.delta }
+						: { kind: "progress", delta: out.delta },
+				);
+			}
+		};
+		const cwd = workDir && workDir.length > 0 ? workDir : os.tmpdir();
+		const raw =
+			this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled()
+				? await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward })
+				: await runCliStreaming(
 			this.binPath,
 			printArgvForAgent(this.agentId, prompt, {
 				addDirs,
@@ -684,6 +689,8 @@ export class LocalCliChatModel extends BaseChatModel {
 		);
 		this.onCliSpawnComplete?.();
 		const parsed = parseModelJson(raw);
+		const plan = normalizePlan(parsed.plan);
+		if (plan) this.onPlan?.(plan);
 		const toolCalls = (parsed.tool_calls ?? [])
 			.filter((call) => typeof call.name === "string" && call.name)
 			.map((call, index) => ({
@@ -704,6 +711,58 @@ export class LocalCliChatModel extends BaseChatModel {
 				},
 			],
 		};
+	}
+
+	/**
+	 * One model step on the chat's long-lived Claude process: send only what it
+	 * has not seen yet, read the stream until this step's `result`.
+	 */
+	private async runLiveTurn(
+		messages: BaseMessage[],
+		ctx: {
+			addDirs: string[];
+			resumeCliSession: boolean | undefined;
+			cwd: string;
+			forward: (event: LocalCliProgressEvent) => void;
+		},
+	): Promise<string> {
+		const key = this.cliSessionId!;
+		const argvFor = (sessionId: string, resume: boolean) =>
+			printArgvForAgent("claude", "", {
+				addDirs: ctx.addDirs,
+				inputFormat: "stream-json",
+				model: this.cliModel,
+				cliSessionId: sessionId,
+				resumeCliSession: resume,
+			});
+		let live = acquireLiveSession(key, this.binPath, argvFor(key, Boolean(ctx.resumeCliSession)), ctx.cwd);
+		let prompt = buildIncrementalPrompt(
+			messages,
+			this.boundTools,
+			{ fingerprints: live.sentFingerprints, frameKey: live.sentFrameKey, toolsKey: live.sentToolsKey },
+			{ framePaths: this.framePaths },
+		);
+		if (prompt.kind === "diverged") {
+			// History was rewritten (rewind / compaction): Claude's memory no longer
+			// matches the chat. Start a clean process on a fresh session and send
+			// the whole conversation again.
+			live.close(new Error("Conversation history changed."));
+			live = acquireLiveSession(key, this.binPath, argvFor(randomUUID(), false), ctx.cwd);
+			prompt = {
+				kind: "full",
+				text: buildPrompt(messages, this.boundTools, { framePaths: this.framePaths }),
+				fingerprints: messages.map(messageFingerprint),
+			};
+		}
+		const raw = await live.runTurn(prompt.text, {
+			onEvent: ctx.forward,
+			signal: this.abortSignal,
+			agentId: this.agentId,
+		});
+		live.sentFingerprints = prompt.fingerprints;
+		live.sentFrameKey = this.framePaths.join("\n");
+		live.sentToolsKey = JSON.stringify(this.boundTools.map((t) => t.name));
+		return raw;
 	}
 
 	async _generate(messages: BaseMessage[]): Promise<ChatResult> {
@@ -744,15 +803,9 @@ export class LocalCliChatModel extends BaseChatModel {
 				// Progress / heartbeats / CLI tool names → thinking strip.
 				// Conversational text → live reply bubble. Raw JSON replies stay in
 				// thinking so the chat never fills with tool_calls payloads.
+				// Text is already filtered by ReplyStreamer (decoded reply only).
 				if (event.kind === "text") {
-					const trimmed = event.delta.trim();
-					if (
-						trimmed.startsWith("{") ||
-						/"tool_calls"\s*:/.test(trimmed) ||
-						/"message"\s*:/.test(trimmed)
-					) {
-						yield thinkingChunk("Preparing OpenScreen edits…\n");
-					} else if (event.delta) {
+					if (event.delta) {
 						streamedReplyText += event.delta;
 						yield textChunk(event.delta);
 					}
@@ -803,3 +856,11 @@ export class LocalCliChatModel extends BaseChatModel {
 }
 
 export { buildPrompt, framePathSection, parseModelJson };
+export {
+	consumeClaudeStreamJsonLine,
+	killProcessTree,
+	LOCAL_CLI_HARD_TIMEOUT_MS,
+	LOCAL_CLI_IDLE_TIMEOUT_MS,
+	type LocalCliProgressEvent,
+	type LocalCliStreamEvent,
+} from "./claudeStream";

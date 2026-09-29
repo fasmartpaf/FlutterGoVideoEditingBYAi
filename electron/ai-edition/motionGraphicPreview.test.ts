@@ -58,7 +58,7 @@ function fixtureDocument(): AxcutDocument {
 		transcript: null,
 		transcripts: {},
 		legacyEditor: {},
-	} as AxcutDocument;
+	} as unknown as AxcutDocument;
 }
 
 describe("createMotionGraphicPreview", () => {

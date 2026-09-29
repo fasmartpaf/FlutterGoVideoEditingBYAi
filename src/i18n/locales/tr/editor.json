@@ -267,6 +267,8 @@
 		"copyFailed": "Kopyalanamadı",
 		"appliedPrefix": "uygulandı:",
 		"thinking": "Düşünüyor…",
+		"plan": "Plan",
+		"undoTurn": "Geri al",
 		"composerPlaceholder": "İstediğiniz düzenlemeyi tanımlayın.",
 		"composerDisabledNoProvider": "Sohbete başlamak için bir sağlayıcı kurun.",
 		"modelLabel": "Model",

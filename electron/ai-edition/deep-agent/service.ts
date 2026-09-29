@@ -301,6 +301,8 @@ export interface OpenScreenAgentSink {
 	error: (message: string) => void;
 	/** Live status line for Local CLI progress (Bash / heartbeats) in the chat board. */
 	status?: (phase: string, detail?: string) => void;
+	/** The agent published / updated its step checklist (`updatePlan`). */
+	plan?: (items: import("../../../src/native/contracts").AiEditionPlanItem[]) => void;
 }
 
 // The tool arg schemas live in agent-tools.ts (imported above) — one source of truth for
@@ -909,6 +911,42 @@ export function anthropicCachingMiddleware(chatModel: { getName?: () => string }
 	];
 }
 
+export const updatePlanArgs = z.object({
+	items: z
+		.array(
+			z.object({
+				text: z.string().min(1).max(120),
+				status: z.enum(["pending", "in_progress", "done", "skipped"]).default("pending"),
+			}),
+		)
+		.min(1)
+		.max(8),
+});
+
+/**
+ * `updatePlan` — the live checklist the chat shows while the agent works.
+ * Not a document tool: it never touches the project, so it bypasses the
+ * executor and the mutation gate and only reaches the chat sink.
+ */
+export function buildPlanTool(sink: OpenScreenAgentSink) {
+	return tool(
+		async (args: z.infer<typeof updatePlanArgs>) => {
+			const items = args.items.map((item) => ({ text: item.text.trim(), status: item.status }));
+			sink.plan?.(items);
+			return JSON.stringify({ ok: true, steps: items.length });
+		},
+		{
+			name: "updatePlan",
+			description:
+				"Show the user your step plan as a live checklist. For any request that needs 2+ steps, call it FIRST " +
+				"with 2–6 short user-facing steps (e.g. 'Cut dead air', 'Add intro title', 'Export 1080p'), then call it " +
+				"again with updated statuses (in_progress / done) as you go. Skip it for greetings and simple questions. " +
+				"Steps are plain language — no tool names, ids or paths.",
+			schema: updatePlanArgs,
+		},
+	);
+}
+
 export interface InvokeArgs {
 	document: AxcutDocument;
 	model: OpenScreenChatModelConfig;
@@ -1405,6 +1443,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		model.provider === "local-cli"
 			? shouldGrantLocalWatch(model.localAgentPermission, Boolean(model.watchGranted))
 			: true;
+	// Readable progress while the turn prepares (no dead air before the model).
+	sink.status?.("preparing", "Looking at the video…");
 	let visual = await prepareVisualEvidenceForTurn({
 		document: workingDocument,
 		userMessage,
@@ -1483,6 +1523,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	const visualFramesSupplied = visual.visualFramesSupplied;
 
 	const tStt0 = Date.now();
+	// Readable progress while the turn prepares (no dead air before the model).
+	sink.status?.("preparing", "Reading what was said…");
 	const speechPrep = await prepareSpeechEvidenceForTurn({
 		document: workingDocument,
 		userMessage,
@@ -1725,6 +1767,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				lazy: true,
 			});
 			storyClaims = earlyClaims;
+			// Readable progress while the turn prepares (no dead air before the model).
+			sink.status?.("preparing", "Studying the recording…");
 			investigationEvidence = await runMasterVideoInvestigatorV1_1({
 				userMessage,
 				needs: contextNeeds,
@@ -1886,6 +1930,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		primaryAsset
 	) {
 		try {
+			// Readable progress while the turn prepares (no dead air before the model).
+			sink.status?.("preparing", "Planning the edit…");
 			const closurePrep = await preparePlanningClosureForTurn({
 				contextNeeds,
 				sourceStoryV2: sourceStoryPrep.storyV2,
@@ -2062,7 +2108,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		: compactMode
 			? toolGateForQuery(queryClass)
 			: null;
-	const tools = gate ? filterToolsByGate(toolsBuilt, gate) : toolsBuilt;
+	// The plan checklist is always available, whatever the gate: it edits nothing.
+	const tools = [...(gate ? filterToolsByGate(toolsBuilt, gate) : toolsBuilt), buildPlanTool(sink)];
 	toolsExposedCount = tools.length;
 	exposedToolNames = tools.map((t) => t.name);
 	toolGateNotes = gate?.notes ?? null;
@@ -2453,6 +2500,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		// Read per spawn: the first tool round creates the session, every later
 		// round (same turn or a follow-up) must resume it.
 		isCliSessionStarted: () => Boolean(cliSession?.started),
+		onLocalCliPlan: (items) => sink.plan?.(items),
 		workspaceRoot: cliSession?.workspaceRoot ?? workspaceRoot ?? undefined,
 		onCliSpawnComplete: () => {
 			if (cliSession) markCliAgentSessionStarted(projectKey, chatSessionId);
@@ -2460,6 +2508,11 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		onLocalCliProgress: (event) => {
 			const delta = event.delta;
 			if (!delta) return;
+			if (event.kind === "thinking") {
+				// The model's own reasoning tokens: thinking strip only, no status flicker.
+				sink.thinking(delta);
+				return;
+			}
 			if (event.kind === "text") {
 				const trimmed = delta.trim();
 				if (
@@ -3008,6 +3061,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		// same on_chat_model_stream / on_tool_start / on_tool_end / on_chain_end
 		// event stream axcut consumes. We use it both for live text deltas and
 		// to know when the run has produced its final assistant message.
+		sink.status?.("thinking", "Thinking…");
 		const tProvider0 = Date.now();
 		const stream = (
 			agent as unknown as {

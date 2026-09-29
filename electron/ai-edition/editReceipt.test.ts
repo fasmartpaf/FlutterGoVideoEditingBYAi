@@ -89,3 +89,19 @@ describe("appendEditReceiptIfNeeded", () => {
 		);
 	});
 });
+
+describe("turnReceiptItems", () => {
+	it("lists one phrase per kind of change and skips reads and plan updates", async () => {
+		const { turnReceiptItems } = await import("./editReceipt");
+		expect(
+			turnReceiptItems([
+				{ name: "getCurrentDocument", summary: "read" },
+				{ name: "updatePlan", summary: "plan" },
+				{ name: "addZoom", summary: "zoom 1" },
+				{ name: "addZoom", summary: "zoom 2" },
+				{ name: "insertStartThumbnail", summary: "cover" },
+			]),
+		).toEqual(["Added 2 zooms", "Updated the start cover"]);
+		expect(turnReceiptItems([{ name: "getTranscript", summary: "" }])).toEqual([]);
+	});
+});

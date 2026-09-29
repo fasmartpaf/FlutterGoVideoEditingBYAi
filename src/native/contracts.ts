@@ -326,6 +326,12 @@ export interface AiEditionToolCallSummary {
 	summary: string;
 }
 
+/** One step of the agent's live plan checklist. */
+export interface AiEditionPlanItem {
+	text: string;
+	status: "pending" | "in_progress" | "done" | "skipped";
+}
+
 /** Generated image/video shown inline in the chat board (create → preview → place). */
 export interface AiEditionChatMedia {
 	id: string;
@@ -343,6 +349,8 @@ export interface AiEditionChatMessage {
 	toolCalls?: AiEditionToolCallSummary[];
 	/** Preview gallery for graphics the agent created this turn. */
 	media?: AiEditionChatMedia[];
+	/** The plan checklist as it stood when the turn ended. */
+	plan?: AiEditionPlanItem[];
 	/**
 	 * id of the rewind-able document snapshot taken right before
 	 * the user message triggered its chat turn. Non-null = the per-message
@@ -956,7 +964,8 @@ export type AiEditionChatEvent =
 	| { kind: "toolStart"; sessionId: string; name: string; args: unknown }
 	| { kind: "toolEnd"; sessionId: string; name: string; ok: boolean; summary?: string }
 	| { kind: "error"; sessionId: string; message: string }
-	| { kind: "status"; sessionId: string; phase: string; detail?: string };
+	| { kind: "status"; sessionId: string; phase: string; detail?: string }
+	| { kind: "plan"; sessionId: string; items: AiEditionPlanItem[] };
 
 export interface AiEditionChatRealtimeEndpoint {
 	url: string;

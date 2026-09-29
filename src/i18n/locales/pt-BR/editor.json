@@ -267,6 +267,8 @@
 		"copyFailed": "Não foi possível copiar",
 		"appliedPrefix": "aplicado:",
 		"thinking": "Pensando…",
+		"plan": "Plano",
+		"undoTurn": "Desfazer",
 		"composerPlaceholder": "Descreva a edição que você quer.",
 		"composerDisabledNoProvider": "Configure um fornecedor para começar a conversar.",
 		"modelLabel": "Modelo",

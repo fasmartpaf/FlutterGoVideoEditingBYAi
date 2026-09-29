@@ -267,6 +267,8 @@
 		"copyFailed": "Không thể sao chép",
 		"appliedPrefix": "đã áp dụng:",
 		"thinking": "Đang suy nghĩ…",
+		"plan": "Kế hoạch",
+		"undoTurn": "Hoàn tác",
 		"composerPlaceholder": "Mô tả chỉnh sửa bạn muốn.",
 		"composerDisabledNoProvider": "Hãy thiết lập nhà cung cấp để bắt đầu trò chuyện.",
 		"modelLabel": "Mô hình",

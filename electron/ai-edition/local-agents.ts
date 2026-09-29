@@ -386,6 +386,11 @@ export function printArgvForAgent(
 	options?: {
 		addDirs?: string[];
 		outputFormat?: "text" | "stream-json";
+		/**
+		 * `stream-json` keeps Claude running and reads user messages as NDJSON on
+		 * stdin — the long-lived session. Implies stream-json output.
+		 */
+		inputFormat?: "text" | "stream-json";
 		/** Claude `--model` alias or full id (e.g. fable, opus, sonnet). */
 		model?: string;
 		/**
@@ -410,8 +415,10 @@ export function printArgvForAgent(
 	if (agentId === "claude") {
 		// stream-json lets OpenScreen show live progress; final result still
 		// carries the ONE JSON object OpenScreen parses for tools/message.
-		const format = options?.outputFormat === "stream-json" ? "stream-json" : "text";
+		const streamIn = options?.inputFormat === "stream-json";
+		const format = streamIn || options?.outputFormat === "stream-json" ? "stream-json" : "text";
 		const argv = ["-p", "--output-format", format, "--setting-sources", "user"];
+		if (streamIn) argv.push("--input-format", "stream-json");
 		const model = options?.model?.trim();
 		if (model && !model.startsWith("locked:")) {
 			argv.push("--model", model);
@@ -430,8 +437,10 @@ export function printArgvForAgent(
 			}
 		}
 		if (format === "stream-json") {
-			// Needed so NDJSON includes assistant text deltas, not only the result.
-			argv.push("--verbose");
+			// --verbose: stream-json needs it in print mode.
+			// --include-partial-messages: real token-by-token `stream_event`s, so the
+			// reply types out live instead of arriving in whole-message chunks.
+			argv.push("--verbose", "--include-partial-messages");
 		}
 		const dirs = (options?.addDirs ?? []).filter(Boolean);
 		if (dirs.length > 0) {

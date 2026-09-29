@@ -267,6 +267,8 @@
 		"copyFailed": "Impossible de copier",
 		"appliedPrefix": "appliqué :",
 		"thinking": "Réflexion en cours…",
+		"plan": "Plan",
+		"undoTurn": "Annuler",
 		"composerPlaceholder": "Décrivez la modification souhaitée.",
 		"composerDisabledNoProvider": "Configurez un fournisseur pour commencer à discuter.",
 		"modelLabel": "Modèle",

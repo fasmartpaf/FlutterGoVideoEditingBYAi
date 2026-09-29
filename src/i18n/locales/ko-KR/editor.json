@@ -267,6 +267,8 @@
 		"copyFailed": "복사할 수 없습니다",
 		"appliedPrefix": "적용됨:",
 		"thinking": "생각 중…",
+		"plan": "계획",
+		"undoTurn": "실행 취소",
 		"composerPlaceholder": "원하는 편집 내용을 설명하세요.",
 		"composerDisabledNoProvider": "대화를 시작하려면 공급자를 설정하세요.",
 		"modelLabel": "모델",

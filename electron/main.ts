@@ -1327,10 +1327,12 @@ appReady?.then(async () => {
 	}
 	ipcMain.handle("ai-edition:chat-realtime-endpoint", () => getChatRealtimeEndpoint());
 	const { abortAllChatRuns } = await import("./ai-edition/chatAbortRegistry");
+	const { closeAllLiveSessions } = await import("./ai-edition/deep-agent/claudeLiveSession");
 	app.on("before-quit", () => {
 		// Local CLI agents run in their own process group; stop them (and any
 		// ffmpeg they started) instead of leaving them running after quit.
 		abortAllChatRuns();
+		closeAllLiveSessions();
 		void stopChatRealtimeHub();
 	});
 

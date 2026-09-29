@@ -104,7 +104,12 @@ describe("local CLI helpers", () => {
 			"",
 		]);
 		expect(printArgvForAgent("claude", "hi", { outputFormat: "stream-json" })).toEqual(
-			expect.arrayContaining(["--output-format", "stream-json", "--verbose"]),
+			expect.arrayContaining([
+				"--output-format",
+				"stream-json",
+				"--verbose",
+				"--include-partial-messages",
+			]),
 		);
 		expect(printArgvForAgent("claude", "hi", { model: "opus" })).toEqual(
 			expect.arrayContaining(["--model", "opus"]),

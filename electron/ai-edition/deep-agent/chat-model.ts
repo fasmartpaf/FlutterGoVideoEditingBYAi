@@ -301,12 +301,14 @@ export interface OpenScreenChatModelConfig {
 	onCliSpawnComplete?: () => void;
 	/** Read per spawn: has this chat's CLI session been created yet? */
 	isCliSessionStarted?: () => boolean;
+	/** Local CLI replies can carry a `plan` checklist; forwarded to the chat. */
+	onLocalCliPlan?: (items: Array<{ text: string; status: "pending" | "in_progress" | "done" | "skipped" }>) => void;
 	/**
 	 * Direct Local CLI progress (heartbeats / stream-json). Used because
 	 * createAgent often invokes via `_generate`, skipping on_chat_model_stream.
 	 */
 	onLocalCliProgress?: (event: {
-		kind: "progress" | "text";
+		kind: "progress" | "text" | "thinking" | "boundary";
 		delta: string;
 	}) => void;
 	localAgentPermission?: "ask" | "always" | "never";
@@ -441,6 +443,7 @@ export async function createOpenScreenChatModel(
 			workspaceRoot: config.workspaceRoot,
 			onCliSpawnComplete: config.onCliSpawnComplete,
 			isCliSessionStarted: config.isCliSessionStarted,
+			onPlan: config.onLocalCliPlan,
 			watchGranted: shouldGrantLocalWatch(
 				config.localAgentPermission,
 				Boolean(config.watchGranted),

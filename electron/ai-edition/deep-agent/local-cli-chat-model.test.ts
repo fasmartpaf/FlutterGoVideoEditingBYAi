@@ -95,7 +95,11 @@ describe("consumeClaudeStreamJsonLine", () => {
 			}),
 			state,
 		);
-		expect(deltas).toEqual([{ kind: "text", delta: "Hello" }]);
+		// A whole-message snapshot starts with a boundary so reply parsing resets.
+		expect(deltas).toEqual([
+			{ kind: "boundary", delta: "" },
+			{ kind: "text", delta: "Hello" },
+		]);
 		expect(state.assistantText).toBe("Hello");
 	});
 
@@ -143,5 +147,43 @@ describe("consumeClaudeStreamJsonLine", () => {
 			state,
 		);
 		expect(state.apiError).toMatch(/weekly limit/i);
+	});
+});
+
+describe("consumeClaudeStreamJsonLine — partial messages", () => {
+	it("reads token deltas, thinking and tool starts from stream_event lines", () => {
+		const state = { assistantText: "", result: null as string | null };
+		const ev = (event: unknown) =>
+			consumeClaudeStreamJsonLine(JSON.stringify({ type: "stream_event", event }), state);
+		expect(ev({ type: "message_start" })).toEqual([{ kind: "boundary", delta: "" }]);
+		expect(ev({ type: "content_block_delta", delta: { type: "text_delta", text: "Hel" } })).toEqual([
+			{ kind: "text", delta: "Hel" },
+		]);
+		expect(
+			ev({ type: "content_block_delta", delta: { type: "thinking_delta", thinking: "hmm" } }),
+		).toEqual([{ kind: "thinking", delta: "hmm" }]);
+		const toolStart = ev({ type: "content_block_start", content_block: { type: "tool_use", name: "Read" } });
+		expect(toolStart[0]?.kind).toBe("progress");
+		// The later whole-message snapshot must not repeat the text.
+		const snapshot = consumeClaudeStreamJsonLine(
+			JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } }),
+			state,
+		);
+		expect(snapshot.filter((e) => e.kind === "text")).toEqual([]);
+	});
+});
+
+describe("plan checklist in Local CLI replies", () => {
+	it("accepts a plan riding along with tool_calls and cleans it up", async () => {
+		const { normalizePlan } = await import("./local-cli-chat-model");
+		const parsed = parseModelJson(
+			'{"plan":[{"text":"Cut dead air","status":"in_progress"},{"text":"Add title","status":"bogus"},{"text":"  "}],"tool_calls":[{"name":"tightenPacing","args":{}}]}',
+		);
+		expect(normalizePlan(parsed.plan)).toEqual([
+			{ text: "Cut dead air", status: "in_progress" },
+			{ text: "Add title", status: "pending" },
+		]);
+		expect(normalizePlan(undefined)).toBeNull();
+		expect(normalizePlan([])).toBeNull();
 	});
 });

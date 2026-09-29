@@ -267,6 +267,8 @@
 		"copyFailed": "تعذّر النسخ",
 		"appliedPrefix": "تم التطبيق:",
 		"thinking": "جارٍ التفكير…",
+		"plan": "الخطة",
+		"undoTurn": "تراجع",
 		"composerPlaceholder": "صف التعديل الذي تريده.",
 		"composerDisabledNoProvider": "اربط مزوّداً لبدء المحادثة.",
 		"modelLabel": "النموذج",

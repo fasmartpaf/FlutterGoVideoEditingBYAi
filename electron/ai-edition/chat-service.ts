@@ -22,6 +22,7 @@ import type {
 	AiEditionChatMedia,
 	AiEditionChatMessage,
 	AiEditionChatResult,
+	AiEditionPlanItem,
 	AiEditionToolCallSummary,
 } from "../../src/native/contracts";
 import {
@@ -379,6 +380,8 @@ export interface ChatEventSink {
 	error?: (message: string) => void;
 	/** Coarse phase updates for the live WebSocket / Cursor-like status strip. */
 	status?: (phase: string, detail?: string) => void;
+	/** The agent's step checklist changed (`updatePlan`). */
+	plan?: (items: AiEditionPlanItem[]) => void;
 }
 
 export interface ChatRunEnv {
@@ -399,6 +402,7 @@ const NOOP_SINK: Required<ChatEventSink> = {
 	toolEnd: noop,
 	error: noop,
 	status: noop,
+	plan: noop,
 };
 
 export async function runChat(
@@ -408,6 +412,30 @@ export async function runChat(
 	llmConfig: LlmConfigStore,
 	documentInput?: unknown,
 	sink: ChatEventSink = {},
+	env: ChatRunEnv = {},
+): Promise<AiEditionChatResult> {
+	// Every turn is timed from Send: first status / thinking / reply word /
+	// tool, and the total. Logged, and sent to the UI as a `turn_timing` status.
+	const { createTurnTimer, formatTurnTiming } = await import("./turnTiming");
+	const timer = createTurnTimer();
+	const emit = timer.wrap({ ...NOOP_SINK, ...sink });
+	try {
+		return await runChatTimed(projectId, sessionId, message, llmConfig, documentInput, emit, env);
+	} finally {
+		const timing = timer.finish();
+		const line = formatTurnTiming(timing);
+		console.info(`[chat-turn] ${projectId}/${sessionId}: ${line}`);
+		emit.status("turn_timing", JSON.stringify(timing));
+	}
+}
+
+async function runChatTimed(
+	projectId: string,
+	sessionId: string,
+	message: string,
+	llmConfig: LlmConfigStore,
+	documentInput: unknown,
+	sink: ChatEventSink,
 	/** Runtime capabilities the pure chat path cannot build for itself. Optional
 	 *  and last so the three existing call sites are unchanged — but note that a
 	 *  production caller which forgets to pass `cursor` gets an agent that answers
@@ -552,6 +580,7 @@ export async function runChat(
 
 	const appliedToolCalls: AiEditionToolCallSummary[] = [];
 	let turnMedia: AiEditionChatMedia[] = [];
+	let turnPlan: AiEditionPlanItem[] | undefined;
 
 	const agentSink = {
 		text: (delta: string) => emit.text(delta),
@@ -570,6 +599,10 @@ export async function runChat(
 		},
 		error: (message: string) => emit.error(message),
 		status: (phase: string, detail?: string) => emit.status(phase, detail),
+		plan: (items: AiEditionPlanItem[]) => {
+			turnPlan = items;
+			emit.plan(items);
+		},
 	};
 
 	// Register the run BEFORE anything the UI can see, so a Stop pressed right
@@ -651,6 +684,7 @@ export async function runChat(
 				createdAt: new Date().toISOString(),
 				toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 				media: turnMedia.length ? turnMedia : undefined,
+				plan: turnPlan,
 			};
 			session.messages.push(assistantMessage);
 			persistProject(projectId);
@@ -706,6 +740,7 @@ export async function runChat(
 		createdAt: new Date().toISOString(),
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 		media: turnMedia.length ? turnMedia : undefined,
+		plan: turnPlan,
 	};
 	session.messages.push(assistantMessage);
 	persistProject(projectId);

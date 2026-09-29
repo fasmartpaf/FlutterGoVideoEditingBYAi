@@ -24,6 +24,7 @@ import type {
 	AiEditionChatResult,
 	AiEditionLlmConfig,
 	AiEditionLocalAgent,
+	AiEditionPlanItem,
 	AiEditionToolCallSummary,
 } from "@/native/contracts";
 import {
@@ -32,11 +33,13 @@ import {
 	PROVIDER_DEFINITIONS,
 	type ReasoningEffort,
 } from "../../../electron/ai-edition/provider-registry";
+import { turnReceiptItems } from "../../../electron/ai-edition/editReceipt";
 import { toolActivityStatus } from "../../../electron/ai-edition/toolActivityLabels";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
 import { EditReviewCardView } from "./EditReviewCard";
 import { LocalCliPopover } from "./LocalCliPopover";
+import { PlanChecklist } from "./PlanChecklist";
 import { ChatHistoryModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { useChatBudget } from "./useChatBudget";
@@ -48,6 +51,8 @@ interface ChatDisplayMessage {
 	time?: string;
 	toolCalls?: AiEditionToolCallSummary[];
 	media?: AiEditionChatMedia[];
+	/** The agent's step checklist as it stood at the end of the turn. */
+	plan?: AiEditionPlanItem[];
 	// ponytail: axcut parity — non-null on user messages that have a
 	// rewind-able document snapshot, so the per-message ↩ button shows.
 	checkpointId?: string | null;
@@ -583,6 +588,7 @@ export function ChatStripPanel() {
 	// resolves we copy it onto the assistant message and clear it.
 	const [thinkingText, setThinkingText] = useState("");
 	const [streamingText, setStreamingText] = useState("");
+	const [livePlan, setLivePlan] = useState<AiEditionPlanItem[]>([]);
 	const [liveTools, setLiveTools] = useState<
 		Array<{ name: string; summary?: string; ok?: boolean; detail?: string }>
 	>([]);
@@ -684,10 +690,19 @@ export function ChatStripPanel() {
 			if (event.kind === "status") {
 				if (event.sessionId && event.sessionId !== thinkingRunSessionRef.current) return;
 				if (event.phase === "connected") return;
+				if (event.phase === "turn_timing") {
+					// Latency marks for this turn (send → first status/text/tool → done).
+					console.debug("[chat-turn timing]", event.detail);
+					return;
+				}
 				setLiveStatus(event.detail ?? event.phase);
 				return;
 			}
 			if (event.sessionId !== thinkingRunSessionRef.current) return;
+			if (event.kind === "plan") {
+				setLivePlan(event.items);
+				return;
+			}
 			if (event.kind === "thinking") {
 				setThinkingText((prev) => prev + event.delta);
 				return;
@@ -797,6 +812,7 @@ export function ChatStripPanel() {
 							time: formatChatTime(m.createdAt),
 							toolCalls: m.toolCalls,
 							media: m.media,
+							plan: m.plan,
 							checkpointId: m.checkpointId ?? null,
 						})),
 					);
@@ -841,6 +857,7 @@ export function ChatStripPanel() {
 		// from a previous run (or from another panel/window) won't match this
 		// sessionId and are dropped by the subscription above.
 		setThinkingText("");
+		setLivePlan([]);
 		setStreamingText("");
 		setLiveTools([]);
 		setLiveStatus(null);
@@ -935,6 +952,7 @@ export function ChatStripPanel() {
 						time: new Date().toLocaleTimeString(),
 						toolCalls: assistant.toolCalls,
 						media: assistant.media,
+						plan: assistant.plan,
 						// ponytail: snapshot the live reasoning trace onto the
 						// finished message so it can be revisited (collapsed by
 						// default, click-to-expand) instead of vanishing. The
@@ -979,6 +997,7 @@ export function ChatStripPanel() {
 			// message above, or there's no message to attach it to (failure).
 			thinkingRunSessionRef.current = null;
 			setThinkingText("");
+		setLivePlan([]);
 			setStreamingText("");
 			setLiveTools([]);
 			setLiveStatus(null);
@@ -1069,6 +1088,7 @@ export function ChatStripPanel() {
 						time: formatChatTime(m.createdAt),
 						toolCalls: m.toolCalls,
 						media: m.media,
+						plan: m.plan,
 						checkpointId: m.checkpointId ?? null,
 					})),
 				);
@@ -1225,6 +1245,7 @@ export function ChatStripPanel() {
 					time: formatChatTime(m.createdAt),
 					toolCalls: m.toolCalls,
 					media: m.media,
+					plan: m.plan,
 					checkpointId: m.checkpointId ?? null,
 				})),
 			);
@@ -1642,6 +1663,9 @@ export function ChatStripPanel() {
 										{m.toolCalls.length === 1 ? "" : "s"}.
 									</div>
 								) : null}
+								{m.role === "assistant" && m.plan?.length ? (
+									<PlanChecklist items={m.plan} title={t("chat.plan")} />
+								) : null}
 								{m.media?.length ? (
 									<div className={styles.chatMediaGallery}>
 										<div
@@ -1761,6 +1785,53 @@ export function ChatStripPanel() {
 										)}
 									</button>
 								</div>
+								{m.role === "assistant" && m.toolCalls?.length
+									? (() => {
+											const items = turnReceiptItems(m.toolCalls);
+											if (items.length === 0) return null;
+											// Undo = rewind to the user message that started this turn.
+											const trigger = messages
+												.slice(0, i)
+												.reverse()
+												.find((prev) => prev.role === "user" && prev.checkpointId);
+											return (
+												<div
+													data-testid="turn-receipt"
+													style={{
+														display: "flex",
+														flexWrap: "wrap",
+														alignItems: "center",
+														gap: 6,
+														marginTop: 6,
+														fontSize: 12,
+														color: "var(--muted)",
+													}}
+												>
+													<Check size={12} aria-hidden="true" />
+													<span>{items.join(" · ")}</span>
+													{trigger?.id ? (
+														<button
+															type="button"
+															className={styles.msgAction}
+															style={{ width: "auto", padding: "0 6px", fontSize: 12 }}
+															onClick={(event) => {
+																const rect = event.currentTarget.getBoundingClientRect();
+																setRewindFor({
+																	messageId: trigger.id ?? "",
+																	anchor: {
+																		left: rect.left + rect.width / 2,
+																		bottom: window.innerHeight - rect.top + 6,
+																	},
+																});
+															}}
+														>
+															{t("chat.undoTurn")}
+														</button>
+													) : null}
+												</div>
+											);
+										})()
+									: null}
 								{m.toolCalls?.length ? (
 									<ActivityDetails toolCalls={m.toolCalls} label={t("chat.activityDetails")} />
 								) : null}
@@ -1823,6 +1894,9 @@ export function ChatStripPanel() {
 										<Loader2 size={12} className="animate-spin" />
 										<span>{liveStatus}</span>
 									</div>
+								) : null}
+								{livePlan.length > 0 ? (
+									<PlanChecklist items={livePlan} title={t("chat.plan")} live />
 								) : null}
 								{liveTools.length > 0 ? (
 									<div className={styles.liveTools}>

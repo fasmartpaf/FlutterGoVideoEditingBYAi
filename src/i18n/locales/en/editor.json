@@ -299,6 +299,8 @@
 		"appliedPrefix": "applied:",
 		"activityDetails": "Activity",
 		"thinking": "Thinking…",
+		"plan": "Plan",
+		"undoTurn": "Undo",
 		"realtimeLive": "Live",
 		"realtimeConnecting": "Connecting…",
 		"realtimeFallback": "Local",

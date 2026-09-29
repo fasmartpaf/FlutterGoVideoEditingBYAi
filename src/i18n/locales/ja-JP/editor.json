@@ -267,6 +267,8 @@
 		"copyFailed": "コピーできませんでした",
 		"appliedPrefix": "適用済み：",
 		"thinking": "考え中…",
+		"plan": "計画",
+		"undoTurn": "元に戻す",
 		"composerPlaceholder": "希望する編集内容を記述してください。",
 		"composerDisabledNoProvider": "チャットを始めるにはプロバイダーを設定してください。",
 		"modelLabel": "モデル",

@@ -130,3 +130,20 @@ export function prepareAssistantContent(text: string, lines: EditReceiptLine[]):
 export function appendEditReceiptIfNeeded(text: string, lines: EditReceiptLine[]): string {
 	return prepareAssistantContent(text, lines);
 }
+
+/**
+ * The end-of-turn receipt: one short phrase per KIND of change the agent made
+ * ("Added 2 zooms", "Updated the start cover"). Reads and plan updates are not
+ * changes and are left out. Empty when the turn changed nothing.
+ */
+export function turnReceiptItems(lines: EditReceiptLine[]): string[] {
+	const groups = new Map<string, { count: number; sample?: string }>();
+	for (const line of lines) {
+		const key = line.name || "edit";
+		if (INSPECT_LIKE.test(key) || key === "updatePlan" || key === "getTranscriptRange") continue;
+		const prev = groups.get(key);
+		if (prev) prev.count += 1;
+		else groups.set(key, { count: 1, sample: line.summary });
+	}
+	return [...groups].map(([name, { count, sample }]) => batchLabel(name, count, sample).replace(/\.$/, ""));
+}

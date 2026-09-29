@@ -190,6 +190,7 @@ function buildChatEventSink(sender: Electron.WebContents, sessionId: string): Ch
 		toolEnd: (name, ok, summary) => send({ kind: "toolEnd", sessionId, name, ok, summary }),
 		error: (message) => send({ kind: "error", sessionId, message }),
 		status: (phase, detail) => send({ kind: "status", sessionId, phase, detail }),
+		plan: (items) => send({ kind: "plan", sessionId, items }),
 	};
 }
 

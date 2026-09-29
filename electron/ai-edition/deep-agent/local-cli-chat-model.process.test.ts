@@ -13,6 +13,10 @@ const posix = process.platform !== "win32";
 const FAKE_CLI = `#!/bin/sh
 { printf '%s\\n' "$@"; echo "---END---"; } >> "$FAKE_CLI_ARGV"
 cat > /dev/null
+if [ -n "$FAKE_CLI_STREAM" ]; then
+  cat "$FAKE_CLI_STREAM"
+  exit 0
+fi
 if [ -n "$FAKE_CLI_CHILD_PID" ]; then
   sleep 30 &
   echo $! > "$FAKE_CLI_CHILD_PID"
@@ -56,6 +60,7 @@ describe.skipIf(!posix)("LocalCliChatModel spawn contract", () => {
 	afterEach(() => {
 		delete process.env.FAKE_CLI_ARGV;
 		delete process.env.FAKE_CLI_CHILD_PID;
+		delete process.env.FAKE_CLI_STREAM;
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -90,6 +95,8 @@ describe.skipIf(!posix)("LocalCliChatModel spawn contract", () => {
 	});
 
 	it("creates the session on the first spawn and resumes it on every later spawn", async () => {
+		// Spawn-per-call path (the long-lived path has its own tests).
+		process.env.OPENSCREEN_CLI_PERSISTENT = "0";
 		const sid = "22222222-2222-2222-2222-222222222222";
 		let started = false;
 		const model = new LocalCliChatModel({
@@ -110,6 +117,42 @@ describe.skipIf(!posix)("LocalCliChatModel spawn contract", () => {
 		expect(first).not.toContain("--resume");
 		expect(second).toEqual(expect.arrayContaining(["--resume", sid]));
 		expect(second).not.toContain("--session-id");
+		delete process.env.OPENSCREEN_CLI_PERSISTENT;
+	});
+
+	it("streams the reply token by token without leaking JSON", async () => {
+		const reply = JSON.stringify({ message: "Cut 2 pauses — done ✂️" });
+		const lines: string[] = [
+			JSON.stringify({ type: "system", subtype: "init", model: "fake" }),
+			JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+		];
+		for (let i = 0; i < reply.length; i += 4) {
+			lines.push(
+				JSON.stringify({
+					type: "stream_event",
+					event: { type: "content_block_delta", delta: { type: "text_delta", text: reply.slice(i, i + 4) } },
+				}),
+			);
+		}
+		lines.push(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: reply }] } }));
+		lines.push(JSON.stringify({ type: "result", subtype: "success", result: reply }));
+		const streamFile = path.join(dir, "stream.ndjson");
+		writeFileSync(streamFile, `${lines.join("\n")}\n`);
+		process.env.FAKE_CLI_STREAM = streamFile;
+
+		const texts: string[] = [];
+		const model = new LocalCliChatModel({
+			agentId: "claude",
+			binPath: bin,
+			onProgress: (event) => {
+				if (event.kind === "text") texts.push(event.delta);
+			},
+		});
+		const result = await model.invoke([new HumanMessage("tighten it")]);
+		expect(texts.length).toBeGreaterThan(3); // arrived in pieces, not one block
+		expect(texts.join("")).toBe("Cut 2 pauses — done ✂️");
+		expect(texts.join("")).not.toContain("{");
+		expect(result.content).toBe("Cut 2 pauses — done ✂️");
 	});
 
 	it("Stop kills the CLI and the processes it started", async () => {

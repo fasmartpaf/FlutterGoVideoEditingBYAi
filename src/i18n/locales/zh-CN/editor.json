@@ -267,6 +267,8 @@
 		"copyFailed": "无法复制",
 		"appliedPrefix": "已应用：",
 		"thinking": "思考中…",
+		"plan": "计划",
+		"undoTurn": "撤销",
 		"composerPlaceholder": "描述你想要的编辑内容。",
 		"composerDisabledNoProvider": "请先设置一个提供方再开始聊天。",
 		"modelLabel": "模型",
