@@ -63,17 +63,22 @@ export interface TurnBudget {
 
 /** Soft limits: past these the agent is told to wrap up; past HARD it must stop. */
 export const TURN_BUDGET = { softSteps: 8, softMs: 4 * 60_000, finishSteps: 13, finishMs: 8 * 60_000, hardSteps: 16 };
+export type TurnBudgetLimits = typeof TURN_BUDGET;
 
 /** The line added to this reply's prompt, or null while within budget. */
-export function turnBudgetNote(budget: TurnBudget, now = Date.now()): { note: string; mustFinish: boolean } | null {
+export function turnBudgetNote(
+	budget: TurnBudget,
+	now = Date.now(),
+	limits: TurnBudgetLimits = TURN_BUDGET,
+): { note: string; mustFinish: boolean } | null {
 	const minutes = Math.round((now - budget.startedAt) / 6000) / 10;
-	if (budget.steps >= TURN_BUDGET.finishSteps || now - budget.startedAt >= TURN_BUDGET.finishMs) {
+	if (budget.steps >= limits.finishSteps || now - budget.startedAt >= limits.finishMs) {
 		return {
 			note: `TIME BUDGET REACHED (reply ${budget.steps}, ${minutes} min). Do NOT call more tools. Reply NOW with {"message":"…"}: what you finished, what is left, and offer to continue.`,
 			mustFinish: true,
 		};
 	}
-	if (budget.steps >= TURN_BUDGET.softSteps || now - budget.startedAt >= TURN_BUDGET.softMs) {
+	if (budget.steps >= limits.softSteps || now - budget.startedAt >= limits.softMs) {
 		return {
 			note: `BUDGET: this is reply ${budget.steps} (${minutes} min in). Wrap up: finish the remaining work in at most 2 more replies — batch everything left into one tool_calls array, skip optional polish — then send the final message.`,
 			mustFinish: false,
@@ -86,6 +91,8 @@ export interface LocalCliChatModelFields {
 	agentId: string;
 	/** Shared reply counter for this chat turn (bindTools copies keep the same one). */
 	turnBudget?: TurnBudget;
+	/** Tighter limits for one stage of a staged edit (defaults to TURN_BUDGET). */
+	budgetLimits?: TurnBudgetLimits;
 	binPath: string;
 	tools?: BoundTool[];
 	/** Parent folders of open recordings — Claude may Read those videos. */
@@ -624,6 +631,7 @@ export class LocalCliChatModel extends BaseChatModel {
 	readonly watchGranted: boolean;
 	/** Replies used in this chat turn — shared across bindTools copies. */
 	readonly turnBudget: TurnBudget;
+	readonly budgetLimits: TurnBudgetLimits;
 
 	constructor(fields: LocalCliChatModelFields) {
 		super({});
@@ -643,6 +651,7 @@ export class LocalCliChatModel extends BaseChatModel {
 		this.isCliSessionStarted = fields.isCliSessionStarted;
 		this.watchGranted = fields.watchGranted ?? this.mediaDirs.length > 0;
 		this.turnBudget = fields.turnBudget ?? { steps: 0, startedAt: Date.now() };
+		this.budgetLimits = fields.budgetLimits ?? TURN_BUDGET;
 	}
 
 	_llmType(): string {
@@ -667,6 +676,7 @@ export class LocalCliChatModel extends BaseChatModel {
 			isCliSessionStarted: this.isCliSessionStarted,
 			watchGranted: this.watchGranted,
 			turnBudget: this.turnBudget,
+			budgetLimits: this.budgetLimits,
 		});
 	}
 
@@ -675,7 +685,7 @@ export class LocalCliChatModel extends BaseChatModel {
 		onEvent?: (event: LocalCliProgressEvent) => void,
 	): Promise<ChatResult> {
 		this.turnBudget.steps += 1;
-		const budget = turnBudgetNote(this.turnBudget);
+		const budget = turnBudgetNote(this.turnBudget, Date.now(), this.budgetLimits);
 		const budgetLine = budget ? `\n${budget.note}` : "";
 		const prompt = buildPrompt(messages, this.boundTools, { framePaths: this.framePaths }) + budgetLine;
 		const streamJson = this.agentId === "claude";
@@ -773,7 +783,7 @@ export class LocalCliChatModel extends BaseChatModel {
 				args: call.args && typeof call.args === "object" ? call.args : {},
 				type: "tool_call" as const,
 			}));
-		if (toolCalls.length > 0 && this.turnBudget.steps >= TURN_BUDGET.hardSteps) {
+		if (toolCalls.length > 0 && this.turnBudget.steps >= this.budgetLimits.hardSteps) {
 			// It was told to stop and kept going: end the turn here. Every edit so far
 			// is applied (and undoable); the user can say "continue".
 			toolCalls.length = 0;

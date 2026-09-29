@@ -1,0 +1,254 @@
+/**
+ * Staged editing: a whole-video request ("make this a SaaS demo") runs as a
+ * fixed sequence of stages — understand → cut & pacing → zoom & camera →
+ * captions → graphics & motion → review & export. Each stage is its own
+ * focused agent run: only that stage's tools, its own small reply budget,
+ * and the previous stages' outcomes as context. A stage finishes before the
+ * next one starts, the chat checklist shows where it is, and every stage
+ * that changed the video leaves a preview frame in the chat.
+ */
+
+import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import type { TurnBudgetLimits } from "./deep-agent/local-cli-chat-model";
+
+export type StageId = "understand" | "pacing" | "camera" | "captions" | "graphics" | "review";
+
+export interface EditStage {
+	id: StageId;
+	/** Checklist text the user sees. */
+	title: string;
+	/** What the agent does in this stage. */
+	instruction: string;
+	/** Tools offered in this stage (read-only tools are always added). */
+	tools: readonly string[];
+	budget: TurnBudgetLimits;
+	/** Show the user a frame of the edited video after this stage. */
+	preview: boolean;
+}
+
+/** Looking is always allowed. */
+export const READ_TOOLS = [
+	"getCurrentDocument",
+	"getTranscript",
+	"getTranscriptRange",
+	"getTranscriptWords",
+	"getCursorTrack",
+	"sampleFrames",
+	"listMotionTemplates",
+	"listTransitions",
+	"listCharacters",
+] as const;
+
+const PACING_TOOLS = [
+	"tightenPacing",
+	"removeFillerWords",
+	"addTrim",
+	"addTrims",
+	"setTrim",
+	"removeTrim",
+	"setClipRange",
+	"splitClip",
+	"moveClip",
+	"removeClip",
+	"duplicateClip",
+] as const;
+
+const CAMERA_TOOLS = [
+	"addZoom",
+	"addZooms",
+	"setZoom",
+	"addSpeed",
+	"setSpeed",
+	"setClipCrop",
+	"setAspectRatio",
+	"addCursorHighlight",
+	"setEditorSettings",
+	"setBackground",
+	"addCameraFullscreen",
+	"setCameraFullscreen",
+	"removeModifier",
+] as const;
+
+const CAPTION_TOOLS = ["generateCaptions", "setCaptionSettings", "setWordText"] as const;
+
+const GRAPHICS_TOOLS = [
+	"createMotionClip",
+	"placeMotionClip",
+	"addMotionOverlay",
+	"setBrandKit",
+	"addGraphic",
+	"addAnnotation",
+	"setAnnotation",
+	"insertStartThumbnail",
+	"addPrivacyCover",
+	"setClipIncomingTransition",
+	"removeModifier",
+] as const;
+
+const budget = (softSteps: number, finishSteps: number, hardSteps: number, softMin: number, finishMin: number): TurnBudgetLimits => ({
+	softSteps,
+	finishSteps,
+	hardSteps,
+	softMs: softMin * 60_000,
+	finishMs: finishMin * 60_000,
+});
+
+export const EDIT_STAGES: readonly EditStage[] = [
+	{
+		id: "understand",
+		title: "Understand the recording",
+		instruction:
+			"Look before editing, in ONE reply: getTranscript (if it fails because there is no transcript and the recording has speech, call generateCaptions, then getTranscript), getCursorTrack, and sampleFrames from:'recording' (count 4); Read the frames. Then reply with a short EDIT PLAN for the next stages: the story in one line, the key moments to keep (with times), what to cut, where zooms help, whether captions fit, which intro / callouts / closing CTA to add, and the target length. Make no edits in this stage.",
+		tools: ["generateCaptions"],
+		budget: budget(2, 3, 4, 2, 3),
+		preview: false,
+	},
+	{
+		id: "pacing",
+		title: "Cut & pacing",
+		instruction:
+			"Following your plan: remove dead air and filler words (tightenPacing / removeFillerWords), and cut off-topic, repeated or broken sections (addTrims), so the story flows and fits the target length. Keep sentences whole. Put all cuts in one or two replies.",
+		tools: PACING_TOOLS,
+		budget: budget(3, 4, 6, 2, 4),
+		preview: true,
+	},
+	{
+		id: "camera",
+		title: "Zoom & camera",
+		instruction:
+			"Following your plan: zoom in on the key actions (use the cursor track so the zoom lands where the action is; addZooms for several at once), speed up slow waiting parts, and set crop / aspect ratio / frame look only if the request or the platform needs it. All in one or two replies.",
+		tools: CAMERA_TOOLS,
+		budget: budget(3, 4, 6, 2, 4),
+		preview: true,
+	},
+	{
+		id: "captions",
+		title: "Captions",
+		instruction:
+			"If the video has speech: turn on burned-in captions with a clean, readable style that suits the video (setCaptionSettings), and fix clearly mis-heard product names or words (setWordText). If there is no speech, or captions don't fit the request, skip this stage.",
+		tools: CAPTION_TOOLS,
+		budget: budget(2, 3, 4, 2, 3),
+		preview: true,
+	},
+	{
+		id: "graphics",
+		title: "Graphics & motion",
+		instruction:
+			"Following your plan: add a branded intro title card and a closing call-to-action (createMotionClip templates, placed at start / end), plus a few animated callouts, lower thirds or keyword pops on the footage where they help the story (addMotionOverlay). Use the brand kit — it already matches the video's colours. Keep text short and don't cover the UI the viewer needs to see. Look at the previewFrames each render returns. Batch independent renders in one reply.",
+		tools: GRAPHICS_TOOLS,
+		budget: budget(4, 6, 8, 4, 7),
+		preview: true,
+	},
+	{
+		id: "review",
+		title: "Review & export",
+		instruction:
+			"Check the finished edit: sampleFrames from:'timeline' (count 5) and Read the frames. Fix real problems (cut off, unreadable, covering the UI, blank, off-brand) in ONE batch. Export only if the user asked for an export or a file (exportProject), then check the export once with sampleFrames from:'export'. Your final message is for the user: 2–3 sentences on what the finished video now does, plus one suggested next step.",
+		tools: [...PACING_TOOLS, ...CAMERA_TOOLS, ...CAPTION_TOOLS, ...GRAPHICS_TOOLS, "exportProject"],
+		budget: budget(3, 5, 6, 3, 5),
+		preview: false,
+	},
+];
+
+/** The full tool list for one stage (read tools + the stage's own), de-duplicated. */
+export function stageToolNames(stage: EditStage): string[] {
+	return [...new Set([...READ_TOOLS, ...stage.tools])];
+}
+
+const BROAD_VERB = /\b(make|create|produce|turn|build|edit|polish|improve|clean\s*up|finish|prepare|cut)\b/i;
+const WHOLE_VIDEO = /\b(vi?d[a-z]*|demo|tutorial|shorts?|reels?|promo|walkthrough|recording|launch|product|saas|explainer|trailer|ad)\b/i;
+const NARROW = /\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\b\d{1,2}:\d{2}\b|\b(?:this|that)\s+(?:zoom|caption|overlay|clip|title|graphic)\b/i;
+
+/**
+ * True for a whole-video request ("make the SaaS video for fluttergo.ai",
+ * "turn this into a 60-second product demo"), false for a targeted edit
+ * ("zoom at 0:12", "make that title bigger") or a question.
+ */
+export function isWholeVideoRequest(message: string): boolean {
+	const m = message.trim();
+	if (m.length < 12 || m.endsWith("?") && !BROAD_VERB.test(m.split(/\s+/).slice(0, 3).join(" "))) return false;
+	if (NARROW.test(m)) return false;
+	return BROAD_VERB.test(m) && WHOLE_VIDEO.test(m);
+}
+
+export interface StageOutcome {
+	stage: EditStage;
+	status: "done" | "skipped" | "failed" | "stopped";
+	summary: string;
+	mutated: boolean;
+	previewPath?: string;
+}
+
+/** The message that drives one stage. */
+export function stagePrompt(
+	stage: EditStage,
+	index: number,
+	request: string,
+	earlier: StageOutcome[],
+	total = EDIT_STAGES.length,
+): string {
+	const lines = [
+		`STAGED EDIT — stage ${index + 1} of ${total}: ${stage.title.toUpperCase()}.`,
+		`The user's request: "${request}"`,
+	];
+	if (earlier.length) {
+		lines.push("Done so far:");
+		for (const o of earlier) lines.push(`- ${o.stage.title}: ${o.summary}`);
+	}
+	lines.push(
+		`Do ONLY this stage now: ${stage.instruction}`,
+		`Budget: about ${stage.budget.softSteps} replies — batch independent tool calls into one reply.`,
+		stage.id === "review"
+			? 'When done, reply with {"message":"…"} for the user.'
+			: 'When this stage is done reply with {"message":"<1–2 sentences: what this stage changed>"}, or {"message":"Skipped: <why>"} if it isn\'t useful for this video. Do not start the next stage — it runs next.',
+	);
+	return lines.join("\n");
+}
+
+/** The chat checklist for the stages, given how far the edit got. */
+export function stagePlan(
+	outcomes: StageOutcome[],
+	current: number | null,
+	stages: readonly EditStage[] = EDIT_STAGES,
+): Array<{ text: string; status: "pending" | "in_progress" | "done" | "skipped" }> {
+	return stages.map((stage, i) => {
+		const o = outcomes[i];
+		if (o) return { text: stage.title, status: o.status === "done" ? "done" : "skipped" };
+		if (i === current) return { text: stage.title, status: "in_progress" };
+		return { text: stage.title, status: "pending" };
+	});
+}
+
+/** Clean a stage's reply into a one-paragraph summary. */
+export function stageSummary(text: string | undefined, stage: EditStage): { summary: string; skipped: boolean } {
+	const t = (text ?? "").replace(/\s+/g, " ").trim();
+	if (!t) return { summary: "No changes needed.", skipped: true };
+	const skipped = /^skipp?ed\b/i.test(t);
+	const limit = stage.id === "understand" ? 1500 : 400;
+	return { summary: t.length > limit ? `${t.slice(0, limit - 1)}…` : t, skipped };
+}
+
+/** The final chat message: the review stage's words, then what each stage did. */
+export function stagedFinalMessage(outcomes: StageOutcome[]): string {
+	const review = outcomes.find((o) => o.stage.id === "review" && o.status === "done");
+	const parts: string[] = [];
+	if (review) parts.push(review.summary);
+	const stageLines = outcomes
+		.filter((o) => o.stage.id !== "understand" && o.stage.id !== "review")
+		.map((o) => `- **${o.stage.title}** — ${o.status === "done" ? o.summary : o.status === "skipped" ? `skipped (${o.summary.replace(/^skipp?ed:?\s*/i, "")})` : o.summary}`);
+	if (stageLines.length) parts.push(stageLines.join("\n"));
+	const stopped = outcomes.find((o) => o.status === "stopped" || o.status === "failed");
+	if (stopped) parts.push(`Stopped during **${stopped.stage.title}** — the earlier stages are applied. Say "continue" to finish the rest.`);
+	return parts.join("\n\n") || "Done.";
+}
+
+/** Time in the edited programme worth previewing after a stage. */
+export function previewTimeSec(document: AxcutDocument, stage: EditStage, durationSec: number): number {
+	if (stage.id === "graphics") {
+		// First overlay if there is one, else just after the intro.
+		const first = [...document.annotations].sort((a, b) => a.startMs - b.startMs)[0];
+		if (first) return Math.min(durationSec - 0.1, first.startMs / 1000 + Math.min(1.5, (first.endMs - first.startMs) / 2000));
+		return Math.min(durationSec - 0.1, 1.5);
+	}
+	return Math.max(0, durationSec * 0.4);
+}

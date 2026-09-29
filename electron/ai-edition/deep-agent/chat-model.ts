@@ -291,6 +291,8 @@ export interface OpenScreenChatModelConfig {
 	framePaths?: string[];
 	/** Claude Code `--model` when agent is `claude`. */
 	localCliModel?: string;
+	/** Reply budget for this run (a stage of a staged edit uses tighter limits). */
+	turnBudgetLimits?: import("./local-cli-chat-model").TurnBudgetLimits;
 	/** Persistent Claude session UUID for this OpenScreen chat. */
 	cliSessionId?: string;
 	/** Resume Claude memory from a prior spawn in this chat. */
@@ -436,6 +438,7 @@ export async function createOpenScreenChatModel(
 			mediaDirs: config.mediaDirs,
 			framePaths: config.framePaths,
 			cliModel: config.localCliModel,
+			budgetLimits: config.turnBudgetLimits,
 			onProgress: config.onLocalCliProgress,
 			abortSignal: config.abortSignal,
 			cliSessionId: config.cliSessionId,

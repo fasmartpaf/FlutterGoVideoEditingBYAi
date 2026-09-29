@@ -42,6 +42,7 @@ import {
 	isAbortError,
 } from "./chatAbortRegistry";
 import { extractChatMediaFromToolResult } from "./chatMedia";
+import { runStagedEdit } from "./stagedEditRunner";
 import type { CliEngine, CursorTelemetryReader } from "./deep-agent/service";
 import type { DocumentService } from "./document-service";
 import type { LlmConfigStore } from "./llm-config-store";
@@ -626,32 +627,73 @@ async function runChatTimed(
 	let result: Awaited<
 		ReturnType<(typeof import("./deep-agent/service"))["invokeOpenScreenAgent"]>
 	>;
+	// A staged whole-video edit keeps the stages it finished even when Stop is
+	// pressed mid-way, so it skips the "cancelled, nothing applied" path below.
+	let stagedRun = false;
 	try {
 		// Inside the try so a failed import still clears the run registry.
 		const { invokeOpenScreenAgent } = await import("./deep-agent/service");
-		result = await invokeOpenScreenAgent({
-			document: workingDocument ?? emptyDocumentForTextOnly(projectId),
-			model: {
-				provider: effectiveConfig.provider,
-				model: effectiveConfig.model,
-				apiKey: apiKey ?? undefined,
-				baseUrl: effectiveConfig.baseUrl,
-				reasoningEffort: effectiveConfig.reasoningEffort,
-				localAgentPermission: effectiveConfig.localAgentPermission,
-				localCliModel: effectiveConfig.localCliModel,
-				watchGranted:
-					effectiveConfig.localAgentPermission === "always" ||
-					llmConfig.isSessionWatchGranted?.() === true,
-			},
-			history,
-			userMessage: message,
-			sink: agentSink,
-			editsAllowed,
-			cursor: env.cursor,
-			cli: env.cli,
-			abortSignal,
-			chatSessionId: sessionId,
-		});
+		const modelConfig = {
+			provider: effectiveConfig.provider,
+			model: effectiveConfig.model,
+			apiKey: apiKey ?? undefined,
+			baseUrl: effectiveConfig.baseUrl,
+			reasoningEffort: effectiveConfig.reasoningEffort,
+			localAgentPermission: effectiveConfig.localAgentPermission,
+			localCliModel: effectiveConfig.localCliModel,
+			watchGranted:
+				effectiveConfig.localAgentPermission === "always" ||
+				llmConfig.isSessionWatchGranted?.() === true,
+		};
+		const { isWholeVideoRequest } = await import("./stagedEdit");
+		stagedRun =
+			effectiveConfig.provider === "local-cli" &&
+			editsAllowed &&
+			workingDocument !== null &&
+			process.env.OPENSCREEN_STAGED_EDIT !== "0" &&
+			isWholeVideoRequest(message);
+		if (stagedRun && workingDocument) {
+			const staged = await runStagedEdit({
+				invoke: (stage) =>
+					invokeOpenScreenAgent({
+						document: stage.document,
+						model: { ...modelConfig, turnBudgetLimits: stage.budget },
+						history,
+						userMessage: stage.prompt,
+						sink: { ...agentSink, plan: () => {} },
+						editsAllowed,
+						cursor: env.cursor,
+						cli: env.cli,
+						abortSignal,
+						chatSessionId: sessionId,
+						allowedToolNames: stage.toolNames,
+					}),
+				document: workingDocument,
+				request: message,
+				abortSignal,
+				emit,
+				onPlan: (items) => {
+					turnPlan = items;
+				},
+				onPreview: (path, label) => {
+					turnMedia = extractChatMediaFromToolResult(JSON.stringify({ media: [{ path, label }] }), turnMedia);
+				},
+			});
+			result = staged;
+		} else {
+			result = await invokeOpenScreenAgent({
+				document: workingDocument ?? emptyDocumentForTextOnly(projectId),
+				model: modelConfig,
+				history,
+				userMessage: message,
+				sink: agentSink,
+				editsAllowed,
+				cursor: env.cursor,
+				cli: env.cli,
+				abortSignal,
+				chatSessionId: sessionId,
+			});
+		}
 	} catch (err) {
 		endChatRun(projectId, sessionId, abortSignal);
 		if (isAbortError(err) || abortSignal.aborted) {
@@ -666,7 +708,7 @@ async function runChatTimed(
 	}
 	endChatRun(projectId, sessionId, abortSignal);
 
-	if (abortSignal.aborted || result.failureReason === "request_aborted") {
+	if (!stagedRun && (abortSignal.aborted || result.failureReason === "request_aborted")) {
 		return {
 			success: false,
 			status: "cancelled",

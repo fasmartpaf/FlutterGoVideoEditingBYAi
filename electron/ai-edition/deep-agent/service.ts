@@ -1063,6 +1063,8 @@ export interface InvokeArgs {
 	abortSignal?: AbortSignal;
 	/** OpenScreen chat session id — keeps Local CLI memory across turns. */
 	chatSessionId?: string;
+	/** Staged edit: only these tools are offered for this run (the plan tool is dropped too). */
+	allowedToolNames?: readonly string[];
 }
 
 /** One cheap probe per asset, run before the tools are built so the very first
@@ -2189,7 +2191,11 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			? toolGateForQuery(queryClass)
 			: null;
 	// The plan checklist is always available, whatever the gate: it edits nothing.
-	const tools = [...(gate ? filterToolsByGate(toolsBuilt, gate) : toolsBuilt), buildPlanTool(sink)];
+	const gatedTools = gate ? filterToolsByGate(toolsBuilt, gate) : toolsBuilt;
+	const allowed = args.allowedToolNames ? new Set(args.allowedToolNames) : null;
+	const tools = allowed
+		? gatedTools.filter((t) => allowed.has(t.name))
+		: [...gatedTools, buildPlanTool(sink)];
 	toolsExposedCount = tools.length;
 	exposedToolNames = tools.map((t) => t.name);
 	toolGateNotes = gate?.notes ?? null;
