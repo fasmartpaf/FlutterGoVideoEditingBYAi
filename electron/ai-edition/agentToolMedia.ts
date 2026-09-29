@@ -40,7 +40,7 @@ import {
 	TEMPLATE_DEFAULT_SEC,
 } from "./motionStudio/templates";
 import { type MotionClipCheck, verifyMotionClip } from "./motionStudio/verify";
-import { showcaseArgsSchema } from "./showcase/plan";
+import { type RecordingSignals, showcaseArgsSchema } from "./showcase/plan";
 import { renderProgress, renderShowcase, type ShowcaseClip } from "./showcase/render";
 import {
 	bakeStillToMp4,
@@ -216,6 +216,8 @@ export async function prepareAgentToolMedia(
 		createCompositorSampler?: () => Promise<CompositedFrameSampler | null>;
 		/** Live progress for long renders ("Rendering 420 / 930 frames · ~40s left"). */
 		onProgress?: (detail: string) => void;
+		/** The recording's pointer samples (clicks), when the tool reads the cursor. */
+		cursorSamples?: RecordingSignals["cursor"];
 	},
 ): Promise<PreparedToolCall> {
 	const { ffmpegPath, signal } = options;
@@ -375,7 +377,19 @@ export async function prepareAgentToolMedia(
 		try {
 			const parsed = showcaseArgsSchema.safeParse(a);
 			if (parsed.success) {
+				const { ensureVideoSummary } = await import("./videoSummary");
+				const summary = parsed.data.auto
+					? await ensureVideoSummary(document, { ffmpegPath, signal }).catch((err) => {
+							if (err instanceof Error && err.name === "AbortError") throw err;
+							return null;
+						})
+					: null;
 				const clip = await renderShowcase(document, parsed.data, kit, {
+					signals: {
+						cursor: options.cursorSamples,
+						stillStretches: summary?.stillStretches,
+						silences: summary?.hasAudio ? summary.silences : undefined,
+					},
 					ffmpegPath,
 					generatedDir: resolveGeneratedGraphicsDir(document),
 					signal,

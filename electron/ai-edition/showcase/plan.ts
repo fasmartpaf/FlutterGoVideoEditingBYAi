@@ -78,6 +78,12 @@ export const showcaseArgsSchema = z.object({
 	keepAudio: z.boolean().default(true),
 	fps: z.union([z.literal(30), z.literal(60)]).default(60),
 	/**
+	 * Fill what the plan leaves out from what the recording already knows:
+	 * click ripples and push-ins from the recorded clicks, speed-ups over still
+	 * stretches (waiting, loading). Default true; anything the plan sets wins.
+	 */
+	auto: z.boolean().default(true),
+	/**
 	 * replace = the showcase becomes the whole timeline (default);
 	 * none = render only, to preview; start / end = add it next to what is there.
 	 */
@@ -299,3 +305,110 @@ export function buildFootageFilter(input: {
 	parts.push(`[vc]fps=${fps},format=yuvj444p[v]`);
 	return parts.join(";");
 }
+
+/** What the recording already knows, for filling a plan's gaps. */
+export interface RecordingSignals {
+	/** Recorded pointer samples (cx/cy 0–1 of the recording; interactionType "click" for clicks). */
+	cursor?: Array<{ timeMs: number; cx: number; cy: number; interactionType?: string | null }>;
+	/** Stretches where nothing on screen moves (source seconds). */
+	stillStretches?: Array<[number, number]>;
+	/** Quiet stretches, when the recording has sound: speed-ups stay inside them so speech is never sped up. */
+	silences?: Array<[number, number]>;
+}
+
+/** The parts of `a` that are also inside one of `b`. */
+function intersectRanges(a: Array<[number, number]>, b: Array<[number, number]>): Array<[number, number]> {
+	const out: Array<[number, number]> = [];
+	for (const [a0, a1] of a) for (const [b0, b1] of b) {
+		const s = Math.max(a0, b0);
+		const e = Math.min(a1, b1);
+		if (e > s) out.push([s, e]);
+	}
+	return out.sort((p, q) => p[0] - q[0]);
+}
+
+export interface AutoPlanResult {
+	args: ShowcaseArgs;
+	/** What was filled in automatically, in plain words (for the agent / receipt). */
+	filled: string[];
+}
+
+const AUTO = {
+	clickGapSec: 0.25,
+	maxClicks: 20,
+	minStillSec: 2.5,
+	stillMarginSec: 0.3,
+	clusterGapSec: 2.5,
+	focusLeadSec: 0.9,
+	focusTailSec: 1.4,
+	focusZoom: 1.3,
+	maxFocus: 4,
+} as const;
+
+/**
+ * Fill the gaps in a plan from the recording: only the parts the plan left
+ * empty (clicks, speed, focus) are filled, so an agent that planned them
+ * keeps its own. Times stay in the recording's seconds.
+ */
+export function autoPlan(args: ShowcaseArgs, signals: RecordingSignals, trim: { startSec: number; endSec: number }): AutoPlanResult {
+	if (!args.auto) return { args, filled: [] };
+	const next: ShowcaseArgs = { ...args };
+	const filled: string[] = [];
+	const inTrim = (t: number) => t >= trim.startSec && t <= trim.endSec;
+
+	const clicks: Array<{ atSec: number; x: number; y: number }> = [];
+	for (const s of [...(signals.cursor ?? [])].sort((a, b) => a.timeMs - b.timeMs)) {
+		if (s.interactionType !== "click") continue;
+		const at = s.timeMs / 1000;
+		if (!inTrim(at) || !(s.cx >= 0 && s.cx <= 1 && s.cy >= 0 && s.cy <= 1)) continue;
+		const last = clicks[clicks.length - 1];
+		if (last && at - last.atSec < AUTO.clickGapSec) continue;
+		clicks.push({ atSec: Math.round(at * 100) / 100, x: s.cx, y: s.cy });
+		if (clicks.length >= AUTO.maxClicks) break;
+	}
+
+	if (!args.clicks?.length && clicks.length) {
+		next.clicks = clicks;
+		filled.push(`${clicks.length} click ripple${clicks.length === 1 ? "" : "s"} from the recorded clicks`);
+	}
+
+	if (!args.speed?.length) {
+		const stills = signals.silences ? intersectRanges(signals.stillStretches ?? [], signals.silences) : (signals.stillStretches ?? []);
+		const speed = stills
+			.map(([a, b]) => ({ a: Math.max(a, trim.startSec) + AUTO.stillMarginSec, b: Math.min(b, trim.endSec) - AUTO.stillMarginSec }))
+			.filter((r) => r.b - r.a >= AUTO.minStillSec - 2 * AUTO.stillMarginSec)
+			.slice(0, 12)
+			.map((r) => ({ startSec: r.a, endSec: r.b, rate: Math.min(4, Math.max(2, Math.round(((r.b - r.a) / 1.2) * 2) / 2)) }));
+		if (speed.length) {
+			next.speed = speed;
+			filled.push(`${speed.length} still stretch${speed.length === 1 ? "" : "es"} sped up`);
+		}
+	}
+
+	if (!args.focus?.length && clicks.length) {
+		const clusters: Array<typeof clicks> = [];
+		for (const c of clicks) {
+			const cur = clusters[clusters.length - 1];
+			if (cur && c.atSec - cur[cur.length - 1]!.atSec <= AUTO.clusterGapSec) cur.push(c);
+			else clusters.push([c]);
+		}
+		const focus: NonNullable<ShowcaseArgs["focus"]> = [];
+		for (const cl of clusters) {
+			const startSec = Math.max(trim.startSec, cl[0]!.atSec - AUTO.focusLeadSec);
+			const endSec = Math.min(trim.endSec, cl[cl.length - 1]!.atSec + AUTO.focusTailSec);
+			const prev = focus[focus.length - 1];
+			if (prev && startSec < prev.endSec + 0.8) continue;
+			if (endSec - startSec < 1) continue;
+			const x = cl.reduce((acc, c) => acc + c.x, 0) / cl.length;
+			const y = cl.reduce((acc, c) => acc + c.y, 0) / cl.length;
+			focus.push({ startSec, endSec, x, y, zoom: AUTO.focusZoom });
+			if (focus.length >= AUTO.maxFocus) break;
+		}
+		if (focus.length) {
+			next.focus = focus;
+			filled.push(`${focus.length} push-in${focus.length === 1 ? "" : "s"} on where you clicked`);
+		}
+	}
+	return { args: next, filled };
+}
+

@@ -22,11 +22,13 @@ import { type FrameSource, renderComposition } from "../motionStudio/render";
 import { paletteSourceVideo } from "../motionStudio/videoPalette";
 import { type MotionClipCheck, verifyMotionClip } from "../motionStudio/verify";
 import {
+	autoPlan,
 	buildFootageFilter,
 	buildSegments,
 	footageDuration,
 	resolveCrop,
 	resolveTimeline,
+	type RecordingSignals,
 	type ShowcaseArgs,
 	type ShowcaseTimeline,
 } from "./plan";
@@ -50,6 +52,8 @@ export interface ShowcaseClip {
 	/** Parts of the plan that were outside the trim / crop and were left out. */
 	dropped: string[];
 	hasAudio: boolean;
+	/** What was filled in from the recording's clicks and still stretches. */
+	autoFilled: string[];
 	cached?: boolean;
 }
 
@@ -150,6 +154,8 @@ export async function renderShowcase(
 		stem?: string;
 		/** Live progress for the chat. */
 		onProgress?: (detail: string) => void;
+		/** Recorded clicks and still stretches, for filling the plan's gaps. */
+		signals?: RecordingSignals;
 	},
 ): Promise<ShowcaseClip> {
 	const { ffmpegPath, signal } = options;
@@ -165,6 +171,8 @@ export async function renderShowcase(
 
 	const trimStart = Math.min(srcDuration - 0.5, Math.max(0, args.trim?.startSec ?? 0));
 	const trimEnd = Math.max(trimStart + 0.5, Math.min(srcDuration, args.trim?.endSec ?? srcDuration));
+	const auto = autoPlan(args, options.signals ?? {}, { startSec: trimStart, endSec: trimEnd });
+	args = auto.args;
 	const segments = buildSegments(trimStart, trimEnd, args.speed);
 	const footageSec = footageDuration(segments);
 	if (footageSec > 180) {
@@ -372,6 +380,7 @@ export async function renderShowcase(
 			footageStartSec: timing.footageStart,
 			dropped,
 			hasAudio: withAudio,
+			autoFilled: auto.filled,
 		};
 		if (check.ok) writeCache(outDir, cacheKey, result);
 		return result;

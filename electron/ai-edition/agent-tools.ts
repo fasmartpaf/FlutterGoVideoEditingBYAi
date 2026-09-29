@@ -3949,6 +3949,7 @@ export function executeAgentTool(
 					checks: { ok: clip.check.ok, problems: clip.check.problems },
 					previewFrames: [...clip.check.framePaths, ...clip.stepFrames],
 					dropped: clip.dropped,
+					autoFilled: clip.autoFilled,
 					pageErrors: clip.pageErrors,
 					note: clip.check.ok
 						? "Rendered and checked. Read previewFrames (the step frames show each card) and fix anything cut off, covering the UI or mistimed by calling again with a corrected plan — an unchanged plan is reused, not re-rendered."

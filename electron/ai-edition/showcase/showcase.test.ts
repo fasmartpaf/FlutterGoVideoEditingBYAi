@@ -263,3 +263,37 @@ describe("render progress", () => {
 		expect(renderProgress(undefined)).toBeUndefined();
 	});
 });
+
+describe("auto plan from the recording", () => {
+	it("fills clicks, speed-ups and push-ins the plan left out", async () => {
+		const { autoPlan } = await import("./plan");
+		const args = showcaseArgsSchema.parse({});
+		const cursor = [
+			{ timeMs: 1000, cx: 0.2, cy: 0.3, interactionType: "move" },
+			{ timeMs: 2000, cx: 0.4, cy: 0.5, interactionType: "click" },
+			{ timeMs: 2100, cx: 0.4, cy: 0.5, interactionType: "click" }, // double-click: one ripple
+			{ timeMs: 3500, cx: 0.6, cy: 0.5, interactionType: "click" }, // same cluster
+			{ timeMs: 12000, cx: 0.8, cy: 0.2, interactionType: "click" },
+			{ timeMs: 40000, cx: 0.5, cy: 0.5, interactionType: "click" }, // outside the trim
+		];
+		const r = autoPlan(args, { cursor, stillStretches: [[5, 9], [10, 11]] }, { startSec: 0, endSec: 20 });
+		expect(r.args.clicks?.map((c) => c.atSec)).toEqual([2, 3.5, 12]);
+		expect(r.args.speed).toEqual([{ startSec: 5.3, endSec: 8.7, rate: 3 }]);
+		expect(r.args.focus).toHaveLength(2);
+		expect(r.args.focus![0]).toMatchObject({ startSec: 1.1, endSec: 4.9, zoom: 1.3 });
+		expect(r.args.focus![0]!.x).toBeCloseTo(0.5);
+		expect(r.filled).toHaveLength(3);
+	});
+
+	it("keeps what the plan set, never speeds up speech, and can be turned off", async () => {
+		const { autoPlan } = await import("./plan");
+		const planned = showcaseArgsSchema.parse({ clicks: [{ atSec: 1, x: 0.1, y: 0.1 }] });
+		const cursor = [{ timeMs: 5000, cx: 0.5, cy: 0.5, interactionType: "click" }];
+		const r = autoPlan(planned, { cursor, stillStretches: [[2, 8]], silences: [[2, 6]] }, { startSec: 0, endSec: 10 });
+		expect(r.args.clicks).toEqual([{ atSec: 1, x: 0.1, y: 0.1 }]);
+		// Only the quiet part of the still stretch (2–6 s) is sped up.
+		expect(r.args.speed).toEqual([{ startSec: 2.3, endSec: 5.7, rate: 3 }]);
+		const off = autoPlan({ ...planned, auto: false }, { cursor, stillStretches: [[2, 8]] }, { startSec: 0, endSec: 10 });
+		expect(off.filled).toEqual([]);
+	});
+});
