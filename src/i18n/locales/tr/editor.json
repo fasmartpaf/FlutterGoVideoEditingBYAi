@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "Videoya ekle",
 		"activityDetails": "Etkinlik",
 		"mediaOpen": "Aç",
-		"mediaReveal": "Göster"
+		"mediaReveal": "Göster",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "Yeni proje",

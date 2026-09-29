@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Copy, Square, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Paperclip, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -37,6 +37,12 @@ import { turnReceiptItems } from "../../../electron/ai-edition/editReceipt";
 import { toolActivityStatus } from "../../../electron/ai-edition/toolActivityLabels";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
+import {
+	type ChatAttachment,
+	composeMessageWithAttachments,
+	parseMessageAttachments,
+	resolveAttachment,
+} from "./chatAttachments";
 import { EditReviewCardView } from "./EditReviewCard";
 import { LocalCliPopover } from "./LocalCliPopover";
 import { type LiveToolCall, LiveTurnCard, type LiveTurnLabels } from "./LiveTurn";
@@ -562,6 +568,26 @@ export function ChatStripPanel() {
 	const openMedia = openTimelineMedia(document);
 	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
 	const [input, setInput] = useState("");
+	// Files for the next message: picked with the paperclip, pasted, or dropped.
+	const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+	const [attachDragOver, setAttachDragOver] = useState(false);
+	const attachInputRef = useRef<HTMLInputElement | null>(null);
+	const addAttachmentFiles = useCallback(
+		async (files: FileList | File[] | null | undefined) => {
+			const list = Array.from(files ?? []);
+			for (const file of list) {
+				try {
+					const att = await resolveAttachment(file);
+					setAttachments((prev) => (prev.some((p) => p.path === att.path) ? prev : [...prev, att]));
+				} catch (err) {
+					toast.error(
+						`${t("chat.attachFailed", { name: file.name || "file" })}${err instanceof Error ? ` — ${err.message}` : ""}`,
+					);
+				}
+			}
+		},
+		[t],
+	);
 	const [busy, setBusy] = useState(false);
 	const [llmConfig, setLlmConfig] = useState<AiEditionLlmConfig | null>(null);
 	// The dialog itself is mounted in App.tsx so the app menu can reach it from every mode
@@ -848,7 +874,8 @@ export function ChatStripPanel() {
 	});
 
 	const send = async (overrideText?: string) => {
-		const text = (overrideText ?? input).trim();
+		// Attachments ride at the end of the message as absolute paths the agent's tools can use.
+		const text = (overrideText ?? composeMessageWithAttachments(input, attachments)).trim();
 		if (!projectId || !text || busy) return;
 		// ponytail: nothing to talk to. Bounce to the settings modal instead of
 		// firing a doomed request. The composer is disabled in this state too,
@@ -870,6 +897,7 @@ export function ChatStripPanel() {
 		}
 		skipWatchPromptRef.current = false;
 		setInput("");
+		setAttachments([]);
 		setBusy(true);
 		setTurnStartedAt(Date.now());
 		livePlanRef.current = [];
@@ -1676,7 +1704,11 @@ export function ChatStripPanel() {
 									/>
 								) : null}
 								{m.content.trim() ? (
-									<div className={styles.msgBubble}>{m.content}</div>
+									m.role === "user" ? (
+										<UserMessageBody content={m.content} label={t("chat.attachedFiles")} />
+									) : (
+										<div className={styles.msgBubble}>{m.content}</div>
+									)
 								) : m.toolCalls?.length ? (
 									<div className={styles.msgBubble}>
 										Done — finished {m.toolCalls.length} timeline action
@@ -1879,7 +1911,44 @@ export function ChatStripPanel() {
 				)}
 			</div>
 
-			<div className={styles.chatInput}>
+			<div
+				className={styles.chatInput}
+				data-drag-over={attachDragOver ? "true" : undefined}
+				onDragOver={(e) => {
+					if (!canChat || !Array.from(e.dataTransfer.types).includes("Files")) return;
+					e.preventDefault();
+					setAttachDragOver(true);
+				}}
+				onDragLeave={() => setAttachDragOver(false)}
+				onDrop={(e) => {
+					if (!e.dataTransfer.files.length) return;
+					e.preventDefault();
+					setAttachDragOver(false);
+					if (canChat) void addAttachmentFiles(e.dataTransfer.files);
+				}}
+			>
+				{attachments.length ? (
+					<div className={styles.attachRow}>
+						{attachments.map((a) => (
+							<span key={a.id} className={styles.attachChip} title={a.path}>
+								{a.kind === "image" ? (
+									<img src={toFileUrl(a.path)} alt="" className={styles.attachThumb} />
+								) : (
+									<span className={styles.attachKind}>{a.kind}</span>
+								)}
+								<span className={styles.attachName}>{a.name}</span>
+								<button
+									type="button"
+									className={styles.attachRemove}
+									aria-label={t("chat.attachRemove")}
+									onClick={() => setAttachments((prev) => prev.filter((p) => p.id !== a.id))}
+								>
+									<X size={11} />
+								</button>
+							</span>
+						))}
+					</div>
+				) : null}
 				{openMedia ? (
 					<div
 						title={openMedia.label}
@@ -1902,6 +1971,13 @@ export function ChatStripPanel() {
 					value={input}
 					disabled={!canChat}
 					onChange={(e) => setInput(e.target.value)}
+					onPaste={(e) => {
+						// Pasted screenshots / copied files become attachments; plain text pastes as usual.
+						const files = e.clipboardData?.files;
+						if (!files || files.length === 0) return;
+						e.preventDefault();
+						void addAttachmentFiles(files);
+					}}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" && !e.shiftKey) {
 							e.preventDefault();
@@ -1910,6 +1986,26 @@ export function ChatStripPanel() {
 					}}
 				/>
 				<div className={styles.actions}>
+					<input
+						ref={attachInputRef}
+						type="file"
+						multiple
+						hidden
+						onChange={(e) => {
+							void addAttachmentFiles(e.target.files);
+							e.target.value = "";
+						}}
+					/>
+					<button
+						type="button"
+						className={styles.attachBtn}
+						title={t("chat.attachTitle")}
+						aria-label={t("chat.attach")}
+						disabled={!canChat}
+						onClick={() => attachInputRef.current?.click()}
+					>
+						<Paperclip size={14} />
+					</button>
 					<button
 						ref={modelButtonRef}
 						type="button"
@@ -2028,7 +2124,7 @@ export function ChatStripPanel() {
 							title={canChat ? t("chat.sendTitle") : t("chat.localCli.composerDisabled")}
 							aria-label={t("chat.send")}
 							onClick={() => void send()}
-							disabled={!input.trim() || !canChat}
+							disabled={(!input.trim() && attachments.length === 0) || !canChat}
 						>
 							<svg
 								width={14}
@@ -2208,5 +2304,29 @@ export function ChatStripPanel() {
 					)
 				: null}
 		</aside>
+	);
+}
+
+/** A user message: the words, then any attached files as small chips (images as thumbnails). */
+function UserMessageBody({ content, label }: { content: string; label: string }) {
+	const { text, attachments } = parseMessageAttachments(content);
+	return (
+		<>
+			{text.trim() ? <div className={styles.msgBubble}>{text}</div> : null}
+			{attachments.length ? (
+				<div className={styles.attachRow} aria-label={label}>
+					{attachments.map((a) => (
+						<span key={a.id} className={styles.attachChip} title={a.path}>
+							{a.kind === "image" ? (
+								<img src={toFileUrl(a.path)} alt="" className={styles.attachThumb} />
+							) : (
+								<span className={styles.attachKind}>{a.kind}</span>
+							)}
+							<span className={styles.attachName}>{a.name}</span>
+						</span>
+					))}
+				</div>
+			) : null}
+		</>
 	);
 }

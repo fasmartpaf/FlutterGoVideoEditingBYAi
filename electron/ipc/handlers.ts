@@ -117,6 +117,8 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 	".ts",
 ]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
+/** Largest pasted file the chat saves to disk (images, short clips). */
+const MAX_CHAT_ATTACHMENT_BYTES = 200 * 1024 * 1024;
 // See the save-recorded-voiceover handler: an upper bound on renderer-supplied
 // bytes written to disk, well past any plausible take.
 const MAX_RECORDED_VOICEOVER_BYTES = 512 * 1024 * 1024;
@@ -3814,6 +3816,34 @@ export function registerIpcHandlers(
 				message: "Failed to save recorded voiceover",
 				error: String(error),
 			};
+		}
+	});
+
+	// Chat attachments that have no file on disk (a pasted screenshot, an image
+	// copied from a browser): the renderer hands over the bytes and gets back a
+	// path the agent's tools can read. Files picked or dropped from disk keep
+	// their own path and never come through here.
+	ipcMain.handle("save-chat-attachment", async (_event, data: ArrayBuffer, fileName: string) => {
+		try {
+			if (!(data instanceof ArrayBuffer) || data.byteLength === 0) {
+				return { success: false, message: "Empty file" };
+			}
+			if (data.byteLength > MAX_CHAT_ATTACHMENT_BYTES) {
+				return { success: false, message: "File too large (max 200 MB)" };
+			}
+			const safe =
+				String(fileName || "attachment")
+					.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_")
+					.replace(/^\.+/, "")
+					.slice(-80) || "attachment";
+			const dir = path.join(path.dirname(RECORDINGS_DIR), "chat-attachments");
+			await fs.mkdir(dir, { recursive: true });
+			const target = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${safe}`);
+			await fs.writeFile(target, Buffer.from(data));
+			return { success: true, path: target };
+		} catch (error) {
+			console.error("Failed to save chat attachment:", error);
+			return { success: false, message: "Failed to save the attachment", error: String(error) };
 		}
 	});
 

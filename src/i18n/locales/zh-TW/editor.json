@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "用於影片",
 		"activityDetails": "活動",
 		"mediaOpen": "開啟",
-		"mediaReveal": "顯示"
+		"mediaReveal": "顯示",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "新增專案",

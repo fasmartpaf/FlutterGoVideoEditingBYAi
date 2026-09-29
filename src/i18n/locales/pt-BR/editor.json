@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "Usar no vídeo",
 		"activityDetails": "Atividade",
 		"mediaOpen": "Abrir",
-		"mediaReveal": "Revelar"
+		"mediaReveal": "Revelar",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "Novo projeto",

@@ -302,6 +302,13 @@ interface Window {
 		}>;
 		// Persist an in-editor voiceover take (raw MediaRecorder bytes) under the
 		// recordings dir, so it outlives the session like every other asset.
+		// A chat attachment with no file on disk (pasted image): saved, path returned.
+		saveChatAttachment: (data: ArrayBuffer, fileName: string) => Promise<{
+			success: boolean;
+			path?: string;
+			message?: string;
+			error?: string;
+		}>;
 		saveRecordedVoiceover: (data: ArrayBuffer) => Promise<{
 			success: boolean;
 			path?: string;

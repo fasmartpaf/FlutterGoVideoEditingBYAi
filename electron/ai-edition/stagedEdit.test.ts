@@ -38,12 +38,11 @@ describe("stage definitions", () => {
 		}
 	});
 
-	it("keep writes out of the understand stage, and export only in review", () => {
+	it("keep writes out of the understand stage, and never export (the user presses Export)", () => {
 		const understand = stageToolNames(EDIT_STAGES[0]!);
 		expect(understand).not.toContain("addTrims");
-		expect(understand).not.toContain("exportProject");
-		for (const stage of EDIT_STAGES.slice(0, -1)) expect(stageToolNames(stage)).not.toContain("exportProject");
-		expect(stageToolNames(EDIT_STAGES.at(-1)!)).toContain("exportProject");
+		for (const stage of EDIT_STAGES) expect(stageToolNames(stage)).not.toContain("exportProject");
+		expect(requestToolScope("export the video as mp4") ?? []).not.toContain("exportProject");
 	});
 });
 

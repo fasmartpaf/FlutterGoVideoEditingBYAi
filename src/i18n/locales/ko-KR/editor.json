@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "영상에 사용",
 		"activityDetails": "활동",
 		"mediaOpen": "열기",
-		"mediaReveal": "표시"
+		"mediaReveal": "표시",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "새 프로젝트",

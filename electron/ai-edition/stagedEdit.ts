@@ -153,8 +153,8 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		id: "review",
 		title: "Review & export",
 		instruction:
-			"Check the finished edit: sampleFrames from:'timeline' (count 5) and Read the frames. Fix real problems (cut off, unreadable, covering the UI, blank, off-brand) in ONE batch. Export only if the user asked for an export or a file (exportProject), then check the export once with sampleFrames from:'export'. Your final message is for the user: 2–3 sentences on what the finished video now does, plus one suggested next step.",
-		tools: [...PACING_TOOLS, ...CAMERA_TOOLS, ...CAPTION_TOOLS, ...GRAPHICS_TOOLS, "exportProject"],
+			"Check the finished edit: sampleFrames from:'timeline' (count 5) and Read the frames. Fix real problems (cut off, unreadable, covering the UI, blank, off-brand) in ONE batch. Do not export — the user presses Export when they are happy. Your final message is for the user: 2–3 sentences on what the finished video now does, plus one suggested next step.",
+		tools: [...PACING_TOOLS, ...CAMERA_TOOLS, ...CAPTION_TOOLS, ...GRAPHICS_TOOLS],
 		budget: budget(3, 5, 6, 3, 5),
 		preview: false,
 		mechanical: false,
@@ -299,7 +299,6 @@ const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
 	},
 	{ match: /\b(music|audio|sound|volume|voice)\b/i, tools: ["addAudio", "setAudio", "importMedia", "removeModifier"] },
 	{ match: /\b(blur|hide|privacy|redact|email|password)\b/i, tools: ["addPrivacyCover", "addAnnotation", "setAnnotation", "removeModifier"] },
-	{ match: /\b(export\w*|render\s+the\s+video|mp4|gif|download)\b/i, tools: ["exportProject"] },
 ];
 
 /**

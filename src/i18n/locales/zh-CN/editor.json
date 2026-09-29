@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "用于视频",
 		"activityDetails": "活动",
 		"mediaOpen": "打开",
-		"mediaReveal": "显示"
+		"mediaReveal": "显示",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "新建项目",

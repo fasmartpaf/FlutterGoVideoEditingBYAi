@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "動画に使う",
 		"activityDetails": "アクティビティ",
 		"mediaOpen": "開く",
-		"mediaReveal": "表示"
+		"mediaReveal": "表示",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "新規プロジェクト",

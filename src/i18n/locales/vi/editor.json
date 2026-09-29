@@ -332,7 +332,12 @@
 		"mediaUseOnVideo": "Dùng trên video",
 		"activityDetails": "Hoạt động",
 		"mediaOpen": "Mở",
-		"mediaReveal": "Hiện"
+		"mediaReveal": "Hiện",
+		"attach": "Attach files",
+		"attachTitle": "Attach a logo, image, video or audio file — or paste / drop it here",
+		"attachRemove": "Remove attachment",
+		"attachFailed": "Couldn't attach {{name}}",
+		"attachedFiles": "Attached files"
 	},
 	"newProjectDialog": {
 		"title": "Dự án mới",

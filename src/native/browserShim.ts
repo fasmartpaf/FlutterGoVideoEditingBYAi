@@ -124,6 +124,7 @@ function createShimElectronAPI() {
 		onRequestSaveBeforeClose: () => () => undefined,
 		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
 		getPathForFile: () => "",
+		saveChatAttachment: () => Promise.resolve({ success: false, message: "Attachments need the desktop app" }),
 		// Browser mode has no main process to ask, and no installer that could update it. A
 		// version still has to come back or the HUD's About block never renders at all.
 		getAppInfo: () => Promise.resolve({ version: "0.0.0-browser", canCheckForUpdates: false }),

@@ -955,6 +955,10 @@ export const setBrandKitArgs = brandKitPatchSchema.extend({
  */
 export const createShowcaseVideoArgs = showcaseArgsSchema;
 
+/** What the agent hears when it tries to export: the user exports with the Export button. */
+export const EXPORT_IS_USERS_CALL =
+	"I don't export on my own — the video is exported when you press the Export button. Your edit is ready whenever you want to export it.";
+
 export const listMotionTemplatesArgs = z.object({});
 
 export const listCursorThemesArgs = z.object({});
@@ -5054,10 +5058,13 @@ export function executeAgentTool(
 			};
 		}
 
+		case "exportProject":
+			// Exporting is the user's call: it happens when they press Export, never on the agent's own.
+			return failure(EXPORT_IS_USERS_CALL);
+
 		case "listSources":
 		case "recordScreen":
 		case "generateCaptions":
-		case "exportProject":
 			return failure(
 				"CLI engine is not available in this runtime. These tools run only inside the OpenScreen app agent.",
 			);
