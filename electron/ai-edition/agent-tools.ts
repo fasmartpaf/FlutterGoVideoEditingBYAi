@@ -946,6 +946,20 @@ export const setBrandKitArgs = brandKitPatchSchema.extend({
 export const listMotionTemplatesArgs = z.object({});
 
 /**
+ * Stills the agent looks at to check its work: the EDITED timeline (what the
+ * viewer will see), a finished export, or the raw recording.
+ */
+export const sampleFramesArgs = z.object({
+	from: z.enum(["timeline", "export", "recording"]).default("timeline"),
+	/** Seconds: programme time for timeline/export, source time for recording. Max 8. */
+	times: z.array(z.number().nonnegative()).min(1).max(8).optional(),
+	/** Evenly spaced frames when no times are given (default 4). */
+	count: z.number().int().min(1).max(8).optional(),
+	/** For from:"export" — the outputPath exportProject returned. */
+	exportPath: z.string().min(1).optional(),
+});
+
+/**
  * An animated graphic drawn ON TOP of the recording (lower third, callout,
  * badge, keyword pop, or agent HTML with a transparent background). Rendered
  * to a transparent PNG sequence sized to the box, then stored as an image
@@ -1180,6 +1194,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"getTranscriptWords",
 	"getCursorTrack",
 	"listCharacters",
+	"sampleFrames",
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
@@ -3847,6 +3862,33 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "sampleFrames": {
+			const parsed = sampleFramesArgs.safeParse(args ?? {});
+			if (!parsed.success) return failure(parsed.error.message);
+			const sampled = options?.prepared?.sampledFrames;
+			if (!sampled) {
+				if (options?.prepared?.renderError) return failure(`Could not sample frames: ${options.prepared.renderError}`);
+				return failure(
+					resolveFfmpeg()?.trim()
+						? "sampleFrames extracts video frames, so it must be called directly as an agent tool (not inside a batch)."
+						: "sampleFrames needs ffmpeg (bundled OpenScreen ffmpeg missing).",
+				);
+			}
+			const blank = sampled.frames.filter((f) => f.blank).map((f) => f.timeSec);
+			return {
+				ok: true,
+				resultJson: JSON.stringify({
+					from: parsed.data.from,
+					durationSec: Math.round(sampled.durationSec * 100) / 100,
+					frames: sampled.frames,
+					...(blank.length ? { warning: `Blank (single-colour) frames at ${blank.join(", ")} s — something is covering the picture or nothing is drawn.` } : {}),
+					notes: sampled.notes,
+					howToUse:
+						"Read each frame path to look at it. Check: the subject is visible and not cut off, text is readable and not covering the key UI, graphics match the video's colours, nothing is blank or frozen. Fix what's wrong, then sample again.",
+				}),
 			};
 		}
 

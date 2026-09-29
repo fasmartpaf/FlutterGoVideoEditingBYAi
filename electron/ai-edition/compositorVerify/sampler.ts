@@ -3,13 +3,13 @@
  * Uses CompositorViewService (same addon as preview/export). No second renderer.
  */
 
-import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSceneDescription } from "../../../src/native/sceneDescription";
 import { resolveFfmpeg } from "../../media/audioPeaks";
+import { runProcess } from "../mediaStudio";
 import { CompositorViewService } from "../../native-bridge/services/compositorViewService";
 import { analyzeRgba8, makeGradientRgba, makeSolidRgba } from "./pixels";
 import { clipInputsForProgrammeWindow, locateProgrammeInstant } from "./programmeMap";
@@ -385,7 +385,7 @@ export class NativeCompositorFrameSampler implements CompositedFrameSampler {
 			Math.max(0, input.programmeTimeSec - windowStart),
 			Math.max(0, windowEnd - windowStart - 0.05),
 		);
-		const decoded = decodeExportFrameRgba(outMp4, rel, w, h);
+		const decoded = await decodeExportFrameRgba(outMp4, rel, w, h);
 		latency.decodeMs = decoded.decodeMs;
 
 		if (!this.retain) {
@@ -457,12 +457,13 @@ export class NativeCompositorFrameSampler implements CompositedFrameSampler {
 	}
 }
 
-function decodeExportFrameRgba(
+/** Async (never blocks the main process — this runs inside the app during chat turns). */
+async function decodeExportFrameRgba(
 	mp4Path: string,
 	timeSec: number,
 	width: number,
 	height: number,
-): { rgba: Uint8Array | null; width: number; height: number; decodeMs: number; error?: string } {
+): Promise<{ rgba: Uint8Array | null; width: number; height: number; decodeMs: number; error?: string }> {
 	const t0 = Date.now();
 	let ffmpeg: string | null = null;
 	try {
@@ -474,7 +475,7 @@ function decodeExportFrameRgba(
 		return { rgba: null, width, height, decodeMs: Date.now() - t0, error: "ffmpeg_missing" };
 	}
 	const rawPath = `${mp4Path}.${Math.round(timeSec * 1000)}.rgba`;
-	const result = spawnSync(
+	const result = await runProcess(
 		ffmpeg,
 		[
 			"-hide_banner",
@@ -495,9 +496,9 @@ function decodeExportFrameRgba(
 			"-y",
 			rawPath,
 		],
-		{ encoding: "utf8" },
-	);
-	if (result.status !== 0 || !existsSync(rawPath)) {
+		{ timeoutMs: 60_000 },
+	).catch((err: unknown) => ({ code: -1, stdout: "", stderr: err instanceof Error ? err.message : String(err) }));
+	if (result.code !== 0 || !existsSync(rawPath)) {
 		return {
 			rgba: null,
 			width,

@@ -24,6 +24,8 @@ import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
 import { type BrandKit, DEFAULT_BRAND_KIT, storedBrandKit } from "./motionStudio/brandKit";
 import { deriveBrandKitFromVideo } from "./motionStudio/videoPalette";
+import type { CompositedFrameSampler } from "./compositorVerify/types";
+import { type SampleFramesResult, sampleFramesForAgent } from "./frameCheck";
 import { writeComposition } from "./motionStudio/composition";
 import { type FrameSource, renderComposition, renderSequence } from "./motionStudio/render";
 import {
@@ -61,6 +63,8 @@ export interface PreparedToolMedia {
 	renderError?: string;
 	/** Brand colours read from the recording (used when the project has no brand kit yet). */
 	videoBrandKit?: BrandKit;
+	/** sampleFrames: stills of the edited timeline / an export / the recording. */
+	sampledFrames?: SampleFramesResult;
 	/** addMotionOverlay: the rendered transparent PNG sequence. */
 	motionOverlay?: {
 		dir: string;
@@ -197,6 +201,8 @@ export async function prepareAgentToolMedia(
 		mayMutate: boolean;
 		/** Opens a page renderer for HTML motion graphics (Electron off-screen in the app). */
 		createFrameSource?: () => Promise<FrameSource | null>;
+		/** Offscreen compositor for edited-timeline frames (the app's native addon). */
+		createCompositorSampler?: () => Promise<CompositedFrameSampler | null>;
 	},
 ): Promise<PreparedToolCall> {
 	const { ffmpegPath, signal } = options;
@@ -314,6 +320,27 @@ export async function prepareAgentToolMedia(
 				prepared.motionOverlay = overlay;
 				discardOnFailure.push(overlay.dir);
 			}
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			prepared.renderError = err instanceof Error ? err.message : String(err);
+		}
+	}
+
+	if (name === "sampleFrames" && ffmpegPath) {
+		try {
+			const from = a.from === "export" || a.from === "recording" ? a.from : "timeline";
+			const times = Array.isArray(a.times) ? a.times.filter((t): t is number => typeof t === "number" && t >= 0) : undefined;
+			prepared.sampledFrames = await sampleFramesForAgent(
+				document,
+				{ from, times, count: num(a.count), exportPath: str(a.exportPath) },
+				{
+					ffmpegPath,
+					outDir: join(resolveGeneratedGraphicsDir(document), ".checks"),
+					stem: uniqueStem(`check-${from}`),
+					createSampler: options.createCompositorSampler,
+					signal,
+				},
+			);
 		} catch (err) {
 			if (err instanceof Error && err.name === "AbortError") throw err;
 			prepared.renderError = err instanceof Error ? err.message : String(err);

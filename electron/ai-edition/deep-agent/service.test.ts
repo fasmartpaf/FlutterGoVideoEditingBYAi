@@ -63,6 +63,7 @@ const ARGS: Record<string, unknown> = {
 	getTranscriptWords: {},
 	getCursorTrack: {},
 	listCharacters: {},
+	sampleFrames: { count: 2 },
 	createMotionGraphicPreview: { titles: ["Demo"] },
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
@@ -223,7 +224,7 @@ function toolsFor(document: AxcutDocument, runtime?: { cli?: CliEngine }) {
 	const { sink, events } = recordingSink();
 	const holder = { current: document };
 	// No headless renderer in unit tests: a render tool fails the same way on every machine.
-	const tools: BuiltTool[] = buildTools(holder, sink, true, { createFrameSource: async () => null, ...runtime });
+	const tools: BuiltTool[] = buildTools(holder, sink, true, { createFrameSource: async () => null, createCompositorSampler: async () => null, ...runtime });
 	return { tools, events, holder };
 }
 
@@ -331,7 +332,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "addMotionOverlay"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "addMotionOverlay", "sampleFrames"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {
@@ -456,6 +457,7 @@ describe("one description of the tools, not two", () => {
 			"getTranscriptWords",
 			"getCursorTrack",
 			"listCharacters",
+			"sampleFrames",
 			"createMotionGraphicPreview",
 			"listMotionTemplates",
 			"listTransitions",

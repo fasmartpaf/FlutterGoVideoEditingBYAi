@@ -87,12 +87,14 @@ import {
 	createMotionClipArgs,
 	listMotionTemplatesArgs,
 	placeMotionClipArgs,
+	sampleFramesArgs,
 	addMotionOverlayArgs,
 	setBrandKitArgs,
 } from "../agent-tools";
 import { overagentCookbookSection } from "../overagentEditCookbook";
 import { resolveFfmpeg } from "../../media/audioPeaks";
 import type { FrameSource } from "../motionStudio/render";
+import type { CompositedFrameSampler } from "../compositorVerify/types";
 import {
 	discardPreparedFiles,
 	type PreparedToolMedia,
@@ -399,7 +401,7 @@ const BASE_SYSTEM_PROMPT = [
 	"- addAnnotation type 'text' is titles, labels and CTAs (Try Now, Visit …, Subscribe) — visual graphics in the export, not clickable links. type 'image' is a PNG/JPEG overlay (pass image as a data URI, or text to bake a plate). type 'figure' is an arrow callout. type 'blur' hides part of the recording (faces, logos, UI chrome) with a mosaic or blur cover — it does not reconstruct the background. Style with color, backgroundColor, fontSize and textAnimation.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
 	"",
-	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan grounded in THIS recording's evidence; apply the smallest tools only when the user has consented to edits and evidence supports the landing; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → tightenPacing or addTrims when transcript/silence evidence supports ranges. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom only when available evidence identifies a focus target — never invent faces/logos/buttons. Captions → generateCaptions, then setCaptionSettings to enable/style, setWordText for word fixes. Frame look → setEditorSettings (padding/round/shadow or fitClip) and setBackground. Start cover/thumbnail → insertStartThumbnail. Ending CTA / title / lower third ON footage → addGraphic. Mid-cut dissolve/wipe → splitClip then setClipIncomingTransition (listTransitions for ids). Unused take → addClip from projectQueue.unusedAssets. Music → importMedia audio then addAudio; duck with gainDb over speech spans. Do NOT invent 'opening hook zooms', smart-zoom recipes, or generic professional-video tool lists when TRUSTED_EDITORIAL_PLAN is attached or when no grounded Edit Plan strategy prefers that family. Do not invent saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document. True keyframe/Lottie motion engines are not tools; for motion graphics bake a PNG/WebP and place with insertStartThumbnail or addGraphic(imagePath), plus textAnimation for title enters.",
+	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan grounded in THIS recording's evidence; apply the smallest tools only when the user has consented to edits and evidence supports the landing; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → tightenPacing or addTrims when transcript/silence evidence supports ranges. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom only when available evidence identifies a focus target — never invent faces/logos/buttons. Captions → generateCaptions, then setCaptionSettings to enable/style, setWordText for word fixes. Frame look → setEditorSettings (padding/round/shadow or fitClip) and setBackground. Start cover/thumbnail → insertStartThumbnail. Ending CTA / title / lower third ON footage → addGraphic. Mid-cut dissolve/wipe → splitClip then setClipIncomingTransition (listTransitions for ids). Unused take → addClip from projectQueue.unusedAssets. Music → importMedia audio then addAudio; duck with gainDb over speech spans. Do NOT invent 'opening hook zooms', smart-zoom recipes, or generic professional-video tool lists when TRUSTED_EDITORIAL_PLAN is attached or when no grounded Edit Plan strategy prefers that family. Do not invent generated voice, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document. Motion graphics ARE tools: full-frame animated cards (intro, section, stat, outro) → createMotionClip (templates from listMotionTemplates, or your own HTML) then place with {atSec} or start/end; animated lower thirds, callouts, badges and keyword pops ON the footage → addMotionOverlay. They use the brand kit, which starts as the recording's own colours. Static stills can still go through addGraphic / insertStartThumbnail.",
 	"",
 	"Trusted editorial chain (when TRUSTED_EDITORIAL_PLAN appears in the user message): Source Story → Target Story → Edit Gap → Edit Plan are authoritative for concrete edit families (zoom/trim/crop/caption/annotation/speed/graphic). Prefer honest 'no safe recording-specific edit yet' or 'needs more grounded evidence' over inventing zooms/trims. User intent does not override missing evidence.",
 	"Mutation authority: on semantic/editorial turns, write tools refuse before changing the document. Propose via the Edit Review card; never claim an edit was applied unless the user approved Apply Preview.",
@@ -502,6 +504,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
 	importMedia:
 		"Import a video or audio file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk.",
+	sampleFrames:
+		"Look at the result. Returns JPEG stills you can Read: from:'timeline' (default) = the EDITED programme as the viewer will see it (zooms, overlays, captions, background — same renderer as export), 'export' = a finished file (pass exportPath from exportProject), 'recording' = the raw source. times (seconds, max 8) or count (evenly spaced, default 4). Use it after edits and before telling the user you're done; fix what looks wrong and sample again. Frames marked approximate lack effects.",
 	listMotionTemplates:
 		"List built-in motion templates (titleCard, sectionCard, outroCta, kineticText, statHighlight, bulletList, logoReveal) and overlay templates (lowerThird, callout, cornerBadge, keywordPop) with their params, plus the project brand kit. Call before createMotionClip / addMotionOverlay.",
 	createMotionClip:
@@ -626,6 +630,23 @@ interface ToolRuntime {
 	abortSignal?: AbortSignal;
 	/** Page renderer for HTML motion graphics. */
 	createFrameSource?: () => Promise<FrameSource | null>;
+	/** Offscreen compositor for sampleFrames (edited-timeline stills). */
+	createCompositorSampler?: () => Promise<CompositedFrameSampler | null>;
+}
+
+/**
+ * The same native compositor as preview/export, offscreen. Null when the addon
+ * is not built for this machine — sampleFrames then falls back to source frames
+ * and says so.
+ */
+export async function defaultCompositorSampler(): Promise<CompositedFrameSampler | null> {
+	try {
+		const { NativeCompositorFrameSampler } = await import("../compositorVerify/sampler");
+		const sampler = new NativeCompositorFrameSampler();
+		return sampler.hasAddon() ? sampler : null;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -647,6 +668,7 @@ export async function defaultFrameSource(): Promise<FrameSource | null> {
  * never blocks on ffmpeg.
  */
 const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
+	"sampleFrames",
 	"importMedia",
 	"insertStartThumbnail",
 	"createMotionGraphicPreview",
@@ -769,6 +791,7 @@ function documentTool<S extends z.ZodType>(
 						ffmpegPath: resolveFfmpeg()?.trim() || null,
 						signal: runtime.abortSignal,
 						createFrameSource: runtime.createFrameSource ?? defaultFrameSource,
+						createCompositorSampler: runtime.createCompositorSampler ?? defaultCompositorSampler,
 						mayMutate:
 							editsAllowed !== false &&
 							mutationMode !== "proposal_only" &&
@@ -878,6 +901,7 @@ export function buildTools(
 		build("getTranscriptWords", getTranscriptWordsArgs),
 		build("getCursorTrack", getCursorTrackArgs),
 		build("listCharacters", listCharactersArgs),
+		build("sampleFrames", sampleFramesArgs),
 		build("createMotionGraphicPreview", createMotionGraphicPreviewArgs),
 		build("listMotionTemplates", listMotionTemplatesArgs),
 		build("createMotionClip", createMotionClipArgs),
