@@ -43,6 +43,7 @@ import {
 	TOOL_DESCRIPTIONS,
 	textFromChatModelEnd,
 	inCallOrder,
+	cliProgressStatus,
 } from "./service";
 
 // Both rosters used to be re-typed here, and a third time in the workbench. This
@@ -859,6 +860,18 @@ describe("tool calls from one reply", () => {
 		await Promise.all([slow, fast, failing.catch(() => {}), after]);
 		expect(order).toEqual(["render:start", "render:end", "zoom", "trim"]);
 		await expect(failing).rejects.toThrow("boom");
+	});
+});
+
+describe("Local CLI progress in the chat status line", () => {
+	it("drops heartbeats and start banners, keeps what the agent is doing", () => {
+		expect(cliProgressStatus("Still working (12s)…\n")).toBeNull();
+		expect(cliProgressStatus("Still working (40s) — 9s since last output…")).toBeNull();
+		expect(cliProgressStatus("Local CLI started (claude-opus-5)…")).toBeNull();
+		expect(cliProgressStatus("Local CLI working…")).toBeNull();
+		expect(cliProgressStatus("Starting claude…")).toBeNull();
+		expect(cliProgressStatus("Reading files…")).toBe("Reading files…");
+		expect(cliProgressStatus("Preparing OpenScreen edits…")).toBe("Preparing edits…");
 	});
 });
 

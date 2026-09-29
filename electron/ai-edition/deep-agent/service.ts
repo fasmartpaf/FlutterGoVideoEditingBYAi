@@ -2606,18 +2606,17 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					/"tool_calls"\s*:/.test(trimmed) ||
 					/"message"\s*:/.test(trimmed)
 				) {
-					sink.thinking("Preparing OpenScreen edits…\n");
-					sink.status?.("local_cli", "Preparing OpenScreen edits…");
+					sink.status?.("local_cli", "Preparing edits…");
 					return;
 				}
 				sink.text(delta);
 				return;
 			}
-			// Progress (Bash / tool_use / heartbeats) — show in Thinking AND live status
-			// so the chat board isn't blank while Local CLI works (Cursor-like).
-			sink.thinking(delta);
-			const line = delta.replace(/\s+/g, " ").trim();
-			if (line) sink.status?.("local_cli", line.slice(0, 160));
+			// Progress (CLI start, Bash / Read, heartbeats) goes to the one-line live
+			// status only — the Thinking box is for the model's own reasoning. Heartbeats
+			// are dropped: the chat shows its own elapsed timer.
+			const line = cliProgressStatus(delta);
+			if (line) sink.status?.("local_cli", line);
 		},
 	});
 
@@ -3939,6 +3938,19 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 }
 
 /** Full assistant text from `on_chat_model_end`. Local CLI uses this path. */
+/**
+ * One Local CLI progress line → what the chat's status line should say, or
+ * null for noise (heartbeats, "working…" pings, process start banners).
+ */
+export function cliProgressStatus(delta: string): string | null {
+	const line = delta.replace(/\s+/g, " ").trim();
+	if (!line) return null;
+	if (/^Still working \(\d+s\)/i.test(line)) return null;
+	if (/^Local CLI (working|started)/i.test(line) || /^Starting \S+…?$/i.test(line)) return null;
+	if (/^Preparing OpenScreen edits/i.test(line)) return "Preparing edits…";
+	return line.replace(/…$/, "").slice(0, 120) + "…";
+}
+
 export function textFromChatModelEnd(data: Record<string, unknown> | undefined): string {
 	if (!data) return "";
 	const output = data.output;

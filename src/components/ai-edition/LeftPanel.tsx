@@ -1,5 +1,5 @@
-import { ArrowLeft, Check, Copy, Loader2, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, Check, Copy, Square, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
@@ -39,6 +39,7 @@ import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
 import { EditReviewCardView } from "./EditReviewCard";
 import { LocalCliPopover } from "./LocalCliPopover";
+import { type LiveToolCall, LiveTurnCard, type LiveTurnLabels } from "./LiveTurn";
 import { PlanChecklist } from "./PlanChecklist";
 import { ChatHistoryModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -589,13 +590,15 @@ export function ChatStripPanel() {
 	const [thinkingText, setThinkingText] = useState("");
 	const [streamingText, setStreamingText] = useState("");
 	const [livePlan, setLivePlan] = useState<AiEditionPlanItem[]>([]);
-	const [liveTools, setLiveTools] = useState<
-		Array<{ name: string; summary?: string; ok?: boolean; detail?: string }>
-	>([]);
+	const [liveTools, setLiveTools] = useState<LiveToolCall[]>([]);
+	// When the running turn started (the live card's elapsed timer), and the
+	// plan as the event handler last saw it (to file each action under its step).
+	const [turnStartedAt, setTurnStartedAt] = useState(() => Date.now());
+	const livePlanRef = useRef<AiEditionPlanItem[]>([]);
 	const [liveStatus, setLiveStatus] = useState<string | null>(null);
 	const [realtimeState, setRealtimeState] = useState<ChatRealtimeConnectionState>("idle");
 	const realtimeLiveRef = useRef(false);
-	const [thinkingExpanded, setThinkingExpanded] = useState(true);
+	const [, setThinkingExpanded] = useState(true);
 	// sessionId of the in-flight run — late events for prior runs (or for
 	// other windows) are ignored so a stale stream can't pollute the new turn.
 	const thinkingRunSessionRef = useRef<string | null>(null);
@@ -614,6 +617,17 @@ export function ChatStripPanel() {
 	const [localAgents, setLocalAgents] = useState<AiEditionLocalAgent[]>([]);
 	// unknown ≠ none; see chatAvailability.ts.
 	const canChat = canSendChat(llmConfig, connectedProviders);
+	const liveTurnLabels = useMemo<LiveTurnLabels>(
+		() => ({
+			author: t("chat.authorAssistant"),
+			plan: t("chat.plan"),
+			reasoning: t("chat.reasoning"),
+			working: t("chat.working"),
+			stepActions: (count) => t("chat.stepActions", { count }),
+			earlierActions: (count) => t("chat.earlierActions", { count }),
+		}),
+		[t],
+	);
 	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
 	const modelButtonRef = useRef<HTMLButtonElement | null>(null);
 	const [modelPopoverRect, setModelPopoverRect] = useState<{
@@ -700,6 +714,7 @@ export function ChatStripPanel() {
 			}
 			if (event.sessionId !== thinkingRunSessionRef.current) return;
 			if (event.kind === "plan") {
+				livePlanRef.current = event.items;
 				setLivePlan(event.items);
 				return;
 			}
@@ -713,7 +728,9 @@ export function ChatStripPanel() {
 			}
 			if (event.kind === "toolStart") {
 				const detail = formatLiveToolDetail(event.name, event.args);
-				setLiveTools((prev) => [...prev, { name: event.name, detail }]);
+				const running = livePlanRef.current.findIndex((item) => item.status === "in_progress");
+				const step = running >= 0 ? running : undefined;
+				setLiveTools((prev) => [...prev, { name: event.name, detail, step }]);
 				return;
 			}
 			if (event.kind === "toolEnd") {
@@ -722,6 +739,7 @@ export function ChatStripPanel() {
 					for (let i = next.length - 1; i >= 0; i--) {
 						if (next[i]?.name === event.name && next[i]?.ok === undefined) {
 							next[i] = {
+								...next[i],
 								name: event.name,
 								ok: event.ok,
 								summary: event.summary,
@@ -853,6 +871,8 @@ export function ChatStripPanel() {
 		skipWatchPromptRef.current = false;
 		setInput("");
 		setBusy(true);
+		setTurnStartedAt(Date.now());
+		livePlanRef.current = [];
 		// ponytail: prepare the live reasoning-trace accumulator. Late events
 		// from a previous run (or from another panel/window) won't match this
 		// sessionId and are dropped by the subscription above.
@@ -1845,92 +1865,15 @@ export function ChatStripPanel() {
 							</div>
 						))}
 						{busy ? (
-							<div className={styles.msg} aria-live="polite">
-								<div className={styles.msgHead}>
-									<span className={styles.msgAuthor}>{t("chat.authorAssistant")}</span>
-									{liveStatus ? <span className={styles.msgTime}>{liveStatus}</span> : null}
-								</div>
-								{thinkingText ? (
-									<div
-										style={{
-											display: "flex",
-											alignItems: "flex-start",
-											gap: 6,
-										}}
-									>
-										<Loader2
-											size={12}
-											className="animate-spin"
-											style={{
-												marginTop: 10,
-												flex: "0 0 auto",
-												color: "var(--muted)",
-											}}
-										/>
-										<div style={{ flex: 1, minWidth: 0 }}>
-											<ThinkingBlock
-												text={thinkingText}
-												expanded={thinkingExpanded}
-												onToggle={() => setThinkingExpanded((v) => !v)}
-												label={t("chat.thinking")}
-											/>
-										</div>
-									</div>
-								) : liveStatus ? null : (
-									<div
-										className={styles.msgBubble}
-										style={{ color: "var(--muted)", fontStyle: "italic" }}
-									>
-										<Loader2
-											size={12}
-											className="animate-spin"
-											style={{ marginRight: 6, verticalAlign: "middle" }}
-										/>
-										{t("chat.thinking")}
-									</div>
-								)}
-								{liveStatus && !thinkingText ? (
-									<div className={styles.liveStatusRow}>
-										<Loader2 size={12} className="animate-spin" />
-										<span>{liveStatus}</span>
-									</div>
-								) : null}
-								{livePlan.length > 0 ? (
-									<PlanChecklist items={livePlan} title={t("chat.plan")} live />
-								) : null}
-								{liveTools.length > 0 ? (
-									<div className={styles.liveTools}>
-										{liveTools.map((tool, idx) => {
-											const status = toolActivityStatus(tool.name);
-											return (
-												<div
-													key={`${tool.name}-${idx}`}
-													className={styles.liveToolRow}
-													data-ok={tool.ok === undefined ? "pending" : tool.ok ? "true" : "false"}
-												>
-													{tool.ok === undefined ? (
-														<Loader2 size={11} className="animate-spin" />
-													) : null}
-													<span>
-														{tool.ok === undefined
-															? tool.detail
-																? `${status} — ${tool.detail}`
-																: `${status}…`
-															: tool.ok
-																? status
-																: `${status} failed`}
-													</span>
-												</div>
-											);
-										})}
-									</div>
-								) : null}
-								{streamingText ? (
-									<div className={styles.msgBubble} style={{ marginTop: 8 }}>
-										{streamingText}
-									</div>
-								) : null}
-							</div>
+							<LiveTurnCard
+								startedAt={turnStartedAt}
+								status={liveStatus}
+								plan={livePlan}
+								tools={liveTools}
+								thinking={thinkingText}
+								text={streamingText}
+								labels={liveTurnLabels}
+							/>
 						) : null}
 					</>
 				)}

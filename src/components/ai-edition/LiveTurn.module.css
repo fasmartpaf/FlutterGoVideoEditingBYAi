@@ -1,0 +1,293 @@
+/* The in-flight agent turn and the plan stepper — calm, readable, one focus. */
+
+.card {
+	position: relative;
+	margin-bottom: var(--sp-3);
+	padding: 12px 14px 12px;
+	border-radius: 14px;
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--surface)) 0%, var(--surface) 60%);
+	border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-soft));
+	box-shadow:
+		0 1px 0 color-mix(in srgb, #fff 4%, transparent) inset,
+		0 8px 24px -16px rgba(0, 0, 0, 0.6);
+	animation: rise 220ms var(--ease, ease-out) both;
+}
+
+.head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+.mark {
+	width: 18px;
+	height: 18px;
+	border-radius: 6px;
+	background: conic-gradient(from 210deg, var(--accent), color-mix(in srgb, var(--accent) 40%, #22d3ee), var(--accent));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 12px -2px color-mix(in srgb, var(--accent) 60%, transparent);
+	animation: breathe 2.4s ease-in-out infinite;
+	flex: 0 0 auto;
+}
+.who {
+	font: 600 12.5px/1 var(--font-body);
+	color: var(--fg);
+	letter-spacing: 0.01em;
+}
+.elapsed {
+	margin-left: auto;
+	font: 500 11px/1 var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	color: var(--muted);
+	padding: 4px 7px;
+	border-radius: 999px;
+	background: var(--surface-2);
+	border: 1px solid var(--border-soft);
+}
+
+/* The single "what's happening now" line. */
+.now {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 20px;
+	font: 500 13px/1.4 var(--font-body);
+	color: var(--fg-2);
+}
+.shimmer {
+	background: linear-gradient(
+		90deg,
+		var(--fg-2) 0%,
+		var(--fg-2) 35%,
+		color-mix(in srgb, var(--fg) 95%, var(--accent)) 50%,
+		var(--fg-2) 65%,
+		var(--fg-2) 100%
+	);
+	background-size: 250% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	animation: shimmer 2.2s linear infinite;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+/* Stepper */
+.steps {
+	list-style: none;
+	margin: 12px 0 0;
+	padding: 0;
+}
+.stepsHead {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	margin-top: 12px;
+	font: 600 10.5px/1 var(--font-body);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--meta);
+}
+.stepsCount {
+	font: 500 11px/1 var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0;
+	text-transform: none;
+	color: var(--muted);
+}
+.step {
+	position: relative;
+	display: grid;
+	grid-template-columns: 20px 1fr;
+	column-gap: 10px;
+	padding: 5px 0;
+}
+.step:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: 9.5px;
+	top: 25px;
+	bottom: -5px;
+	width: 1px;
+	background: var(--border-soft);
+}
+.step[data-status="done"]:not(:last-child)::after {
+	background: color-mix(in srgb, var(--accent) 45%, var(--border-soft));
+}
+.dot {
+	width: 20px;
+	height: 20px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	border: 1.5px solid var(--border);
+	background: var(--surface);
+	color: var(--muted);
+	transition: all 200ms var(--ease, ease);
+}
+.step[data-status="done"] .dot {
+	border-color: transparent;
+	background: var(--accent);
+	color: var(--accent-contrast, #fff);
+}
+.step[data-status="in_progress"] .dot {
+	border-color: var(--accent);
+	color: var(--accent);
+	box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.step[data-status="skipped"] .dot {
+	border-style: dashed;
+}
+.stepTitle {
+	padding-top: 1px;
+	font: 500 13px/1.45 var(--font-body);
+	color: var(--fg-2);
+}
+.step[data-status="in_progress"] .stepTitle {
+	color: var(--fg);
+	font-weight: 600;
+}
+.step[data-status="pending"] .stepTitle {
+	color: var(--muted);
+}
+.step[data-status="skipped"] .stepTitle {
+	color: var(--muted);
+	text-decoration: line-through;
+	text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.stepMeta {
+	margin-left: 6px;
+	font: 400 11px/1 var(--font-body);
+	color: var(--muted);
+}
+
+/* Actions (tool calls) nested under the running step, or on their own. */
+.actions {
+	grid-column: 2;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin-top: 6px;
+}
+.action {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font: 400 12px/1.4 var(--font-body);
+	color: var(--muted);
+	min-width: 0;
+	animation: fadeIn 180ms ease-out both;
+}
+.action > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.action[data-ok="pending"] {
+	color: var(--fg-2);
+}
+.action[data-ok="false"] {
+	color: var(--danger, #f87171);
+}
+.actionIcon {
+	flex: 0 0 auto;
+	width: 12px;
+	display: grid;
+	place-items: center;
+}
+.action[data-ok="true"] .actionIcon {
+	color: var(--success, #34d399);
+}
+.more {
+	align-self: flex-start;
+	margin-top: 2px;
+	padding: 0;
+	border: 0;
+	background: none;
+	font: 500 11.5px/1.4 var(--font-body);
+	color: var(--meta);
+	cursor: pointer;
+}
+.more:hover {
+	color: var(--fg-2);
+}
+
+/* Reasoning (model thinking) — quiet, collapsed by default. */
+.reasoning {
+	margin-top: 10px;
+	border-top: 1px solid var(--border-soft);
+	padding-top: 8px;
+}
+.reasoning > summary {
+	list-style: none;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font: 500 11.5px/1 var(--font-body);
+	color: var(--meta);
+	user-select: none;
+}
+.reasoning > summary::-webkit-details-marker {
+	display: none;
+}
+.chev {
+	transition: transform 150ms ease;
+}
+.reasoning[open] .chev {
+	transform: rotate(90deg);
+}
+.reasoningText {
+	margin-top: 6px;
+	max-height: 140px;
+	overflow: auto;
+	font: 400 12px/1.55 var(--font-body);
+	color: var(--muted);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.reply {
+	margin-top: 10px;
+	font: 400 13.5px/1.6 var(--font-body);
+	color: var(--fg);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Finished-message variant of the stepper. */
+.planCard {
+	margin-top: 8px;
+	padding: 10px 12px 6px;
+	border-radius: 12px;
+	border: 1px solid var(--border-soft);
+	background: var(--surface-2);
+}
+.planCard .stepsHead {
+	margin-top: 0;
+	margin-bottom: 4px;
+}
+
+@keyframes shimmer {
+	from { background-position: 100% 0; }
+	to { background-position: -150% 0; }
+}
+@keyframes breathe {
+	0%, 100% { transform: scale(1); filter: saturate(1); }
+	50% { transform: scale(0.9); filter: saturate(1.4); }
+}
+@keyframes rise {
+	from { opacity: 0; transform: translateY(4px); }
+	to { opacity: 1; transform: none; }
+}
+@keyframes fadeIn {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.card, .action { animation: none; }
+	.mark { animation: none; }
+	.shimmer { animation: none; color: var(--fg-2); background: none; }
+}
