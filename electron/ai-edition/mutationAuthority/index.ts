@@ -113,6 +113,28 @@ export function mutationAuthorityRefusal(
 	};
 }
 
+/**
+ * Local CLI (Claude Code / Cursor / Codex) is the user's chosen editor brain.
+ * Grant deterministic write tools whenever Project edits are on — otherwise
+ * media-context classification traps creative asks in read_only / proposal_only
+ * and addGraphic never lands.
+ */
+export function withLocalCliWriteGrant(
+	decision: MutationAuthorityDecision,
+	opts: { localCli: boolean; editsAllowed: boolean },
+): MutationAuthorityDecision {
+	if (!opts.localCli || opts.editsAllowed === false) return decision;
+	if (decision.mode === "deterministic_edit" || decision.mode === "consented_apply") {
+		return { ...decision, agentEditsAllowed: true };
+	}
+	return {
+		...decision,
+		mode: "deterministic_edit",
+		agentEditsAllowed: true,
+		reason: "Local CLI selected — mutating tools enabled for the installed agent",
+	};
+}
+
 /** Strip / rewrite user-facing claims that edits were applied without a verified commit. */
 export function bindFinalResponseToTransactionTruth(input: {
 	userFacingText: string;

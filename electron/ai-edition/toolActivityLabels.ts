@@ -1,0 +1,86 @@
+/**
+ * Cursor-style Level-1 labels for OpenScreen / CLI tool activity.
+ * Keep paths, IDs, and receipts out of these strings.
+ */
+
+const OPENSCREEN_STATUS: Record<string, string> = {
+	getCurrentDocument: "Reading project",
+	listSources: "Listing sources",
+	listTransitions: "Listing transitions",
+	getTranscript: "Reading transcript",
+	getTranscriptWords: "Reading transcript",
+	getCursorTrack: "Reading cursor track",
+	listCharacters: "Listing characters",
+	addTrim: "Editing timeline",
+	setClipRange: "Editing timeline",
+	removeClip: "Editing timeline",
+	splitClip: "Editing timeline",
+	duplicateClip: "Editing timeline",
+	reorderClips: "Editing timeline",
+	importMedia: "Importing media",
+	insertStartThumbnail: "Updating start cover",
+	addGraphic: "Editing graphics",
+	addAnnotation: "Editing graphics",
+	addBeatGraphics: "Creating beat graphics",
+	createMotionGraphicPreview: "Creating animation",
+	removeModifier: "Cleaning timeline",
+	removeAnnotation: "Cleaning timeline",
+	removeGraphic: "Cleaning timeline",
+	addZoom: "Editing timeline",
+	updateZoom: "Editing timeline",
+	removeZoom: "Cleaning timeline",
+	addSpeed: "Editing timeline",
+	tightenPacing: "Editing timeline",
+	addCursorHighlight: "Editing cursor highlight",
+	removeCursorHighlight: "Cleaning timeline",
+	addPrivacyCover: "Adding privacy cover",
+	removePrivacyCover: "Cleaning timeline",
+	setBackground: "Updating look",
+	setEditorSettings: "Updating settings",
+	setCaptionSettings: "Updating captions",
+	generateCaptions: "Generating captions",
+	setWordText: "Updating captions",
+	addAudio: "Editing audio",
+	setAudio: "Editing audio",
+	setClipIncomingTransition: "Editing transitions",
+	registerCharacter: "Registering character",
+	exportProject: "Exporting",
+	record: "Recording",
+};
+
+const CLI_STATUS: Record<string, string> = {
+	Read: "Reading files",
+	Write: "Writing files",
+	Edit: "Editing files",
+	Bash: "Using Bash",
+	Glob: "Searching files",
+	Grep: "Searching files",
+	Shell: "Using Bash",
+	run_terminal_cmd: "Using Bash",
+	read_file: "Reading files",
+	write_file: "Writing files",
+	search_replace: "Editing files",
+	grep: "Searching files",
+	glob_file_search: "Searching files",
+};
+
+/** Short Level-1 status for live progress / activity rows. */
+export function toolActivityStatus(name: string): string {
+	const trimmed = name.trim();
+	if (!trimmed) return "Working";
+	if (OPENSCREEN_STATUS[trimmed]) return OPENSCREEN_STATUS[trimmed];
+	if (CLI_STATUS[trimmed]) return CLI_STATUS[trimmed];
+	const lower = trimmed.toLowerCase();
+	for (const [key, label] of Object.entries(CLI_STATUS)) {
+		if (key.toLowerCase() === lower) return label;
+	}
+	if (/^remove/i.test(trimmed)) return "Cleaning timeline";
+	if (/^add|^set|^update|^insert/i.test(trimmed)) return "Editing timeline";
+	if (/ffmpeg|render|preview/i.test(trimmed)) return "Rendering preview";
+	return `Using ${trimmed}`;
+}
+
+/** Progress line ending with ellipsis for stream heartbeats. */
+export function toolActivityProgressLine(name: string): string {
+	return `${toolActivityStatus(name)}…`;
+}

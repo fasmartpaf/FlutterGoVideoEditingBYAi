@@ -62,13 +62,23 @@ const ARGS: Record<string, unknown> = {
 	getTranscriptRange: { startSourceTimeSec: 0, endSourceTimeSec: 5 },
 	getTranscriptWords: {},
 	getCursorTrack: {},
+	listCharacters: {},
+	createMotionGraphicPreview: { titles: ["Demo"] },
 	setWordText: { wordId: "word_1", text: "Hullo" },
 	addTrim: { startSec: 1, endSec: 2 },
 	addTrims: { ranges: [{ startSec: 1, endSec: 2 }] },
 	setTrim: { trimRangeId: "trim_1", startSec: 1, endSec: 2 },
+	tightenPacing: {},
+	removeFillerWords: {},
 	setClipRange: { clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 10 },
 	addClip: { assetId: "asset_1" },
+	splitClip: { clipId: "clip_1", atSourceSec: 5 },
+	duplicateClip: { clipId: "clip_1" },
+	importMedia: { path: "/tmp/openscreen-missing-import.mp4", durationSec: 2 },
+	insertStartThumbnail: { text: "Opening", durationSec: 1.5 },
+	listTransitions: {},
 	setClipCrop: { clipId: "clip_1", crop: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 } },
+	setClipIncomingTransition: { clipId: "clip_2", kind: "dissolve", durationSec: 0.35 },
 	moveClip: { clipId: "clip_1", beforeClipId: null },
 	replaceTimeline: { intervals: [{ startSec: 0, endSec: 10 }] },
 	addZoom: { startSec: 1, endSec: 2 },
@@ -77,12 +87,19 @@ const ARGS: Record<string, unknown> = {
 	addSpeed: { startSec: 1, endSec: 2 },
 	setSpeed: { speedId: "speed_nope" },
 	addAnnotation: { startSec: 1, endSec: 2, text: "hi" },
+	addPrivacyCover: { preset: "topStrip" },
+	addCursorHighlight: { style: "finger", maxPoints: 4, everySec: 1 },
+	registerCharacter: {
+		id: "my_mascot",
+		image:
+			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+	},
+	addBeatGraphics: { count: 5, kind: "badge" },
 	addGraphic: { startSec: 1, endSec: 2, kind: "title", text: "Coach Pulse" },
 	setAnnotation: { annotationId: "ann_nope" },
 	addCameraFullscreen: { startSec: 1, endSec: 2 },
 	setCameraFullscreen: { cameraFullscreenId: "cam_nope" },
-	// The fixture has no `kind: "audio"` asset, so these exercise the refusal branch —
-	// the honest one to pin: the agent can place imported audio, never import it.
+	// The fixture has no `kind: "audio"` asset — refusal until importMedia adds one.
 	addAudio: { assetId: "audio_nope", startSec: 1, endSec: 2 },
 	setAudio: { audioId: "audio_nope" },
 	removeTrim: { trimRangeId: "trim_1" },
@@ -90,6 +107,8 @@ const ARGS: Record<string, unknown> = {
 	removeClip: { clipId: "clip_1" },
 	setAspectRatio: { value: "9:16" },
 	setBackground: { wallpaper: "1" },
+	setCaptionSettings: { enabled: true, fontSize: 42 },
+	setEditorSettings: { padding: 40, borderRadius: 32, shadowIntensity: 0.25 },
 	listSources: {},
 	recordScreen: { durationSec: 8 },
 	generateCaptions: {},
@@ -253,13 +272,17 @@ describe("the tool surface handed to the model", () => {
 		expect(SYSTEM_PROMPT).not.toMatch(/not required to understand the video/i);
 	});
 
-	it("teaches a one-pass finish and refuses invented schema fields", () => {
+	it("teaches a one-pass finish, real transitions, and refuses invented schema fields", () => {
 		expect(SYSTEM_PROMPT).toMatch(/One-pass finish/);
 		expect(SYSTEM_PROMPT).toMatch(/CTAs/);
 		expect(SYSTEM_PROMPT).toMatch(/addGraphic/);
 		expect(SYSTEM_PROMPT).toMatch(/type 'blur'/);
-		expect(SYSTEM_PROMPT).toMatch(/not fields on this document/);
-		expect(SYSTEM_PROMPT).toMatch(/clip-to-clip transitions/);
+		expect(SYSTEM_PROMPT).toMatch(/insertStartThumbnail/);
+		expect(SYSTEM_PROMPT).toMatch(/setClipIncomingTransition/);
+		expect(SYSTEM_PROMPT).toMatch(/listTransitions/);
+		expect(SYSTEM_PROMPT).not.toMatch(/This document has no clip-transition field/);
+		expect(SYSTEM_PROMPT).not.toMatch(/Do not invent clip-to-clip transitions/);
+		expect(SYSTEM_PROMPT).toMatch(/not fields on this document|are not tools/i);
 	});
 });
 
@@ -423,6 +446,9 @@ describe("one description of the tools, not two", () => {
 			"getTranscriptRange",
 			"getTranscriptWords",
 			"getCursorTrack",
+			"listCharacters",
+			"createMotionGraphicPreview",
+			"listTransitions",
 			"listSources",
 			"exportProject",
 		]);

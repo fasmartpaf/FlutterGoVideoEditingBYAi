@@ -156,6 +156,7 @@ function createShimElectronAPI() {
 		// browser-shim test fails at boot, not just the chat ones. Nothing streams
 		// in shim mode; the unsubscribe is what the effect's cleanup returns.
 		onAiEditionChatEvent: () => () => undefined,
+		getAiEditionChatRealtimeEndpoint: async () => null,
 		invokeNativeBridge: (req: { domain: string; action: string; payload?: unknown }) => {
 			console.info("[browser-shim] invokeNativeBridge", req.domain, req.action, req.payload);
 			return Promise.resolve({
@@ -486,6 +487,8 @@ function createShimBridgeClient() {
 				Promise.resolve({
 					models: [`${providerId}-demo-model-1`, `${providerId}-demo-model-2`],
 				}),
+			chatCancel: (_projectId: string, _sessionId: string) =>
+				Promise.resolve({ cancelled: false }),
 			chatRun: (projectId: string, sessionId: string, message?: string) => {
 				const sessions = getSessions(projectId);
 				let s = sessions.get(sessionId);

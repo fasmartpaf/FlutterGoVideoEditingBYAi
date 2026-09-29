@@ -16,7 +16,7 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatMistralAI } from "@langchain/mistralai";
 import { ChatOpenAI } from "@langchain/openai";
-import { cliPathFromBaseUrl, isHttpLocalCli } from "../local-agents";
+import { cliPathFromBaseUrl, isHttpLocalCli, shouldGrantLocalWatch } from "../local-agents";
 import {
 	getProviderDefinition,
 	normalizeProviderId,
@@ -287,8 +287,32 @@ export interface OpenScreenChatModelConfig {
 	reasoningEffort?: string;
 	/** Folders of open recordings the local CLI may Read / watch. */
 	mediaDirs?: string[];
+	/** Sampled JPEG paths for Local CLI (text prompt — not multimodal parts). */
+	framePaths?: string[];
+	/** Claude Code `--model` when agent is `claude`. */
+	localCliModel?: string;
+	/** Persistent Claude session UUID for this OpenScreen chat. */
+	cliSessionId?: string;
+	/** Resume Claude memory from a prior spawn in this chat. */
+	resumeCliSession?: boolean;
+	/** Workspace root for cwd / --add-dir (openscreen userData preferred). */
+	workspaceRoot?: string;
+	/** Fired after each Local CLI child exits successfully enough to parse. */
+	onCliSpawnComplete?: () => void;
+	/** Read per spawn: has this chat's CLI session been created yet? */
+	isCliSessionStarted?: () => boolean;
+	/**
+	 * Direct Local CLI progress (heartbeats / stream-json). Used because
+	 * createAgent often invokes via `_generate`, skipping on_chat_model_stream.
+	 */
+	onLocalCliProgress?: (event: {
+		kind: "progress" | "text";
+		delta: string;
+	}) => void;
 	localAgentPermission?: "ask" | "always" | "never";
 	watchGranted?: boolean;
+	/** Stop button — Local CLI kills the child; cloud models get RunnableConfig.signal. */
+	abortSignal?: AbortSignal;
 }
 
 // ponytail: placeholder API key for self-hosted OpenAI-compatible endpoints
@@ -408,6 +432,19 @@ export async function createOpenScreenChatModel(
 			agentId: config.model,
 			binPath,
 			mediaDirs: config.mediaDirs,
+			framePaths: config.framePaths,
+			cliModel: config.localCliModel,
+			onProgress: config.onLocalCliProgress,
+			abortSignal: config.abortSignal,
+			cliSessionId: config.cliSessionId,
+			resumeCliSession: config.resumeCliSession,
+			workspaceRoot: config.workspaceRoot,
+			onCliSpawnComplete: config.onCliSpawnComplete,
+			isCliSessionStarted: config.isCliSessionStarted,
+			watchGranted: shouldGrantLocalWatch(
+				config.localAgentPermission,
+				Boolean(config.watchGranted),
+			),
 		});
 	}
 

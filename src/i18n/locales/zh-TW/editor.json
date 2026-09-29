@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "推理強度",
 		"sendTitle": "傳送（Enter）",
 		"send": "傳送",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "要倒轉到這裡嗎？",
 		"rewindConfirmBody": "此時間點之後代理的編輯與後續對話回合將被回復。專案、對話與代理狀態將被還原。你在那之後所做的編輯也會被取代。",
 		"rewindConfirm": "倒轉",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Claude 模型",
+			"modelUpdateRequired": "更新 Claude Code 以解鎖"
+		},
+		"realtimeLive": "即時",
+		"realtimeConnecting": "連線中…",
+		"realtimeFallback": "本機",
+		"realtimeLiveHint": "代理更新透過即時 WebSocket 推送",
+		"realtimeFallbackHint": "即時串流重連前使用 Electron IPC",
+		"mediaUseOnVideo": "用於影片",
+		"activityDetails": "活動",
+		"mediaOpen": "開啟",
+		"mediaReveal": "顯示"
 	},
 	"newProjectDialog": {
 		"title": "新增專案",

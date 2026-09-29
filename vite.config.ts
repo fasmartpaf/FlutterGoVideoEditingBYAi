@@ -37,7 +37,12 @@ export default defineConfig({
 							"@": path.resolve(__dirname, "src"),
 						},
 					},
-					build: {},
+					build: {
+						rollupOptions: {
+							// `ws` optional native peers break when Vite inlines the package.
+							external: ["ws", "bufferutil", "utf-8-validate"],
+						},
+					},
 				},
 			},
 			preload: {

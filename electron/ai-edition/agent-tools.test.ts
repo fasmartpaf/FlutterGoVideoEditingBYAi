@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	type AxcutDocument,
@@ -172,6 +175,10 @@ describe("the mutating-tool table", () => {
 		expect([...MUTATING_TOOL_NAMES].sort()).toEqual(
 			[
 				"addAnnotation",
+				"addPrivacyCover",
+				"addCursorHighlight",
+				"registerCharacter",
+				"addBeatGraphics",
 				"addGraphic",
 				"addAudio",
 				"addCameraFullscreen",
@@ -180,14 +187,19 @@ describe("the mutating-tool table", () => {
 				"addTrims",
 				"addZoom",
 				"addZooms",
+				"duplicateClip",
+				"importMedia",
+				"insertStartThumbnail",
 				"moveClip",
 				"removeClip",
+				"removeFillerWords",
 				"removeModifier",
 				"removeTrim",
 				"replaceTimeline",
 				"setAnnotation",
 				"setAudio",
 				"setCameraFullscreen",
+				"setClipIncomingTransition",
 				"setClipRange",
 				"addClip",
 				"setClipCrop",
@@ -197,6 +209,10 @@ describe("the mutating-tool table", () => {
 				"setZoom",
 				"setAspectRatio",
 				"setBackground",
+				"setCaptionSettings",
+				"setEditorSettings",
+				"splitClip",
+				"tightenPacing",
 				"recordScreen",
 				"generateCaptions",
 			].sort(),
@@ -247,6 +263,59 @@ describe("executeAgentTool", () => {
 		expect((background.document?.legacyEditor as { wallpaper?: string }).wallpaper).toBe(
 			"/wallpapers/wallpaper3.jpg",
 		);
+	});
+
+	it("setCaptionSettings enables and styles burn-in captions", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"setCaptionSettings",
+			JSON.stringify({ enabled: true, fontSize: 36, anchorV: "top", insetY: 4 }),
+		);
+		expect(result.ok).toBe(true);
+		const captions = (
+			result.document?.legacyEditor as { captions?: { enabled?: boolean; fontSize?: number } }
+		)?.captions;
+		expect(captions?.enabled).toBe(true);
+		expect(captions?.fontSize).toBe(36);
+		const snap = executeAgentTool(result.document ?? fixtureDocument(), "getCurrentDocument", "");
+		expect(JSON.parse(snap.resultJson).captions.enabled).toBe(true);
+	});
+
+	it("setEditorSettings updates look and fitClip zeros pad/round/shadow", () => {
+		const look = executeAgentTool(
+			fixtureDocument(),
+			"setEditorSettings",
+			JSON.stringify({ padding: 20, borderRadius: 12, shadowIntensity: 0.5, cursorShow: false }),
+		);
+		expect(look.ok).toBe(true);
+		const legacy = look.document?.legacyEditor as {
+			padding?: number;
+			borderRadius?: number;
+			shadowIntensity?: number;
+			cursorShow?: boolean;
+		};
+		expect(legacy.padding).toBe(20);
+		expect(legacy.borderRadius).toBe(12);
+		expect(legacy.shadowIntensity).toBe(0.5);
+		expect(legacy.cursorShow).toBe(false);
+		const fit = executeAgentTool(
+			look.document ?? fixtureDocument(),
+			"setEditorSettings",
+			JSON.stringify({ fitClip: true }),
+		);
+		expect(fit.ok).toBe(true);
+		const fitLegacy = fit.document?.legacyEditor as {
+			padding?: number;
+			borderRadius?: number;
+			shadowIntensity?: number;
+			aspectRatio?: string;
+		};
+		expect(fitLegacy.padding).toBe(0);
+		expect(fitLegacy.borderRadius).toBe(0);
+		expect(fitLegacy.shadowIntensity).toBe(0);
+		expect(fitLegacy.aspectRatio).toBe("native");
+		const snap = executeAgentTool(fit.document ?? fixtureDocument(), "getCurrentDocument", "");
+		expect(JSON.parse(snap.resultJson).look.padding).toBe(0);
 	});
 
 	it("process tools refuse honestly when no CLI engine is injected", () => {
@@ -2678,5 +2747,293 @@ describe("addClip / setClipCrop", () => {
 			JSON.stringify({ clipId: "clip_1", crop: null }),
 		);
 		expect(cleared.document?.timeline.clips[0].cropRegion).toBeUndefined();
+	});
+
+	it("splitClip then setClipIncomingTransition styles the join", () => {
+		const single = documentSchema.parse({
+			...fixtureDocument(),
+			timeline: {
+				...fixtureDocument().timeline,
+				clips: [
+					{
+						id: "clip_1",
+						assetId: "asset_1",
+						sourceStartSec: 0,
+						sourceEndSec: 30,
+						timelineStartSec: 0,
+						timelineEndSec: 30,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+				trimRanges: [],
+			},
+		});
+		const split = executeAgentTool(
+			single,
+			"splitClip",
+			JSON.stringify({ clipId: "clip_1", atSourceSec: 12 }),
+		);
+		expect(split.ok).toBe(true);
+		expect(split.document?.timeline.clips).toHaveLength(2);
+		const rightId = JSON.parse(split.resultJson).rightClipId as string;
+		const dissolve = executeAgentTool(
+			split.document as AxcutDocument,
+			"setClipIncomingTransition",
+			JSON.stringify({ clipId: rightId, kind: "dissolve", durationSec: 0.4 }),
+		);
+		expect(dissolve.ok).toBe(true);
+		const right = dissolve.document?.timeline.clips.find((c) => c.id === rightId);
+		expect(right?.incomingTransition?.transitionId).toBe("openscreen.dissolve");
+	});
+
+	it("refuses setClipIncomingTransition on the first/only clip with a fix hint", () => {
+		const single = documentSchema.parse({
+			...fixtureDocument(),
+			timeline: {
+				...fixtureDocument().timeline,
+				clips: [
+					{
+						id: "clip_only",
+						assetId: "asset_1",
+						sourceStartSec: 0,
+						sourceEndSec: 30,
+						timelineStartSec: 0,
+						timelineEndSec: 30,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+				trimRanges: [],
+			},
+		});
+		const refused = executeAgentTool(
+			single,
+			"setClipIncomingTransition",
+			JSON.stringify({ clipId: "clip_only", kind: "dissolve", durationSec: 0.4 }),
+		);
+		expect(refused.ok).toBe(false);
+		expect(JSON.parse(refused.resultJson).error).toMatch(/first timeline clip|splitClip|skip/i);
+	});
+
+	it("addPrivacyCover lays a topStrip mosaic across the edited timeline", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addPrivacyCover",
+			JSON.stringify({ preset: "topStrip" }),
+		);
+		expect(result.ok).toBe(true);
+		const blurs = result.document?.annotations.filter((a) => a.type === "blur") ?? [];
+		expect(blurs.length).toBeGreaterThanOrEqual(2);
+		expect(blurs.some((a) => (a.size?.width ?? 0) >= 99)).toBe(true);
+		expect(result.summary).toMatch(/privacy cover topStrip/i);
+	});
+
+	it("addCursorHighlight places finger rings along cursor telemetry", () => {
+		const samples = Array.from({ length: 40 }, (_, i) => ({
+			timeMs: i * 250,
+			cx: 0.2 + (i % 10) * 0.05,
+			cy: 0.4,
+			interactionType: i % 8 === 0 ? "click" : "move",
+		}));
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addCursorHighlight",
+			JSON.stringify({ style: "finger", everySec: 0.5, maxPoints: 8 }),
+			{
+				cursorTelemetry: {
+					load: {
+						status: "ok",
+						assetId: "asset_1",
+						samples,
+						durationSec: 30,
+					},
+				},
+			},
+		);
+		expect(result.ok).toBe(true);
+		expect(result.summary).toMatch(/cursor finger/i);
+		const placed = result.document?.annotations.filter((a) =>
+			String(a.content ?? "").includes("cursor-finger"),
+		);
+		expect((placed?.length ?? 0) >= 2).toBe(true);
+	});
+
+	it("listCharacters and addCursorHighlight characterId place a builtin guide", () => {
+		const listed = executeAgentTool(fixtureDocument(), "listCharacters", "{}");
+		expect(listed.ok).toBe(true);
+		expect(JSON.parse(listed.resultJson).builtins.some((b: { id: string }) => b.id === "guide")).toBe(
+			true,
+		);
+		const samples = Array.from({ length: 20 }, (_, i) => ({
+			timeMs: i * 400,
+			cx: 0.5,
+			cy: 0.5,
+			interactionType: "move",
+		}));
+		const placed = executeAgentTool(
+			fixtureDocument(),
+			"addCursorHighlight",
+			JSON.stringify({ style: "character", characterId: "coach", maxPoints: 3, everySec: 1 }),
+			{
+				cursorTelemetry: {
+					load: { status: "ok", assetId: "asset_1", samples, durationSec: 30 },
+				},
+			},
+		);
+		expect(placed.ok).toBe(true);
+		expect(placed.summary).toMatch(/character:coach/i);
+		expect(JSON.parse(placed.resultJson).character.characterId).toBe("coach");
+	});
+
+	it("addBeatGraphics places N images across the timeline", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addBeatGraphics",
+			JSON.stringify({ count: 5, kind: "badge", texts: ["A", "B", "C", "D", "E"] }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.summary).toMatch(/beat graphics ×5/i);
+		const images = result.document?.annotations.filter((a) => a.type === "image") ?? [];
+		expect(images.length).toBeGreaterThanOrEqual(5);
+		const first = images[images.length - 5];
+		expect(first?.size.width).toBeGreaterThan(first?.size.height ?? 0);
+	});
+
+	it("addBeatGraphics character kind places square profile avatars", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addBeatGraphics",
+			JSON.stringify({ count: 3, kind: "character" }),
+		);
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson) as { kind: string; exportedPaths?: string[] };
+		expect(payload.kind).toBe("character");
+		const images = result.document?.annotations.filter((a) => a.type === "image") ?? [];
+		const last = images[images.length - 1];
+		expect(last?.size.width).toBe(last?.size.height);
+	});
+
+	it("addBeatGraphics previewOnly exports files without placing", () => {
+		const before = fixtureDocument();
+		const annBefore = before.annotations.length;
+		const result = executeAgentTool(
+			before,
+			"addBeatGraphics",
+			JSON.stringify({ count: 3, kind: "badge", previewOnly: true, texts: ["A", "B", "C"] }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.annotations.length).toBe(annBefore);
+		const payload = JSON.parse(result.resultJson) as {
+			previewOnly?: boolean;
+			exportedPaths?: string[];
+			placed?: number;
+		};
+		expect(payload.previewOnly).toBe(true);
+		expect(payload.placed).toBe(0);
+		expect(payload.exportedPaths?.length).toBe(3);
+		expect(result.summary).toMatch(/preview graphics/i);
+	});
+
+	it("duplicateClip inserts a copy after the original", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"duplicateClip",
+			JSON.stringify({ clipId: "clip_1" }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.timeline.clips.length).toBe(3);
+		expect(result.document?.timeline.clips[0]?.id).toBe("clip_1");
+		expect(result.document?.timeline.clips[1]?.id).not.toBe("clip_2");
+	});
+
+	it("tightenPacing cuts long transcript silences", () => {
+		const result = executeAgentTool(fixtureDocument(), "tightenPacing", JSON.stringify({}));
+		expect(result.ok).toBe(true);
+		expect(result.document?.timeline.trimRanges.length).toBeGreaterThan(
+			fixtureDocument().timeline.trimRanges.length,
+		);
+		expect(result.summary).toMatch(/tightened pacing|silence/i);
+	});
+
+	it("importMedia places a video when durationSec is supplied", () => {
+		const dir = mkdtempSync(join(tmpdir(), "os-import-"));
+		const file = join(dir, "broll.mp4");
+		writeFileSync(file, Buffer.from([0, 0, 0, 0]));
+		try {
+			const result = executeAgentTool(
+				fixtureDocument(),
+				"importMedia",
+				JSON.stringify({ path: file, durationSec: 4.5, placeOnTimeline: true }),
+			);
+			expect(result.ok).toBe(true);
+			const payload = JSON.parse(result.resultJson) as { assetId: string; placedClipId: string };
+			expect(result.document?.assets.some((a) => a.id === payload.assetId)).toBe(true);
+			expect(result.document?.timeline.clips.some((c) => c.id === payload.placedClipId)).toBe(
+				true,
+			);
+			expect(result.document?.timeline.clips.some((c) => c.assetId === payload.assetId)).toBe(
+				true,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("removeFillerWords trims um/uh word spans", () => {
+		const doc = documentSchema.parse({
+			...fixtureDocument(),
+			transcripts: [
+				{
+					assetId: "asset_1",
+					language: "en",
+					segments: [
+						{
+							id: "seg_1",
+							kind: "speech",
+							startSec: 0,
+							endSec: 3,
+							text: "um hello",
+							wordIds: ["w1", "w2"],
+						},
+					],
+					words: [
+						{ id: "w1", segmentId: "seg_1", startSec: 0.2, endSec: 0.5, text: "um" },
+						{ id: "w2", segmentId: "seg_1", startSec: 0.6, endSec: 1.2, text: "hello" },
+					],
+				},
+			],
+		});
+		const before = doc.timeline.trimRanges.length;
+		const result = executeAgentTool(doc, "removeFillerWords", "{}");
+		expect(result.ok).toBe(true);
+		expect(result.document!.timeline.trimRanges.length).toBeGreaterThan(before);
+	});
+
+	it("listTransitions returns registry ids for setClipIncomingTransition", () => {
+		const result = executeAgentTool(fixtureDocument(), "listTransitions", "{}");
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson) as {
+			transitions: Array<{ id: string }>;
+		};
+		expect(payload.transitions.length).toBeGreaterThan(0);
+		expect(payload.transitions.some((t) => t.id === "openscreen.dissolve")).toBe(true);
+	});
+
+	it("refuses full-bleed addGraphic at start — use insertStartThumbnail", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addGraphic",
+			JSON.stringify({
+				kind: "intro",
+				text: "Cover",
+				startSec: 0,
+				endSec: 2.5,
+			}),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toMatch(/insertStartThumbnail/);
 	});
 });

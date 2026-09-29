@@ -267,6 +267,8 @@ export interface AiEditionLlmConfig {
 	allowAgentEdits?: boolean;
 	/** Local CLI watch access: ask the user (default), always, or never. */
 	localAgentPermission?: "ask" | "always" | "never";
+	/** Claude Code `--model` when provider is local-cli and model is `claude`. */
+	localCliModel?: string;
 }
 
 export type AiEditionLlmCredentialKind = "api-key" | "codex" | "github-device" | "github-pat";
@@ -294,6 +296,15 @@ export interface AiEditionLocalAgent {
 	baseUrl?: string;
 	version?: string;
 	models?: string[];
+	/** Best-effort active model label for Local CLI agents. */
+	activeModel?: string;
+	/** Claude Code selectable models for the in-app picker. */
+	modelOptions?: Array<{
+		id: string;
+		label: string;
+		available: boolean;
+		note?: string;
+	}>;
 	ready: boolean;
 	statusNote?: string;
 }
@@ -315,12 +326,23 @@ export interface AiEditionToolCallSummary {
 	summary: string;
 }
 
+/** Generated image/video shown inline in the chat board (create → preview → place). */
+export interface AiEditionChatMedia {
+	id: string;
+	kind: "image" | "video";
+	/** Absolute filesystem path (renderer loads via file://). */
+	path: string;
+	label?: string;
+}
+
 export interface AiEditionChatMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
 	createdAt: string;
 	toolCalls?: AiEditionToolCallSummary[];
+	/** Preview gallery for graphics the agent created this turn. */
+	media?: AiEditionChatMedia[];
 	/**
 	 * id of the rewind-able document snapshot taken right before
 	 * the user message triggered its chat turn. Non-null = the per-message
@@ -706,6 +728,12 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
+			action: "chat.cancel";
+			payload: { projectId: string; sessionId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
 			action: "applyPreview.run";
 			payload: {
 				document: unknown;
@@ -927,7 +955,14 @@ export type AiEditionChatEvent =
 	| { kind: "thinking"; sessionId: string; delta: string }
 	| { kind: "toolStart"; sessionId: string; name: string; args: unknown }
 	| { kind: "toolEnd"; sessionId: string; name: string; ok: boolean; summary?: string }
-	| { kind: "error"; sessionId: string; message: string };
+	| { kind: "error"; sessionId: string; message: string }
+	| { kind: "status"; sessionId: string; phase: string; detail?: string };
+
+export interface AiEditionChatRealtimeEndpoint {
+	url: string;
+	token: string;
+	port: number;
+}
 
 export interface NativeBridgeEvent<TPayload = unknown> {
 	name: NativeBridgeEventName;

@@ -7,7 +7,7 @@ import { createEmptyDocument, documentSchema } from "../../../src/lib/ai-edition
 import { executeAgentTool } from "../agent-tools";
 import { fingerprintDocument } from "../applyPreview/fingerprint";
 import { classifyMediaContextNeeds } from "../mediaContextNeeds/classify";
-import { bindFinalResponseToTransactionTruth, resolveMutationAuthority } from "./index";
+import { bindFinalResponseToTransactionTruth, resolveMutationAuthority, withLocalCliWriteGrant } from "./index";
 
 function docWithClip() {
 	const base = createEmptyDocument({
@@ -178,5 +178,23 @@ describe("bindFinalResponseToTransactionTruth", () => {
 		expect(out.claim).toBe("proposal_awaiting_consent");
 		expect(out.text).toMatch(/Nothing has been changed yet/i);
 		expect(out.text).not.toMatch(/I improved/i);
+	});
+});
+
+describe("withLocalCliWriteGrant", () => {
+	it("upgrades read_only to deterministic_edit for Local CLI when edits are on", () => {
+		const needs = classifyMediaContextNeeds("can you create the motion graphics for this video");
+		const base = resolveMutationAuthority({ contextNeeds: needs, editsAllowed: true });
+		expect(base.mode).not.toBe("deterministic_edit");
+		const granted = withLocalCliWriteGrant(base, { localCli: true, editsAllowed: true });
+		expect(granted.mode).toBe("deterministic_edit");
+		expect(granted.agentEditsAllowed).toBe(true);
+	});
+
+	it("does not grant writes when Project edits are off", () => {
+		const needs = classifyMediaContextNeeds("add a title");
+		const base = resolveMutationAuthority({ contextNeeds: needs, editsAllowed: false });
+		const granted = withLocalCliWriteGrant(base, { localCli: true, editsAllowed: false });
+		expect(granted.agentEditsAllowed).toBe(false);
 	});
 });

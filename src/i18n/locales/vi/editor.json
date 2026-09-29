@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "Mức độ suy luận",
 		"sendTitle": "Gửi (Enter)",
 		"send": "Gửi",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "Tua lại đến đây?",
 		"rewindConfirmBody": "Các chỉnh sửa của tác nhân và các lượt tiếp theo sau điểm này sẽ được khôi phục lại. Dự án, cuộc trò chuyện và trạng thái tác nhân sẽ được khôi phục. Các chỉnh sửa bạn đã thực hiện từ lúc đó cũng sẽ bị thay thế.",
 		"rewindConfirm": "Tua lại",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Mô hình Claude",
+			"modelUpdateRequired": "Cập nhật Claude Code để mở khóa"
+		},
+		"realtimeLive": "Trực tiếp",
+		"realtimeConnecting": "Đang kết nối…",
+		"realtimeFallback": "Cục bộ",
+		"realtimeLiveHint": "Cập nhật agent truyền qua WebSocket trực tiếp",
+		"realtimeFallbackHint": "Dùng Electron IPC cho đến khi stream live kết nối lại",
+		"mediaUseOnVideo": "Dùng trên video",
+		"activityDetails": "Hoạt động",
+		"mediaOpen": "Mở",
+		"mediaReveal": "Hiện"
 	},
 	"newProjectDialog": {
 		"title": "Dự án mới",

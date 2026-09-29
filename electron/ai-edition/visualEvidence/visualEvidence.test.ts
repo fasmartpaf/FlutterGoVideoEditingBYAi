@@ -279,11 +279,11 @@ describe("extractVisualEvidenceFrames cache", () => {
 });
 
 describe("prepareVisualEvidenceForTurn capability", () => {
-	it("F — unsupported provider never supplies visualFrames", async () => {
+	it("F — minimax (no visual path) never supplies visualFrames", async () => {
 		const result = await prepareVisualEvidenceForTurn({
 			document: docWithDuration(16),
 			userMessage: "What do you see on the screen?",
-			provider: "local-cli",
+			provider: "minimax",
 			extractDeps: {
 				cacheDir: await mkdtemp(path.join(os.tmpdir(), "os-vf-")),
 				runExtract: async ({ outPath }) => {
@@ -294,6 +294,37 @@ describe("prepareVisualEvidenceForTurn capability", () => {
 		});
 		expect(result.visualFramesSupplied).toBe(false);
 		expect(result.userMessage.content).toBe("What do you see on the screen?");
+	});
+
+	it("F2 — local-cli attaches JPEG paths as text (not multimodal image_url)", async () => {
+		const cacheDir = await mkdtemp(path.join(os.tmpdir(), "os-vf-"));
+		const videoPath = path.join(cacheDir, "clip.mp4");
+		await writeFile(videoPath, "mp4");
+		const document = documentSchema.parse({
+			...docWithDuration(16),
+			assets: [
+				{
+					...docWithDuration(16).assets[0],
+					originalPath: videoPath,
+				},
+			],
+		});
+		const result = await prepareVisualEvidenceForTurn({
+			document,
+			userMessage: "What do you see on the screen?",
+			provider: "local-cli",
+			extractDeps: {
+				cacheDir,
+				runExtract: async ({ outPath }) => {
+					await writeFile(outPath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+					return { width: 320, height: 180 };
+				},
+			},
+		});
+		expect(result.visualFramesSupplied).toBe(true);
+		expect(typeof result.userMessage.content).toBe("string");
+		expect(String(result.userMessage.content)).toContain("path:");
+		expect(String(result.userMessage.content)).toContain("USER REQUEST");
 	});
 
 	it("G — supported provider with successful extract sets visualFrames and attaches images", async () => {

@@ -1245,6 +1245,55 @@
 	border-radius: 50%;
 	background: var(--success);
 }
+.realtimePill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 3px 8px;
+	border-radius: var(--r-pill);
+	font: 500 10.5px/1 var(--font-mono);
+	letter-spacing: 0.02em;
+	color: var(--muted);
+	background: var(--surface-2);
+	border: 1px solid var(--border-soft);
+}
+.realtimePill[data-state="live"] {
+	color: var(--success);
+	border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+.realtimePill[data-state="connecting"] {
+	color: var(--fg-2);
+}
+.realtimeDot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--muted);
+}
+.realtimePill[data-state="live"] .realtimeDot {
+	background: var(--success);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent);
+}
+.realtimePill[data-state="connecting"] .realtimeDot {
+	background: var(--accent);
+	animation: realtimePulse 1.1s ease-in-out infinite;
+}
+@keyframes realtimePulse {
+	0%, 100% { opacity: 0.35; }
+	50% { opacity: 1; }
+}
+.liveStatusRow {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 6px;
+	padding: 6px 8px;
+	border-radius: var(--r-sm);
+	border: 1px solid var(--border-soft);
+	background: var(--surface-2);
+	font: 500 11.5px/1.35 var(--font-body);
+	color: var(--fg-2);
+}
 .stripActions {
 	margin-left: auto;
 	display: inline-flex;
@@ -1280,6 +1329,21 @@
 }
 
 .msg { margin-bottom: var(--sp-3); }
+.chatEmpty {
+	padding: 28px var(--sp-5);
+	text-align: center;
+}
+.chatEmptyTitle {
+	margin: 0 0 8px;
+	font: 600 13px/1.35 var(--font-body);
+	color: var(--fg);
+	letter-spacing: 0.01em;
+}
+.chatEmptyBody {
+	margin: 0;
+	font: 400 12px/1.55 var(--font-body);
+	color: var(--muted);
+}
 .msgHead {
 	display: flex;
 	align-items: center;
@@ -1322,7 +1386,177 @@
 	border: 1px solid var(--border);
 	font-size: var(--fs-app);
 	color: var(--fg-2);
-	line-height: 1.5;
+	line-height: 1.55;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.msg[data-role="user"] .msgBubble {
+	background: var(--surface-2);
+	border-color: var(--border-soft);
+	color: var(--fg);
+}
+.msg[data-role="assistant"] .msgBubble {
+	background: var(--surface);
+	border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+}
+.msgTime {
+	margin-left: auto;
+	font: 500 10px/1 var(--font-mono);
+	color: var(--muted);
+	letter-spacing: 0.02em;
+}
+.liveTools {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 8px;
+	padding: 8px 10px;
+	border-radius: var(--r-md);
+	border: 1px solid var(--border-soft);
+	background: var(--surface-2);
+}
+.liveToolRow {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font: 500 11px/1.4 var(--font-mono);
+	color: var(--fg-2);
+}
+.liveToolRow[data-ok="pending"] {
+	color: var(--muted);
+}
+.liveToolRow[data-ok="true"] {
+	color: var(--success);
+}
+.liveToolRow[data-ok="false"] {
+	color: var(--danger, #e05);
+}
+.appliedTools {
+	margin-top: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.appliedToolRow {
+	font: 500 11px/1.45 var(--font-mono);
+	color: var(--success);
+	padding: 4px 8px;
+	border-radius: var(--r-xs);
+	background: var(--success-soft);
+}
+.activityDetails {
+	margin-top: 6px;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--r-sm);
+	background: var(--surface-2);
+}
+.activitySummary {
+	cursor: pointer;
+	list-style: none;
+	padding: 6px 8px;
+	font: 500 11px/1.3 var(--font-mono);
+	color: var(--meta);
+	user-select: none;
+}
+.activitySummary::-webkit-details-marker {
+	display: none;
+}
+.activitySummary::before {
+	content: "▸ ";
+	color: var(--muted);
+}
+.activityDetails[open] > .activitySummary::before {
+	content: "▾ ";
+}
+.activityBody {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 0 8px 8px;
+	max-height: 180px;
+	overflow: auto;
+}
+.activityRow {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	padding: 4px 6px;
+	border-radius: var(--r-xs);
+	background: var(--surface-3);
+}
+.activityRowName {
+	font: 600 10px/1.3 var(--font);
+	color: var(--fg-2);
+}
+.activityRowDetail {
+	font: 400 10px/1.4 var(--font-mono);
+	color: var(--meta);
+	word-break: break-word;
+}
+.chatMediaGallery {
+	margin-top: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.chatMediaGrid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	gap: 8px;
+}
+.chatMediaGrid[data-has-video="true"] {
+	grid-template-columns: 1fr;
+}
+.chatMediaCard {
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+.chatMediaThumb {
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	object-fit: contain;
+	border-radius: var(--r-sm);
+	background: #0b1220;
+	border: 1px solid var(--border);
+}
+.chatMediaThumb[data-kind="video"] {
+	aspect-ratio: 16 / 9;
+	background: #000;
+}
+.chatMediaLabel {
+	font: 500 11px/1.3 var(--font);
+	color: var(--fg-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.chatMediaActions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.chatMediaActionBtn,
+.chatMediaUseBtn {
+	align-self: flex-start;
+	font: 600 11px/1.2 var(--font);
+	padding: 5px 8px;
+	border-radius: var(--r-sm);
+	border: 1px solid var(--border);
+	background: var(--surface-2);
+	color: var(--fg);
+	cursor: pointer;
+}
+.chatMediaActionBtn:hover:not(:disabled),
+.chatMediaUseBtn:hover:not(:disabled) {
+	background: var(--surface-3);
+}
+.chatMediaActionBtn:disabled,
+.chatMediaUseBtn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 .msgActions {
 	display: flex;
@@ -1390,18 +1624,24 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	padding: 5px 4px 5px 10px;
+	max-width: min(280px, 62vw);
+	padding: 5px 10px;
 	border-radius: var(--r-pill);
 	background: var(--surface-2);
+	border: 1px solid var(--border-soft);
 	font-family: var(--font-mono);
 	font-size: 11px;
 	color: var(--fg-2);
 	letter-spacing: 0.01em;
 	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease);
-	border: 0;
+	transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease);
 }
-.modelPicker:hover { background: var(--surface-3); }
+.modelPicker span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.modelPicker:hover { background: var(--surface-3); border-color: var(--border); }
 .reasoningBtn {
 	display: inline-flex;
 	align-items: center;
@@ -1445,6 +1685,27 @@
 }
 .sendBtn:hover { color: var(--accent); transform: scale(1.05); }
 .sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.stopBtn {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 32px;
+	padding: 0 12px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--surface-3);
+	color: var(--fg);
+	font: 600 12px/1 var(--font-body);
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease),
+		border-color var(--motion-fast) var(--ease);
+}
+.stopBtn:hover {
+	background: color-mix(in srgb, var(--danger, #e5484d) 14%, var(--surface-3));
+	border-color: color-mix(in srgb, var(--danger, #e5484d) 45%, var(--border));
+	color: var(--danger, #e5484d);
+}
 
 /* ─── transcript pane content ─────────────────────────────────── */
 .transcriptClipHead {
@@ -2427,6 +2688,49 @@ button.localCliRow:focus-visible {
 }
 .localCliRow em {
 	font: 400 10.5px/1 var(--font-body);
+	color: var(--muted);
+	font-style: normal;
+}
+.localCliAgentBlock {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.localCliModelsHeading {
+	margin: 4px 10px 2px 28px;
+	font: 600 10px/1.2 var(--font-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.localCliModelRow {
+	display: grid;
+	grid-template-columns: 1fr auto auto;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 10px 7px 28px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: inherit;
+	font: 500 12.5px/1.25 var(--font-body);
+	text-align: left;
+	cursor: pointer;
+}
+button.localCliModelRow:hover:not(:disabled),
+button.localCliModelRow:focus-visible:not(:disabled) {
+	background: var(--surface-3);
+}
+.localCliModelRow[data-selected="true"] {
+	background: var(--surface-3);
+}
+.localCliModelRow[data-unavailable="true"] {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+.localCliModelRow em {
+	font: 400 10.5px/1.2 var(--font-body);
 	color: var(--muted);
 	font-style: normal;
 }

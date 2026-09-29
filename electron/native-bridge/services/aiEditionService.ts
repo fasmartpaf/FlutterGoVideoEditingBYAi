@@ -53,6 +53,7 @@ export interface AiEditionServiceOptions {
 		document?: unknown,
 		sink?: ChatEventSink,
 	) => Promise<AiEditionChatResult>;
+	cancelChat?: (projectId: string, sessionId: string) => boolean;
 	rewindToMessage: (
 		projectId: string,
 		sessionId: string,
@@ -313,6 +314,12 @@ export class AiEditionService {
 		sink?: ChatEventSink,
 	): Promise<AiEditionChatResult> {
 		return this.options.runChat(projectId, sessionId, message, document, sink);
+	}
+
+	chatCancel(projectId: string, sessionId: string): { cancelled: boolean } {
+		const cancel = this.options.cancelChat;
+		if (!cancel) return { cancelled: false };
+		return { cancelled: cancel(projectId, sessionId) };
 	}
 
 	/**

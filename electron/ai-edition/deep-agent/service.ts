@@ -31,16 +31,21 @@ import { getSttManager } from "../../stt/index";
 import {
 	addAnnotationArgs,
 	addAudioArgs,
+	addBeatGraphicsArgs,
 	addCameraFullscreenArgs,
 	addClipArgs,
 	addGraphicArgs,
+	addPrivacyCoverArgs,
+	addCursorHighlightArgs,
 	addSpeedArgs,
 	addTrimArgs,
 	addTrimsArgs,
 	addZoomArgs,
 	addZoomsArgs,
+	createMotionGraphicPreviewArgs,
 	type CursorTelemetryLoad,
 	documentSnapshotForModel,
+	duplicateClipArgs,
 	executeAgentTool,
 	exportProjectArgs,
 	generateCaptionsArgs,
@@ -48,11 +53,16 @@ import {
 	getTranscriptArgs,
 	getTranscriptRangeArgs,
 	getTranscriptWordsArgs,
+	importMediaArgs,
 	isMutatingTool,
+	listCharactersArgs,
 	listSourcesArgs,
+	listTransitionsArgs,
 	moveClipArgs,
 	recordScreenArgs,
+	registerCharacterArgs,
 	removeClipArgs,
+	removeFillerWordsArgs,
 	removeModifierArgs,
 	removeTrimArgs,
 	replaceTimelineArgs,
@@ -61,14 +71,27 @@ import {
 	setAspectRatioArgs,
 	setAudioArgs,
 	setBackgroundArgs,
+	setCaptionSettingsArgs,
 	setCameraFullscreenArgs,
+	setEditorSettingsArgs,
 	setClipCropArgs,
+	setClipIncomingTransitionArgs,
 	setClipRangeArgs,
 	setSpeedArgs,
 	setTrimArgs,
 	setWordTextArgs,
 	setZoomArgs,
+	splitClipArgs,
+	tightenPacingArgs,
+	insertStartThumbnailArgs,
 } from "../agent-tools";
+import { overagentCookbookSection } from "../overagentEditCookbook";
+import { resolveFfmpeg } from "../../media/audioPeaks";
+import {
+	discardPreparedFiles,
+	type PreparedToolMedia,
+	prepareAgentToolMedia,
+} from "../agentToolMedia";
 import {
 	APPLY_PREVIEW_V1_PROVIDER_ID,
 	type ApplyPreflight,
@@ -116,6 +139,7 @@ import {
 	type MutationMode,
 	type MutationTelemetry,
 	resolveMutationAuthority,
+	withLocalCliWriteGrant,
 } from "../mutationAuthority";
 import { type PlanningClosureResult, preparePlanningClosureForTurn } from "../planningClosure";
 import {
@@ -273,8 +297,10 @@ export interface OpenScreenAgentSink {
 	 * that would otherwise be invisible "dead air" while the model thinks. */
 	thinking: (delta: string) => void;
 	toolStart: (name: string, args: unknown) => void;
-	toolEnd: (name: string, ok: boolean, summary?: string) => void;
+	toolEnd: (name: string, ok: boolean, summary?: string, resultJson?: string) => void;
 	error: (message: string) => void;
+	/** Live status line for Local CLI progress (Bash / heartbeats) in the chat board. */
+	status?: (phase: string, detail?: string) => void;
 }
 
 // The tool arg schemas live in agent-tools.ts (imported above) — one source of truth for
@@ -356,15 +382,16 @@ const BASE_SYSTEM_PROMPT = [
 	"How the tools map to intent — pick the most specific one, and prefer the smallest edit that satisfies the request:",
 	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
 	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim. addClip places an unused recording already in this project onto the timeline (projectQueue.unusedAssets lists them; beforeClipId works like moveClip). setClipCrop sets a clip's cropRegion in 0–1 frame fractions; pass crop: null to clear it.",
-	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen and can set textAnimation (fade, rise, pop, slide-left, typewriter, pulse) — that is the official text enter animation, not a clip-to-clip video transition. This document has no clip-transition field; say so if asked. addGraphic creates a title, lower third, badge, CTA, bar, arrow, or image overlay and places it on the timeline — preview and export already composite it; there is no extra merge step. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
-	"- addAudio lays an imported voiceover or music file over a span. It plays an asset the project already has (kind 'audio'); importing or recording one is the editor's job, not a tool you have — so when the project has none, say so rather than naming an id that does not exist. gainDb and fadeInSec/fadeOutSec are the official level and fades. There is no multi-band EQ field; say so if asked.",
+	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen and can set textAnimation (fade, rise, pop, slide-left, typewriter, pulse) — that is a TEXT enter animation on an overlay, not a clip-to-clip transition. Clip-to-clip transitions: splitClip then setClipIncomingTransition on the right half (kind dissolve/cut or transitionId from listTransitions). addGraphic creates a title, lower third, badge, CTA, bar, arrow, or image OVERLAY on existing footage — preview and export already composite it. For a start-of-video thumbnail/cover that should be its OWN opening segment, use insertStartThumbnail (never a full-bleed addGraphic at 0s — that hides the take). addCameraFullscreen enlarges the webcam where assets[].hasCameraTrack is true.`,
+	"- Structure tools: splitClip, duplicateClip, importMedia (video/audio from disk), insertStartThumbnail (still→opening clip), moveClip, removeClip, setClipRange, setClipCrop, tightenPacing, removeFillerWords.",
+	"- addAudio lays an imported voiceover or music file over a span. It plays an asset the project already has (kind 'audio'); import with importMedia(path, kind:\"audio\") first. gainDb and fadeInSec/fadeOutSec are the official level and fades. There is no multi-band EQ field; say so if asked.",
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
 	"- Deleting is a first-class action, not a workaround: removeTrim, removeModifier, removeClip. Never fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
-	"- listSources lists screens, windows and microphones the user can record. recordScreen starts a headless capture through the local CLI (pass window title or display index, and durationSec). generateCaptions runs on-device Whisper. exportProject renders MP4/GIF. setAspectRatio and setBackground change the output frame (e.g. 9:16) and wallpaper.",
+	"- listSources lists screens, windows and microphones the user can record. recordScreen starts a headless capture through the local CLI (pass window title or display index, and durationSec). generateCaptions runs on-device Whisper. exportProject renders MP4/GIF. setAspectRatio and setBackground change the output frame (e.g. 9:16) and wallpaper (bundled index, CSS, image path, or data URI). setCaptionSettings toggles/styles burn-in captions (size, position, plate). setEditorSettings edits the Effects/Layout look: padding, roundness, shadow, blur, fitClip (edge-to-edge), webcam layout, cursor show/size. listTransitions lists clip-join transition ids you can pass to setClipIncomingTransition.",
 	"- addAnnotation type 'text' is titles, labels and CTAs (Try Now, Visit …, Subscribe) — visual graphics in the export, not clickable links. type 'image' is a PNG/JPEG overlay (pass image as a data URI, or text to bake a plate). type 'figure' is an arrow callout. type 'blur' hides part of the recording (faces, logos, UI chrome) with a mosaic or blur cover — it does not reconstruct the background. Style with color, backgroundColor, fontSize and textAnimation.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
 	"",
-	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan grounded in THIS recording's evidence; apply the smallest tools only when the user has consented to edits and evidence supports the landing; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → addTrims only when transcript/silence evidence supports ranges. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom only when available evidence identifies a focus target — never invent faces/logos/buttons. Captions → generateCaptions, then setWordText for fixes. Ending CTA / title / lower third → addGraphic only when the request and evidence support it. Unused take → addClip from projectQueue.unusedAssets. Music → addAudio only when an audio asset exists; duck with gainDb over speech spans. Do NOT invent 'opening hook zooms', smart-zoom recipes, or generic professional-video tool lists when TRUSTED_EDITORIAL_PLAN is attached or when no grounded Edit Plan strategy prefers that family. Do not invent clip-to-clip transitions, saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document.",
+	"One-pass finish (promo, tutorial, demo, social post): read mediaCapabilities and mediaContext (textual outline) plus projectQueue; use getTranscript only if you need more speech detail; state a short plan grounded in THIS recording's evidence; apply the smallest tools only when the user has consented to edits and evidence supports the landing; re-read getCurrentDocument and report only what landed. Do not pretend you re-inspected pixels when mediaCapabilities.visualFrames is false. Dead air → tightenPacing or addTrims when transcript/silence evidence supports ranges. Portrait/social → setAspectRatio (9:16 / 1:1) plus crop or cursor-anchored zoom only when available evidence identifies a focus target — never invent faces/logos/buttons. Captions → generateCaptions, then setCaptionSettings to enable/style, setWordText for word fixes. Frame look → setEditorSettings (padding/round/shadow or fitClip) and setBackground. Start cover/thumbnail → insertStartThumbnail. Ending CTA / title / lower third ON footage → addGraphic. Mid-cut dissolve/wipe → splitClip then setClipIncomingTransition (listTransitions for ids). Unused take → addClip from projectQueue.unusedAssets. Music → importMedia audio then addAudio; duck with gainDb over speech spans. Do NOT invent 'opening hook zooms', smart-zoom recipes, or generic professional-video tool lists when TRUSTED_EDITORIAL_PLAN is attached or when no grounded Edit Plan strategy prefers that family. Do not invent saved templates, generated voice, brand kits, multi-band EQ, clickable links, or paid generation costs — those are not fields on this document. True keyframe/Lottie motion engines are not tools; for motion graphics bake a PNG/WebP and place with insertStartThumbnail or addGraphic(imagePath), plus textAnimation for title enters.",
 	"",
 	"Trusted editorial chain (when TRUSTED_EDITORIAL_PLAN appears in the user message): Source Story → Target Story → Edit Gap → Edit Plan are authoritative for concrete edit families (zoom/trim/crop/caption/annotation/speed/graphic). Prefer honest 'no safe recording-specific edit yet' or 'needs more grounded evidence' over inventing zooms/trims. User intent does not override missing evidence.",
 	"Mutation authority: on semantic/editorial turns, write tools refuse before changing the document. Propose via the Edit Review card; never claim an edit was applied unless the user approved Apply Preview.",
@@ -412,11 +439,13 @@ export function buildSystemPrompt(options: {
 	mutationMode?: "proposal_only" | "read_only" | "deterministic_edit" | "consented_apply";
 	openProject?: Record<string, unknown>;
 }): string {
-	let base = BASE_SYSTEM_PROMPT;
+	// Cookbook is part of the normal editing rules prefix so consent / proposal
+	// blocks can append after SYSTEM_PROMPT without rewriting it.
+	let base = `${BASE_SYSTEM_PROMPT}\n\n${overagentCookbookSection()}`;
 	if (options.editsAllowed === false) {
-		base = BASE_SYSTEM_PROMPT + CONSENT_PROMPT_BLOCK;
+		base = base + CONSENT_PROMPT_BLOCK;
 	} else if (options.mutationMode === "proposal_only" || options.mutationMode === "read_only") {
-		base = BASE_SYSTEM_PROMPT + PROPOSAL_ONLY_PROMPT_BLOCK;
+		base = base + PROPOSAL_ONLY_PROMPT_BLOCK;
 	}
 	if (!options.openProject) return base;
 	return `${base}${OPEN_PROJECT_PROMPT_BLOCK}\n${JSON.stringify(options.openProject)}`;
@@ -435,22 +464,44 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Read transcript segments overlapping a SOURCE-time window (startSourceTimeSec/endSourceTimeSec). Use this to correlate speech with a visual change or cursor event. Same evidence as getTranscript with a range — never invents visual facts from speech.",
 	getCursorTrack:
 		"Read the recorded pointer track for an asset: where the cursor was over time, downsampled to a readable rate. Each point carries atSec (the asset's own source clock), virtualSec (the same instant on the edited timeline — the coordinate addZoom takes, null when no clip carries it), cx/cy as 0–1 fractions of the frame, and `shape`, an index into the pointer bitmaps the recording used (equal values are the same pointer; a change means the pointer changed, e.g. arrow to text caret). Points that are not plain moves carry `kind`; points a trim cuts out of playback carry `trimmed`. These are real samples, not a summary — reading what the pointer was doing is yours. Omit assetId for the primary asset. It answers `available:false` in two DIFFERENT ways you must not confuse: reason 'no-sidecar' means this asset was checked and genuinely has no telemetry, while reason 'unavailable' means it could not be read from here.",
+	listCharacters:
+		"List presenter characters you can place on the video: built-in ids (guide, pointer, coach, spark, bot) plus any the user/agent registered. Use characterId with addCursorHighlight(style:\"character\") or addGraphic. For a custom upload or a PNG you rendered, pass characterPath or registerCharacter first.",
+	createMotionGraphicPreview:
+		"OPTIONAL shortcut: bake a short title-card MOTION GRAPHIC MP4 for the chat board (does NOT place on the timeline). Pass titles[]. Use only when a quick baked preview fits — you may instead author custom HTML/SVG/ffmpeg/Remotion assets via CLI and importMedia. Chat plays the video; place later with importMedia / insertStartThumbnail / addGraphic.",
+	registerCharacter:
+		"Save a custom character on this project from imagePath (user upload / agent-made PNG) or image (data URI). Pick a new id (not a builtin). Then reuse with addCursorHighlight({ style:\"character\", characterId }) or addGraphic({ characterId }).",
 	getTranscriptWords:
 		'Read the transcript one WORD at a time for an asset: each word\'s id, text, start/end seconds, and — only when it is not plain transcription — `source` ("user" for a word the user corrected, "synth" for one they typed in) and `originalText` (what the transcriber had heard before the correction). This is the ONLY read that gives you the ids setWordText takes; getTranscript answers in segments, whose ids belong to a different namespace and are not accepted there. A whole transcript is large, so pass startSec/endSec to read just the passage you mean to fix. Omit assetId for the primary asset.',
 	setWordText:
 		"Correct ONE word's text, by the id getTranscriptWords returns. This changes the TRANSCRIPT and nothing else: the captions follow it, the film is untouched and no audio is cut. Use it when the transcriber misheard something — a name, a technical term — and the user asks for it to read correctly. Passing an empty string BLANKS the word: it keeps its place in the media but leaves the captions, which is how a junk token like \"(inaudible)\" is removed without cutting the speech around it. Writing the transcriber's own text back clears the correction. This is NOT how you make a spoken word go away — that removes only the label and leaves the film saying it; use addTrim, which cuts the audio with it.",
 	addTrim:
-		"Add ONE trim range: a cut of a span inside a clip (this source-time span will not be played or exported) that does NOT split the clip. Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. When you have several cuts to make, use addTrims and send them together — this one is for a single cut or a later correction. A cut belongs to ONE clip: `clipId` is inferred when a single clip covers the range, but when several clips draw on the same asset over it the call FAILS and lists them — pass the `clipId` you mean (ids come from getCurrentDocument).",
+		"Add ONE trim range: a cut of a span inside a clip (this source-time span will not be played or exported) that does NOT split the clip. Times are in seconds of the asset's source time. For bulk 'remove silences / dead air', prefer tightenPacing (uses transcript silence segments) or addTrims. A cut belongs to ONE clip: `clipId` is inferred when a single clip covers the range, but when several clips draw on the same asset over it the call FAILS and lists them — pass the `clipId` you mean (ids come from getCurrentDocument).",
 	addTrims:
 		"Add MANY trim ranges in one call: `ranges` is a list, each entry taking exactly the fields addTrim takes. Use this whenever you have more than one cut to make — 'remove the silences' on a half-hour recording is hundreds of cuts, and sending them one at a time costs one round trip each. Each range stands or falls ALONE: one that cannot be placed is refused by itself and listed in `refused` with its index and the reason, while every other range is still applied. Nothing is rolled back, so a single bad bound never costs you the rest. The result leads with requested / appliedCount / refusedCount so you can see a partial outcome without re-reading the document — report what was refused rather than claiming the whole list landed.",
 	setTrim:
 		"Move or resize an existing trim range by id. Times are source-time seconds. The cut follows to whichever clip the new range lands in, when that clip is unambiguous.",
+	tightenPacing:
+		"Cut dead air / long silences using the asset transcript's silence segments (source time). Optional minSilenceSec (default 0.45) and keepPauseSec (default 0.12 left after each cut). Requires a transcript — run generateCaptions first if missing. Prefer this for 'remove silences', 'cut dead air', 'tighten pacing'.",
+	removeFillerWords:
+		"Cut um/uh/erm/ah (and optional extraWords) from the transcript by adding trims over those word spans. Requires a transcript. Does not rewrite captions alone — it removes the audio of those fillers.",
 	setClipRange:
-		"Set a clip's in/out points (source-time seconds) to shorten its head or tail — distinct from a trim (which cuts a span inside the clip). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically. Use this ONLY when the user explicitly asks to shorten or extend a user-placed clip. Do NOT use this for 'remove silences' or 'cut pauses' — for those, use addTrim.",
+		"Set a clip's in/out points (source-time seconds) to shorten its head or tail — distinct from a trim (which cuts a span inside the clip). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically. Use this ONLY when the user explicitly asks to shorten or extend a user-placed clip. Do NOT use this for 'remove silences' or 'cut pauses' — for those, use tightenPacing or addTrim.",
 	addClip:
-		"Place an unused recording already in this project onto the timeline as a new clip. assetId must name a video asset from getCurrentDocument — projectQueue.unusedAssets lists the ones not yet placed. beforeClipId works like moveClip (omit or null to put it last). Optional sourceStartSec/sourceEndSec crop the file's in/out; omit them to place the full file. This cannot import a file from disk. Audio assets belong on addAudio, not here.",
+		"Place an unused recording already in this project onto the timeline as a new clip. assetId must name a video asset from getCurrentDocument — projectQueue.unusedAssets lists the ones not yet placed. beforeClipId works like moveClip (omit or null to put it last). Optional sourceStartSec/sourceEndSec crop the file's in/out; omit them to place the full file. To bring a NEW file from disk into the project, use importMedia first. Audio assets belong on addAudio, not here.",
+	splitClip:
+		"Split one timeline clip into two at a SOURCE-time instant (atSourceSec). The right half is born with a hard-cut incoming transition so the join stays a real edit boundary — then call setClipIncomingTransition on the right clip id for dissolve/wipe/etc. Use when the user wants a transition mid-recording or to split before deleting/reordering one half.",
+	duplicateClip:
+		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
+	importMedia:
+		"Import a video or audio file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk.",
+	insertStartThumbnail:
+		"Put a FULL-FRAME opening segment at the START of the timeline (its own clip), then the recording plays after it. Use for thumbnail / cover / start frame — NEVER addGraphic for that (addGraphic is an overlay ON the take and hides part of the video). Pass imagePath or image (data URI), or text/subtext to bake a title plate. durationSec default 2.5. Matches project canvas size. Removes leftover full-bleed start overlays by default. If projectQueue.hasStartThumbnail is true, do NOT call this for polish/attractive asks — keep the existing opener, or pass replace:true only when the user asks to change the cover.",
+	listTransitions:
+		"List clip-to-clip transition ids available on this machine (dissolve, cut, wipe, slide, …). Call before setClipIncomingTransition when unsure of transitionId. Optional backend: metal|d3d11|wgpu.",
 	setClipCrop:
 		"Set a clip's cropRegion in 0–1 fractions of the source frame (x, y, width, height). Pass crop: null to restore the full frame. This is a per-clip crop, not a zoom — use addZoom when the picture should magnify over a span.",
+	setClipIncomingTransition:
+		"Set the incoming transition on a NON-FIRST clip (the join into that clip — index ≥ 1). Pass kind cut|dissolve and/or transitionId from the registry (openscreen.dissolve, openscreen.cut, gl.wipeLeft, gl.slideLeft, …). durationSec for non-cuts (default ~0.35). After splitClip, style the right half with this tool. Never call this on clip index 0 or when only one clip remains (e.g. after removeClip of a start thumbnail) — split first or skip.",
 	moveClip:
 		"Reorder a placed clip: move `clipId` so it plays just before `beforeClipId` (pass null, or omit it, to move it last). Ids come from getCurrentDocument, where each clip carries its `index` and its label in `reason`. This preserves every clip id, every source range, every trim, and the zooms / speed regions / annotations anchored to each clip. This is the tool for 'swap these clips', 'put X first' and 'change the clip order' — replaceTimeline cannot reorder anything.",
 	replaceTimeline:
@@ -463,9 +514,15 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setSpeed:
 		"Move, resize, or change the multiplier of an existing speed region by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addAnnotation:
-		"Add an on-screen graphic over a span of the edited timeline (virtual seconds). type is text (titles, labels, CTAs such as Try Now), image (PNG/JPEG overlay), figure (arrow callout) or blur (mosaic/blur a region). For image, pass image as a data URI, or text to bake a local plate. x/y/width/height are frame percentages (0–100). color, backgroundColor, fontSize, fontWeight and textAlign style a text/CTA. textAnimation is the official enter animation: none, fade, rise, pop, slide-left, typewriter, or pulse — not a clip-to-clip video transition. The graphic is already composited in preview and export. CTAs in the export are visual only; they are not clickable links.",
+		"Add an on-screen graphic over a span of the edited timeline (virtual seconds). type is text (titles, labels, CTAs such as Try Now), image (PNG/JPEG overlay), figure (arrow callout) or blur (mosaic/blur a region). For PRIVACY (hide name / avatar / profile / PII), prefer addPrivacyCover with a preset instead of guessing tiny blur boxes. For image, pass image as a data URI, or text to bake a local plate. x/y/width/height are frame percentages (0–100).",
+	addPrivacyCover:
+		"Hide private UI (name, avatar, profile pic, browser chrome) with a reliable mosaic/blur preset over the full edited timeline by default. preset: topStrip (full top chrome — best for name+avatar), topRight, bottomRight, or fullFrame. includeTopRight defaults true with topStrip. replaceExistingBlurs defaults true. Do NOT ask the user for percentages — call this immediately for privacy asks. Prefer mosaic.",
+	addCursorHighlight:
+		"Place on-video highlights that FOLLOW the recorded pointer (requires cursor telemetry). style: finger|ring|callout|character. For character: pass characterId from listCharacters (guide/pointer/coach/spark/bot or registered), or characterPath/image for a user upload / agent-made PNG. Samples everySec up to maxPoints. clicksOnly:true limits to clicks. Not lip-synced speech.",
+	addBeatGraphics:
+		"OPTIONAL shortcut: place static image overlays or previewOnly PNG plates (badge|title|lowerThird|character) across beats. Not mandatory for 'graphics' / 'improve' asks — inspect first and prefer custom assets when quality matters. previewOnly:true shows files in chat without placing on the timeline.",
 	addGraphic:
-		"Create a graphic and place it on the footage (virtual seconds). kind is title, lowerThird, badge, cta, bar, figure (arrow), or image. text/subtext label it; image is an optional PNG/JPEG data URI for kind image (omit it to bake a local plate from the text). Layout defaults to a FlutterGo-style position; override with x/y/width/height (frame %). This writes an official annotation — preview and export already merge it onto the video. Prefer this over addAnnotation when the user asks for a title, CTA, lower third, badge, or logo.",
+		"Create a graphic OVERLAY on the footage (virtual seconds) — titles, lower-thirds, CTAs, badges. kind is title, lowerThird, badge, cta, bar, figure, image, intro, or outro. Layout is TOP-LEFT frame % (not center). Do NOT use this for a start-of-video thumbnail/cover that should be its own opening segment — that hides the take underneath; call insertStartThumbnail instead. Prefer this over addAnnotation for on-clip titles/CTAs.",
 	setAnnotation:
 		"Move, resize, restyle, or edit an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed. Style and textAnimation apply to text/CTA; image replaces an overlay's pixels (data URI); arrowDirection to a figure; blurKind/blurShape to a blur.",
 	addCameraFullscreen:
@@ -473,7 +530,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setCameraFullscreen:
 		"Move or resize an existing camera-fullscreen region by id (virtual-timeline seconds). Only the fields you pass are changed. Refused if the new span lands on footage with no linked webcam.",
 	addAudio:
-		"Lay an ALREADY-IMPORTED audio file over the recording across a span of the edited timeline (virtual seconds): a voiceover, or a music bed. assetId must name an asset whose kind is 'audio' — getCurrentDocument lists them; nothing here can import a file from disk or record one, so if there is none, say so instead of guessing an id. Omit endSec to play the whole file from offsetSec. kind picks the lane ('voiceover' or 'music'). offsetSec is where in the FILE playback starts, gainDb its level (0 unchanged, negative ducks it), fadeInSec/fadeOutSec its official fades. There is no multi-band EQ. A voiceover-lane track is also what gets transcribed, so the lane is not only cosmetic.",
+		"Lay an audio asset over the recording across a span of the edited timeline (virtual seconds): voiceover or music bed. assetId must be kind 'audio' — import with importMedia(path, kind:\"audio\") first if needed. Omit endSec to play the whole file from offsetSec. kind picks the lane ('voiceover' or 'music'). gainDb ducks/levels; fadeInSec/fadeOutSec for fades. No multi-band EQ.",
 	setAudio:
 		"Move, resize, re-level, fade, re-lane, mute, loop or re-point an existing audio track by id (virtual-timeline seconds). Only the fields you pass are changed. Use it to duck a bed under narration (gainDb), to fade in/out (fadeInSec/fadeOutSec), to shift what part of the file plays (offsetSec), or to move it between the voiceover and music lanes (kind). This is level and fade, not parametric EQ. The whole track is edited, not one fragment of it, so a track split across a cut stays one thing.",
 	removeTrim:
@@ -485,7 +542,11 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setAspectRatio:
 		"Set the project's output aspect ratio to a W:H token such as 9:16, 16:9, or 1:1. Preview and export both use this.",
 	setBackground:
-		"Set the wallpaper behind the recording: a bundled wallpaper index 1–18, a /wallpapers/wallpaperN.jpg path, a CSS color, or a CSS gradient.",
+		"Set the wallpaper behind the recording: a bundled wallpaper index 1–18, a /wallpapers/wallpaperN.jpg path, a CSS color/gradient, an absolute image path (.png/.jpg/.webp/.gif), or an image data URI.",
+	setCaptionSettings:
+		"Enable/style burn-in captions (transcript stays SSOT). Pass only fields to change: enabled, fontSize, fontWeight, color, backgroundEnabled/Color/Opacity, anchorV (bottom|top), anchorH (left|center|right), insetY/insetX (%), min/maxWordsPerLine, captionLane (recording|voiceover). Use after generateCaptions, or to toggle/restyle existing captions. Not for rewriting spoken words — use setWordText for that.",
+	setEditorSettings:
+		"Edit composition look (Effects + Layout panes): padding, borderRadius, shadowIntensity, showBlur, motionBlurAmount, audioGainDb, autoFocusAll, webcamLayoutPreset (picture-in-picture|vertical-stack|dual-frame|no-webcam), webcam mask/mirror/size, webcamBackgroundMode (none|transparent|blur|custom) + webcamBlurIntensity, cursorShow/theme/size/smoothing. fitClip:true zeros pad/round/shadow and sets aspect to fitClipAspect (default native) for edge-to-edge. Pass only fields you want to change. Prefer this over inventing zooms when the user asks for a cleaner/professional frame.",
 	listSources:
 		"List capturable displays, windows and microphones on this computer via the local OpenScreen CLI. Use this before recordScreen so the user can pick a source.",
 	recordScreen:
@@ -543,7 +604,25 @@ interface ToolRuntime {
 	availableByAssetId?: Record<string, boolean>;
 	cli?: CliEngine;
 	visualFramesSupplied?: boolean;
+	/** Chat Stop — aborts in-flight media renders (ffmpeg) for this turn. */
+	abortSignal?: AbortSignal;
 }
+
+/**
+ * Tools whose slow media work (video renders, ffprobe, image downscaling) runs
+ * in the async media step before the synchronous executor, so the main process
+ * never blocks on ffmpeg.
+ */
+const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
+	"importMedia",
+	"insertStartThumbnail",
+	"createMotionGraphicPreview",
+	"addGraphic",
+	"registerCharacter",
+	"addCursorHighlight",
+	"addBeatGraphics",
+	"setBackground",
+]);
 
 const CLI_PROCESS_TOOLS: ReadonlySet<string> = new Set([
 	"listSources",
@@ -573,6 +652,7 @@ const TOOLS_READING_CURSOR: ReadonlySet<string> = new Set([
 	"addZoom",
 	"addZooms",
 	"setZoom",
+	"addCursorHighlight",
 ]);
 
 // One document tool: run it through the shared executor, advance the holder so
@@ -624,7 +704,7 @@ function documentTool<S extends z.ZodType>(
 							telemetry.mutatingToolsRejected.push({ name, code: "refused" });
 						}
 					}
-					sink.toolEnd(name, execution.ok, execution.summary);
+					sink.toolEnd(name, execution.ok, execution.summary, execution.resultJson);
 					return execution.resultJson;
 				}
 				const execution = await runtime.cli.run(
@@ -636,18 +716,45 @@ function documentTool<S extends z.ZodType>(
 				if (execution.ok && isMutatingTool(name)) {
 					telemetry.mutatingToolsExecuted.push(name);
 				}
-				sink.toolEnd(name, execution.ok, execution.summary);
+				sink.toolEnd(name, execution.ok, execution.summary, execution.resultJson);
 				return execution.resultJson;
 			}
 			const load = TOOLS_READING_CURSOR.has(name)
 				? await loadCursorTelemetry(holder.current, args, runtime)
 				: undefined;
-			const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
+			let callArgs: unknown = args;
+			let prepared: PreparedToolMedia | undefined;
+			let discardOnFailure: string[] = [];
+			if (MEDIA_PREP_TOOLS.has(name)) {
+				try {
+					const prep = await prepareAgentToolMedia(holder.current, name, args, {
+						ffmpegPath: resolveFfmpeg()?.trim() || null,
+						signal: runtime.abortSignal,
+						mayMutate:
+							editsAllowed !== false &&
+							mutationMode !== "proposal_only" &&
+							mutationMode !== "read_only",
+					});
+					callArgs = prep.args;
+					prepared = prep.prepared;
+					discardOnFailure = prep.discardOnFailure;
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const resultJson = JSON.stringify({ error: message });
+					sink.toolEnd(name, false, message, resultJson);
+					// Stop pressed mid-render: surface it so the turn ends now.
+					if (err instanceof Error && err.name === "AbortError") throw err;
+					return resultJson;
+				}
+			}
+			const execution = executeAgentTool(holder.current, name, JSON.stringify(callArgs), {
 				editsAllowed,
 				mutationMode,
 				cursorTelemetry: { availableByAssetId: runtime.availableByAssetId, load },
 				visualFramesSupplied: runtime.visualFramesSupplied,
+				prepared,
 			});
+			if (!execution.ok && discardOnFailure.length > 0) discardPreparedFiles(discardOnFailure);
 			if (execution.document) holder.current = execution.document;
 			if (isMutatingTool(name)) {
 				if (execution.ok) telemetry.mutatingToolsExecuted.push(name);
@@ -663,7 +770,7 @@ function documentTool<S extends z.ZodType>(
 					}
 				}
 			}
-			sink.toolEnd(name, execution.ok, execution.summary);
+			sink.toolEnd(name, execution.ok, execution.summary, execution.resultJson);
 			return execution.resultJson;
 		},
 		{ name, description: TOOL_DESCRIPTIONS[name], schema },
@@ -731,13 +838,23 @@ export function buildTools(
 		build("getTranscriptRange", getTranscriptRangeArgs),
 		build("getTranscriptWords", getTranscriptWordsArgs),
 		build("getCursorTrack", getCursorTrackArgs),
+		build("listCharacters", listCharactersArgs),
+		build("createMotionGraphicPreview", createMotionGraphicPreviewArgs),
 		build("setWordText", setWordTextArgs),
 		build("addTrim", addTrimArgs),
 		build("addTrims", addTrimsArgs),
 		build("setTrim", setTrimArgs),
+		build("tightenPacing", tightenPacingArgs),
+		build("removeFillerWords", removeFillerWordsArgs),
 		build("setClipRange", setClipRangeArgs),
 		build("addClip", addClipArgs),
+		build("splitClip", splitClipArgs),
+		build("duplicateClip", duplicateClipArgs),
+		build("importMedia", importMediaArgs),
+		build("insertStartThumbnail", insertStartThumbnailArgs),
+		build("listTransitions", listTransitionsArgs),
 		build("setClipCrop", setClipCropArgs),
+		build("setClipIncomingTransition", setClipIncomingTransitionArgs),
 		build("moveClip", moveClipArgs),
 		build("replaceTimeline", replaceTimelineArgs),
 		build("addZoom", addZoomArgs),
@@ -746,6 +863,10 @@ export function buildTools(
 		build("addSpeed", addSpeedArgs),
 		build("setSpeed", setSpeedArgs),
 		build("addAnnotation", addAnnotationArgs),
+		build("addPrivacyCover", addPrivacyCoverArgs),
+		build("addCursorHighlight", addCursorHighlightArgs),
+		build("registerCharacter", registerCharacterArgs),
+		build("addBeatGraphics", addBeatGraphicsArgs),
 		build("addGraphic", addGraphicArgs),
 		build("setAnnotation", setAnnotationArgs),
 		build("addCameraFullscreen", addCameraFullscreenArgs),
@@ -757,6 +878,8 @@ export function buildTools(
 		build("removeClip", removeClipArgs),
 		build("setAspectRatio", setAspectRatioArgs),
 		build("setBackground", setBackgroundArgs),
+		build("setCaptionSettings", setCaptionSettingsArgs),
+		build("setEditorSettings", setEditorSettingsArgs),
 		build("listSources", listSourcesArgs),
 		build("recordScreen", recordScreenArgs),
 		build("generateCaptions", generateCaptionsArgs),
@@ -818,6 +941,10 @@ export interface InvokeArgs {
 	 * When exceeded, return provider_error with failureReason model_call_budget_exceeded.
 	 */
 	maxProviderModelCalls?: number;
+	/** Stop button / chat.cancel — kills Local CLI and breaks the agent stream. */
+	abortSignal?: AbortSignal;
+	/** OpenScreen chat session id — keeps Local CLI memory across turns. */
+	chatSessionId?: string;
 }
 
 /** One cheap probe per asset, run before the tools are built so the very first
@@ -1046,9 +1173,13 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	const projectKeyEarly = String(workingDocument.project.id ?? "unknown");
 	let localEditorialRequest = classifyLocalEditorialTurn(userMessage, projectKeyEarly);
 
+	const preferLocalCliAgent = model.provider === "local-cli";
+
 	// Local-first Chat control: direct / restore / constraint / semantic brain — prefer 0 provider.
 	// Runs before model construction so missing/429 OpenAI cannot block ordinary edits.
-	if (editsAllowed && shouldHandleLocalEditorialWithoutCloud(userMessage, projectKeyEarly)) {
+	// When Local CLI is selected, never short-circuit into the local editorial/semantic brain —
+	// Claude Code / Cursor must own the turn (including "apply" / motion graphics).
+	if (editsAllowed && !preferLocalCliAgent && shouldHandleLocalEditorialWithoutCloud(userMessage, projectKeyEarly)) {
 		let cursorSamplesEarly: Array<{
 			atSec: number;
 			cx: number;
@@ -1127,16 +1258,9 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		}
 	}
 
-	// ponytail: build a fresh agent per turn (same pattern as axcut). The
-	// runtime side-effects (langgraph thread) are tied to the agent instance —
-	// checkpoint-based stateful threads can land later by passing a
-	// `checkpointer`; for v1 each turn is single-shot.
-	const chatModel = await createOpenScreenChatModel({
-		...model,
-		mediaDirs: shouldGrantLocalWatch(model.localAgentPermission, Boolean(model.watchGranted))
-			? mediaDirsFromDocument(workingDocument)
-			: [],
-	});
+	// Chat model is created after visual prep so Local CLI can receive frame
+	// file paths + media dirs that include the JPEG cache folder.
+	let chatModel: Awaited<ReturnType<typeof createOpenScreenChatModel>> | null = null;
 	const availableByAssetId = await probeCursorTelemetry(workingDocument, args.cursor);
 
 	const turnT0 = Date.now();
@@ -1198,10 +1322,13 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	let boundedDiagnostics: InvokeResult["boundedDiagnostics"];
 	let exposedToolNames: string[] = [];
 
-	const authority = resolveMutationAuthority({
-		contextNeeds,
-		editsAllowed,
-	});
+	const authority = withLocalCliWriteGrant(
+		resolveMutationAuthority({
+			contextNeeds,
+			editsAllowed,
+		}),
+		{ localCli: preferLocalCliAgent, editsAllowed },
+	);
 	const agentEditsAllowed = authority.agentEditsAllowed;
 	const fingerprintBefore = fingerprintDocument(workingDocument).value;
 	const mutationTelemetry = emptyMutationTelemetry({
@@ -1274,6 +1401,10 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	}
 
 	const tVisual0 = Date.now();
+	const localCliWatchGranted =
+		model.provider === "local-cli"
+			? shouldGrantLocalWatch(model.localAgentPermission, Boolean(model.watchGranted))
+			: true;
 	let visual = await prepareVisualEvidenceForTurn({
 		document: workingDocument,
 		userMessage,
@@ -1283,11 +1414,13 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		...(retrievalMode
 			? {
 					maxFrames: frameBudget.maxExtract,
-					skipVisualAttachment: frameBudget.maxFrames === 0,
+					skipVisualAttachment: frameBudget.maxFrames === 0 || !localCliWatchGranted,
 					coverageFirst: frameBudget.coverageFirst,
 					queryScope,
 				}
-			: {}),
+			: localCliWatchGranted
+				? {}
+				: { skipVisualAttachment: true }),
 	});
 	visualPrepMs = Date.now() - tVisual0;
 
@@ -1305,10 +1438,16 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		frameMeta = selected.meta;
 		visualCoverage = selected.coverage;
 		if (selected.frames.length !== visual.prepared.frames.length) {
-			const content = await buildVisualEvidenceUserContent(userMessage, selected.frames, {
-				changes: visual.prepared.changes,
-				includeSemanticGrounding: true,
-			});
+			const { providerUsesFrameFilePaths } = await import("../visualEvidence/providers");
+			const { buildVisualEvidencePathUserContent } = await import("../visualEvidence/attach");
+			const content = providerUsesFrameFilePaths(model.provider)
+				? buildVisualEvidencePathUserContent(userMessage, selected.frames, {
+						changes: visual.prepared.changes,
+					})
+				: await buildVisualEvidenceUserContent(userMessage, selected.frames, {
+						changes: visual.prepared.changes,
+						includeSemanticGrounding: true,
+					});
 			const reasonLines = [
 				"FRAME_ATTACH_REASONS (deterministic selection):",
 				...frameMeta.map(
@@ -1316,10 +1455,12 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				),
 				"",
 			].join("\n");
-			visual.userMessage = toAgentUserMessage([
-				{ type: "text", text: reasonLines },
-				...(Array.isArray(content) ? content : []),
-			]);
+			visual.userMessage = providerUsesFrameFilePaths(model.provider)
+				? toAgentUserMessage(`${reasonLines}\n${typeof content === "string" ? content : ""}`)
+				: toAgentUserMessage([
+						{ type: "text", text: reasonLines },
+						...(Array.isArray(content) ? content : []),
+					]);
 			visual.prepared = { ...visual.prepared, frames: selected.frames };
 			visual.visualFramesSupplied = selected.frames.length > 0;
 		} else if (frameMeta.length) {
@@ -1900,6 +2041,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			availableByAssetId,
 			cli: args.cli,
 			visualFramesSupplied,
+			abortSignal: args.abortSignal,
 		},
 		authority.mode,
 		mutationTelemetry,
@@ -2015,6 +2157,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		return `${orch}\n\nOriginal user request: ${userMessage.trim()}`;
 	})();
 	if (
+		!preferLocalCliAgent &&
 		primaryAsset &&
 		editsAllowed &&
 		(authority.mode !== "read_only" || forceLocalProfessionalOrch) &&
@@ -2272,21 +2415,83 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		}
 	}
 
+	const watchGranted = shouldGrantLocalWatch(
+		model.localAgentPermission,
+		Boolean(model.watchGranted),
+	);
+	const mediaDirs = watchGranted ? [...mediaDirsFromDocument(workingDocument)] : [];
+	const framePaths =
+		model.provider === "local-cli" && visual.prepared?.frames?.length
+			? visual.prepared.frames.map((f) => f.imagePath)
+			: [];
+	if (framePaths.length > 0) {
+		const { dirname } = await import("node:path");
+		for (const p of framePaths) {
+			const dir = dirname(p);
+			if (dir && !mediaDirs.includes(dir)) mediaDirs.push(dir);
+		}
+	}
+	const { getOrCreateCliAgentSession, markCliAgentSessionStarted, resolveCliWorkspaceRoot } =
+		await import("../cliAgentSession");
+	const projectKey = String(workingDocument.project.id ?? "unknown");
+	const chatSessionId = args.chatSessionId?.trim() || `turn-${projectKey}`;
+	const workspaceRoot = resolveCliWorkspaceRoot(mediaDirs);
+	const cliSession =
+		model.provider === "local-cli"
+			? getOrCreateCliAgentSession(projectKey, chatSessionId, workspaceRoot)
+			: null;
+	// ponytail: build a fresh LangChain agent per turn (tool binding). Local CLI
+	// memory is the Claude `--session-id` / `--resume` handle above — not a
+	// long-lived Node child. Checkpoint-based LangGraph threads can land later.
+	chatModel = await createOpenScreenChatModel({
+		...model,
+		mediaDirs,
+		framePaths,
+		abortSignal: args.abortSignal,
+		cliSessionId: cliSession?.cliSessionId,
+		resumeCliSession: Boolean(cliSession?.started),
+		// Read per spawn: the first tool round creates the session, every later
+		// round (same turn or a follow-up) must resume it.
+		isCliSessionStarted: () => Boolean(cliSession?.started),
+		workspaceRoot: cliSession?.workspaceRoot ?? workspaceRoot ?? undefined,
+		onCliSpawnComplete: () => {
+			if (cliSession) markCliAgentSessionStarted(projectKey, chatSessionId);
+		},
+		onLocalCliProgress: (event) => {
+			const delta = event.delta;
+			if (!delta) return;
+			if (event.kind === "text") {
+				const trimmed = delta.trim();
+				if (
+					trimmed.startsWith("{") ||
+					/"tool_calls"\s*:/.test(trimmed) ||
+					/"message"\s*:/.test(trimmed)
+				) {
+					sink.thinking("Preparing OpenScreen edits…\n");
+					sink.status?.("local_cli", "Preparing OpenScreen edits…");
+					return;
+				}
+				sink.text(delta);
+				return;
+			}
+			// Progress (Bash / tool_use / heartbeats) — show in Thinking AND live status
+			// so the chat board isn't blank while Local CLI works (Cursor-like).
+			sink.thinking(delta);
+			const line = delta.replace(/\s+/g, " ").trim();
+			if (line) sink.status?.("local_cli", line.slice(0, 160));
+		},
+	});
+
 	const agent = createAgent({
 		model: chatModel,
 		tools,
 		systemPrompt: systemPromptText,
 		middleware: anthropicCachingMiddleware(chatModel),
 	}).withConfig({
-		// ponytail: NOT optional. LangGraph's default is 25 steps, and an
-		// auto-enhance turn spends one step per silence — it would die mid-turn
-		// with a GraphRecursionError, which this file's catch block relabels
-		// "Empty response from model" (the same words a mute provider gets).
-		// `createDeepAgent` used 1e4; that is reckless while there is still no
-		// AbortSignal and no timeout anywhere on the product path — a looping
-		// model would be indistinguishable from a hang. 1000 is far above any
-		// real turn and still bounded.
-		recursionLimit: 1000,
+		// Local CLI re-spawns per model step but resumes Claude session memory.
+		// Each tool round costs ~2 graph steps, so 100 ≈ 50 rounds: room for
+		// inspect → edit → render → verify → fix loops, still bounded.
+		recursionLimit: model.provider === "local-cli" ? 100 : 1000,
 	});
 
 	const trustedBriefing = buildTrustedEditorialBriefing({
@@ -2808,7 +3013,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			agent as unknown as {
 				streamEvents: (state: unknown, config?: unknown) => AsyncIterable<Record<string, unknown>>;
 			}
-		).streamEvents({ messages }, undefined);
+		).streamEvents({ messages }, args.abortSignal ? { signal: args.abortSignal } : undefined);
 
 		let finalText = "";
 		const nonChatEvents: Array<{ event: string; name: string }> = [];
@@ -2817,6 +3022,11 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		let toolWallStart: number | null = null;
 
 		for await (const event of stream) {
+			if (args.abortSignal?.aborted) {
+				const stopErr = new Error("Agent stopped.");
+				stopErr.name = "AbortError";
+				throw stopErr;
+			}
 			const eventType = typeof event.event === "string" ? event.event : "";
 			const data = event.data as Record<string, unknown> | undefined;
 			const name = typeof event.name === "string" ? (event.name as string) : "";
@@ -2877,12 +3087,21 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 					usageAcc.cachedInputTokens += usage.cachedInputTokens;
 				}
 				// Local CLI (and any `_generate`-only model) finishes with one
-				// end event and never streams. Take that text only when no
-				// stream chunks arrived, so cloud providers are not doubled.
+				// end event. Prefer that parsed final whenever stream text is
+				// empty OR (local-cli) when the end text differs — stream may
+				// have only carried progress while JSON `message` was filtered
+				// into thinking, leaving an empty bubble after tools ran.
 				const endText = textFromChatModelEnd(data);
-				if (endText && !finalText.trim()) {
-					sink.text(endText);
-					finalText += endText;
+				if (endText) {
+					if (!finalText.trim()) {
+						sink.text(endText);
+						finalText = endText;
+					} else if (
+						model.provider === "local-cli" &&
+						endText.trim() !== finalText.trim()
+					) {
+						finalText = endText.trim();
+					}
 				}
 			} else if (eventType === "on_tool_start") {
 				toolEventSeen = true;
@@ -3247,7 +3466,9 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 
 		// Recovery 4: concrete edit families in user prose must match trusted Edit Plan
 		// OR local product-surface / professional-orchestrator grounded families.
-		if (!wantsRaw) {
+		// Skip when tools already mutated — honesty "project was not changed" contradicts the receipt.
+		const alreadyMutated = JSON.stringify(holder.current) !== initialDocumentJSON;
+		if (!wantsRaw && !alreadyMutated) {
 			const orchFamilies =
 				professionalEdit?.plan.steps.map((s) => (s.family === "captions" ? "caption" : s.family)) ??
 				[];
@@ -3335,7 +3556,15 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 
 		const hasConsentableProposal = Boolean(editReview?.cards.some((c) => c.canApply) === true);
 		const hasBlockedOnlyProposal = Boolean(editReview?.cards.length && !hasConsentableProposal);
-		const verifiedCommit = (professionalEdit?.metrics.stepsCommitted ?? 0) > 0;
+		const toolMutated =
+			JSON.stringify(holder.current) !== initialDocumentJSON ||
+			mutationTelemetry.mutatingToolsExecuted.length > 0;
+		const verifiedCommit =
+			(professionalEdit?.metrics.stepsCommitted ?? 0) > 0 || toolMutated;
+		if (toolMutated) {
+			const { stripFalseNotChangedClaim } = await import("../editReceipt");
+			responseText = stripFalseNotChangedClaim(responseText);
+		}
 		const truth = bindFinalResponseToTransactionTruth({
 			userFacingText: responseText,
 			mode: authority.mode,
@@ -3381,33 +3610,45 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		}
 
 		// Recovery 3: raw model text may be non-empty (JSON-only / internals-only)
-		// while sanitizers leave nothing user-facing. That is never a successful turn.
+		// while sanitizers leave nothing user-facing. If tools already mutated the
+		// document, synthesize a short receipt instead of failing the whole turn.
 		if (!responseText.trim()) {
-			const delivery = classifyMissingUserFacingResponse({
-				provider: model.provider,
-				model: model.model,
-				rawLen: text.length,
-				cause:
-					text.trim().length > 0 ? "sanitizer_removed_all_text" : "missing_user_facing_response",
-			});
-			sink.error(delivery.userMessage);
-			return {
-				text: "",
-				document: holder.current,
-				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
-				status: delivery.status,
-				failureReason: delivery.failureReason,
-				userMessage: delivery.userMessage,
-				reason: delivery.diagnostic,
-				contextTelemetry: finalizeTelemetry(),
-				...(videoMemoryV1 ? { videoMemoryV1 } : {}),
-				...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
-				...(boundedDiagnostics ? { boundedDiagnostics } : {}),
-				...preLlmArtifacts,
-				...(visualSemanticGrounding ? { visualSemanticGrounding } : {}),
-				...(sourceStory ? { sourceStory } : {}),
-				...(targetStory ? { targetStory } : {}),
-			};
+			const mutatedNow = JSON.stringify(holder.current) !== initialDocumentJSON;
+			if (mutatedNow) {
+				responseText =
+					"Done — edits were applied to the timeline.";
+				sink.text(responseText);
+			} else {
+				const delivery = classifyMissingUserFacingResponse({
+					provider: model.provider,
+					model: model.model,
+					rawLen: text.length,
+					cause:
+						text.trim().length > 0 ? "sanitizer_removed_all_text" : "missing_user_facing_response",
+				});
+				const userMessage =
+					model.provider === "local-cli"
+						? "The local agent finished without applying an edit. Try again with a concrete ask (e.g. “speed up 1.25×”, “add captions”, “dissolve between clips”, “change wallpaper”)."
+						: delivery.userMessage;
+				sink.error(userMessage);
+				return {
+					text: "",
+					document: holder.current,
+					mutated: false,
+					status: delivery.status,
+					failureReason: delivery.failureReason,
+					userMessage,
+					reason: delivery.diagnostic,
+					contextTelemetry: finalizeTelemetry(),
+					...(videoMemoryV1 ? { videoMemoryV1 } : {}),
+					...(retrievalPathTelemetry ? { retrievalPath: retrievalPathTelemetry } : {}),
+					...(boundedDiagnostics ? { boundedDiagnostics } : {}),
+					...preLlmArtifacts,
+					...(visualSemanticGrounding ? { visualSemanticGrounding } : {}),
+					...(sourceStory ? { sourceStory } : {}),
+					...(targetStory ? { targetStory } : {}),
+				};
+			}
 		}
 
 		// Temporal Event Ledger V1 — rebuild after semantic parse so optional
@@ -3493,14 +3734,29 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		// sentence the user can act on. Do not wrap them in the diagnostic dump
 		// meant for mute/broken cloud providers.
 		if (model.provider === "local-cli") {
-			const message = err instanceof Error ? err.message : String(err);
+			const rawMessage = err instanceof Error ? err.message : String(err);
+			const aborted =
+				(err && typeof err === "object" && "name" in err && (err as { name: string }).name === "AbortError") ||
+				/aborted|Agent stopped/i.test(rawMessage) ||
+				args.abortSignal?.aborted === true;
+			const recursion =
+				!aborted &&
+				(/GraphRecursionError|Recursion limit|recursion limit/i.test(rawMessage) ||
+					/recursionlimit/i.test(rawMessage));
+			const message = aborted
+				? "Agent stopped."
+				: recursion
+					? "Local CLI stopped after too many edit steps (it was looping). " +
+						"Check the timeline — the intro/edit may already be applied. " +
+						"If it looks right, you’re done; otherwise rewind the turn and ask once more."
+					: rawMessage;
 			sink.error(message);
 			return {
-				text: "",
+				text: recursion ? message : "",
 				document: holder.current,
 				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
-				status: "provider_error",
-				failureReason: "local_cli_error",
+				status: recursion ? "completed" : "provider_error",
+				failureReason: aborted ? "request_aborted" : recursion ? undefined : "local_cli_error",
 				userMessage: message,
 				reason: message,
 				contextTelemetry: finalizeTelemetry(),

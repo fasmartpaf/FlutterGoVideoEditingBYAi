@@ -92,6 +92,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+      # The media tests (start thumbnail, motion graphics, image downscaling)
+      # use `it.skipIf(!ffmpeg)`. Installing it here makes them actually run in
+      # CI instead of showing up as skipped.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm run test
 
   build:

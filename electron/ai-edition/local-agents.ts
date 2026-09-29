@@ -20,15 +20,30 @@ export interface LocalAgentInfo {
 	version?: string;
 	/** Models the HTTP server currently exposes (Ollama / LM Studio). */
 	models?: string[];
+	/** Best-effort active model label (e.g. Claude Code "Fable" / "Opus 4.5"). */
+	activeModel?: string;
+	/** Selectable Claude CLI models (`--model`), when kind is Claude Code. */
+	modelOptions?: LocalCliModelOption[];
 	ready: boolean;
 	/** Machine status for the picker, e.g. `needs-login`. */
 	statusNote?: string;
+}
+
+export interface LocalCliModelOption {
+	/** Value passed to `claude --model` (alias or full id). */
+	id: string;
+	label: string;
+	available: boolean;
+	/** Shown when unavailable, e.g. needs a Claude Code update. */
+	note?: string;
 }
 
 export interface LocalAgentSelection {
 	provider: "local-cli";
 	model: string;
 	baseUrl?: string;
+	/** Claude Code `--model` when `model` is the agent id `claude`. */
+	localCliModel?: string;
 }
 
 /** How OpenScreen grants the local agent access to watch recordings. */
@@ -172,6 +187,120 @@ async function probeHttp(spec: HttpSpec): Promise<LocalAgentInfo | null> {
 	}
 }
 
+function readClaudeActiveModelLabel(): string | undefined {
+	const options = readClaudeModelOptions();
+	const available = options.find((row) => row.available);
+	return available?.label ?? options[0]?.label;
+}
+
+/** Aliases Claude CLI documents for `--model` (see `claude --help`). */
+const CLAUDE_CLI_ALIASES: Array<{ id: string; label: string }> = [
+	{ id: "fable", label: "Fable" },
+	{ id: "opus", label: "Opus" },
+	{ id: "sonnet", label: "Sonnet" },
+];
+
+export function humanizeClaudeModelId(id: string): string {
+	const lower = id.toLowerCase();
+	if (lower.includes("opus") && lower.includes("5.5")) return "Opus 5.5";
+	if (lower.includes("opus") && lower.includes("4")) return "Opus 4";
+	if (lower === "opus" || lower.includes("opus")) return "Opus";
+	if (lower.includes("sonnet")) return "Sonnet";
+	if (lower.includes("haiku")) return "Haiku";
+	if (lower.includes("fable")) return "Fable";
+	return id;
+}
+
+function aliasForClaudeValue(value: string, label?: string): string {
+	const lower = `${value} ${label ?? ""}`.toLowerCase();
+	if (lower.includes("fable")) return "fable";
+	if (lower.includes("opus")) return "opus";
+	if (lower.includes("sonnet")) return "sonnet";
+	if (lower.includes("haiku")) return "haiku";
+	return value.trim();
+}
+
+/**
+ * Models the user can pick for Claude Code. Merges CLI aliases with
+ * `additionalModelOptionsCache` so locked “update required” rows stay visible
+ * but not selectable.
+ */
+export function readClaudeModelOptions(): LocalCliModelOption[] {
+	const byId = new Map<string, LocalCliModelOption>();
+	try {
+		const home = os.homedir();
+		const candidates = [
+			path.join(home, ".claude.json"),
+			path.join(home, ".claude", "settings.json"),
+			path.join(home, ".claude", "settings.local.json"),
+		];
+		for (const file of candidates) {
+			if (!fs.existsSync(file)) continue;
+			const raw = fs.readFileSync(file, "utf8");
+			const parsed = JSON.parse(raw) as {
+				model?: string;
+				userModel?: string;
+				additionalModelOptionsCache?: Array<{
+					value?: string;
+					label?: string;
+					disabled?: boolean;
+				}>;
+			};
+			const options = parsed.additionalModelOptionsCache;
+			if (!Array.isArray(options)) continue;
+			for (const row of options) {
+				if (!row || typeof row !== "object") continue;
+				const value = typeof row.value === "string" ? row.value.trim() : "";
+				const rawLabel = typeof row.label === "string" ? row.label.trim() : "";
+				if (!value && !rawLabel) continue;
+				const updateRequired =
+					Boolean(row.disabled) || /^cc-update-required/i.test(value);
+				const label = (rawLabel || humanizeClaudeModelId(value)).replace(
+					/\s*\(disabled\)\s*$/i,
+					"",
+				);
+				const id = updateRequired
+					? `locked:${aliasForClaudeValue(value || label, label)}:${label}`
+					: aliasForClaudeValue(value || label, label);
+				const existing = byId.get(id);
+				if (existing?.available && updateRequired) continue;
+				byId.set(id, {
+					id: updateRequired ? id : id,
+					label,
+					available: !updateRequired,
+					...(updateRequired ? { note: "Update Claude Code to unlock" } : {}),
+				});
+			}
+			// Prefer the first settings file that had options.
+			if (byId.size > 0) break;
+		}
+	} catch {
+		// Best-effort only.
+	}
+
+	for (const alias of CLAUDE_CLI_ALIASES) {
+		const covered = [...byId.values()].some(
+			(row) =>
+				row.available &&
+				(row.id === alias.id || row.label.toLowerCase().includes(alias.id)),
+		);
+		if (!covered && !byId.has(alias.id)) {
+			byId.set(alias.id, { id: alias.id, label: alias.label, available: true });
+		}
+	}
+
+	const available = [...byId.values()].filter((row) => row.available);
+	const locked = [...byId.values()].filter((row) => !row.available);
+	const aliasOrder = CLAUDE_CLI_ALIASES.map((a) => a.id);
+	available.sort((a, b) => {
+		const ai = aliasOrder.indexOf(a.id);
+		const bi = aliasOrder.indexOf(b.id);
+		if (ai >= 0 || bi >= 0) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+		return a.label.localeCompare(b.label);
+	});
+	return [...available, ...locked];
+}
+
 export async function scanLocalAgents(): Promise<LocalAgentInfo[]> {
 	const found: LocalAgentInfo[] = [];
 	for (const spec of CLI_SPECS) {
@@ -182,12 +311,20 @@ export async function scanLocalAgents(): Promise<LocalAgentInfo[]> {
 		}
 		if (!binPath) continue;
 		const auth = probeCliAuth(spec.id, binPath);
+		const claudeModels = spec.id === "claude" ? readClaudeModelOptions() : undefined;
 		found.push({
 			id: spec.id,
 			name: spec.name,
 			kind: "cli",
 			path: binPath,
 			version: readVersion(binPath, spec.versionArgs),
+			...(claudeModels
+				? {
+						activeModel: readClaudeActiveModelLabel(),
+						modelOptions: claudeModels,
+						models: claudeModels.filter((m) => m.available).map((m) => m.id),
+					}
+				: {}),
 			ready: auth.ready,
 			statusNote: auth.statusNote,
 		});
@@ -218,6 +355,9 @@ export function selectionForAgent(agent: LocalAgentInfo, model?: string): LocalA
 		provider: "local-cli",
 		model: agent.id,
 		baseUrl: agent.path ? `cli:${agent.path}` : undefined,
+		...(agent.id === "claude" && model && !model.startsWith("locked:")
+			? { localCliModel: model }
+			: {}),
 	};
 }
 
@@ -243,8 +383,24 @@ export function localCliPromptOnStdin(agentId: string): boolean {
 export function printArgvForAgent(
 	agentId: string,
 	prompt: string,
-	options?: { addDirs?: string[] },
+	options?: {
+		addDirs?: string[];
+		outputFormat?: "text" | "stream-json";
+		/** Claude `--model` alias or full id (e.g. fable, opus, sonnet). */
+		model?: string;
+		/**
+		 * Persistent Claude Code session. When set, OpenScreen passes
+		 * `--session-id` and, after the first turn, `--resume` so follow-ups
+		 * keep CLI memory (files inspected, prior decisions).
+		 */
+		cliSessionId?: string;
+		/** True when this OpenScreen chat session already spawned Claude once. */
+		resumeCliSession?: boolean;
+	},
 ): string[] {
+	// Codex/Cursor/Gemini: frame + media absolute paths are inlined in `prompt`
+	// (OpenScreen samples JPEGs). They have no Claude-style --add-dir; the spawn
+	// cwd is set to a media/frame folder in LocalCliChatModel instead.
 	if (agentId === "codex") return ["exec", "--skip-git-repo-check", prompt];
 	if (agentId === "gemini") return ["-p", prompt];
 	// Cursor Agent refuses a temp cwd until the workspace is trusted. This
@@ -252,16 +408,31 @@ export function printArgvForAgent(
 	// the CLI itself tells you to pass.
 	if (agentId === "cursor") return ["-p", "--trust", prompt];
 	if (agentId === "claude") {
-		// Print mode: OpenScreen JSON tools stay in the prompt (stdin). When a
-		// recording is open, grant Read on that folder so Claude can watch it.
-		const argv = [
-			"-p",
-			"--output-format",
-			"text",
-			"--no-session-persistence",
-			"--setting-sources",
-			"user",
-		];
+		// stream-json lets OpenScreen show live progress; final result still
+		// carries the ONE JSON object OpenScreen parses for tools/message.
+		const format = options?.outputFormat === "stream-json" ? "stream-json" : "text";
+		const argv = ["-p", "--output-format", format, "--setting-sources", "user"];
+		const model = options?.model?.trim();
+		if (model && !model.startsWith("locked:")) {
+			argv.push("--model", model);
+		}
+		const sessionId = options?.cliSessionId?.trim();
+		if (sessionId) {
+			// Persist under a stable UUID for this OpenScreen chat conversation.
+			// Do NOT pass --no-session-persistence — that forced amnesia every spawn.
+			// First spawn creates the session with `--session-id`; every later spawn
+			// continues it with `--resume` alone. Passing both is rejected by the
+			// CLI, and re-sending `--session-id` fails with "already in use".
+			if (options?.resumeCliSession) {
+				argv.push("--resume", sessionId);
+			} else {
+				argv.push("--session-id", sessionId);
+			}
+		}
+		if (format === "stream-json") {
+			// Needed so NDJSON includes assistant text deltas, not only the result.
+			argv.push("--verbose");
+		}
 		const dirs = (options?.addDirs ?? []).filter(Boolean);
 		if (dirs.length > 0) {
 			// dontAsk auto-denies Bash unless the command is exactly `ffmpeg …`.
@@ -269,8 +440,8 @@ export function printArgvForAgent(
 			// then reports it cannot watch. bypassPermissions + Read/Bash, scoped
 			// to the recording folders + temp dir, is what actually lets it see.
 			argv.push("--permission-mode", "bypassPermissions");
-			argv.push("--tools", "Read", "Bash");
-			argv.push("--allowedTools", "Read", "Bash");
+			argv.push("--tools", "Read", "Bash", "Edit", "Write", "Glob", "Grep");
+			argv.push("--allowedTools", "Read", "Bash", "Edit", "Write", "Glob", "Grep");
 			for (const dir of [...new Set([...dirs, os.tmpdir()])]) {
 				argv.push("--add-dir", dir);
 			}
@@ -304,12 +475,37 @@ export function loginCommandForAgent(agentId: string): string | null {
 	return null;
 }
 
-export function formatLocalCliError(raw: string): string {
+export function localAgentDisplayName(agentId?: string | null): string {
+	const id = (agentId ?? "").trim().toLowerCase();
+	if (id === "cursor" || id === "cursor-agent" || id === "agent") return "Cursor Agent";
+	if (id === "codex") return "Codex";
+	if (id === "gemini") return "Gemini CLI";
+	if (id === "claude" || id.includes("claude")) return "Claude Code";
+	if (id === "ollama") return "Ollama";
+	if (id === "lmstudio" || id === "lm-studio") return "LM Studio";
+	return "Local CLI";
+}
+
+/** Infer agent id from a timeout/exit string that embeds the binary path or name. */
+function agentIdFromErrorText(text: string): string | undefined {
+	const lower = text.toLowerCase();
+	if (/\bcursor-agent\b|\bagent\b/.test(lower) && !/\bclaude\b/.test(lower)) return "cursor";
+	if (/\bcodex\b/.test(lower)) return "codex";
+	if (/\bgemini\b/.test(lower)) return "gemini";
+	if (/\bclaude\b/.test(lower)) return "claude";
+	return undefined;
+}
+
+export function formatLocalCliError(raw: string, agentId?: string): string {
 	const text = raw.replace(/\s+/g, " ").trim();
+	const label = localAgentDisplayName(agentId ?? agentIdFromErrorText(text));
 	if (
 		text === "needs-login" ||
 		/not logged in|please run \/login|loggedIn["']?\s*:\s*false/i.test(text)
 	) {
+		if (label === "Cursor Agent") {
+			return "Cursor Agent is not signed in. Run `agent login` in Terminal, then Rescan PATH.";
+		}
 		return "Claude Code is not signed in. Run `claude auth login` in Terminal, then Rescan PATH.";
 	}
 	if (/Workspace Trust Required|trust the contents of this directory|Pass `--trust`/i.test(text)) {
@@ -320,12 +516,30 @@ export function formatLocalCliError(raw: string): string {
 	}
 	if (/timed out/i.test(text)) {
 		return (
-			"Claude Code timed out while answering. Watching the recording (ffmpeg stills) " +
+			`${label} timed out while answering. Watching the recording (ffmpeg stills) ` +
 			"plus the first reply can take several minutes. Retry the send, or set watching to " +
 			"Never for a faster metadata-only reply."
 		);
 	}
+	// Claude CLI often dumps a whole result JSON on weekly/rate limits (HTTP 429).
+	const weekly =
+		text.match(/You've hit your weekly limit[^"\\]*/i)?.[0] ??
+		(/weekly limit|api_error_status["']?\s*:\s*429|\b429\b.*rate|rate limit/i.test(text)
+			? "You've hit your Claude Code weekly usage limit."
+			: null);
+	if (weekly) {
+		const reset = text.match(/resets\s+[^"'\\]+/i)?.[0];
+		return (
+			`${weekly.replace(/\s+/g, " ").trim()}` +
+			(reset ? ` (${reset.trim()})` : "") +
+			" Switch Local CLI model (e.g. Sonnet) or use another provider until the quota resets."
+		);
+	}
 	const stripped = text.replace(/^Local CLI exited [^.]+\.\s*/i, "").trim();
+	// Prefer a short human sentence over a multi-KB stream-json dump in the toast.
+	if (stripped.length > 280 && /"type"\s*:\s*"result"|api_error_status/i.test(stripped)) {
+		return `${label} failed (API error). Check your plan / usage, or switch model in Local CLI.`;
+	}
 	return stripped || text;
 }
 

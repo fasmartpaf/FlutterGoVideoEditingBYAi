@@ -15,6 +15,9 @@
 // deep-agent landed and stayed on the page for a whole release; the specs it
 // described are gone (see `MUTATING_TOOL_NAMES`).
 
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, extname, join } from "node:path";
 import { z } from "zod";
 import {
 	collapseTracksToPills,
@@ -25,12 +28,17 @@ import {
 import {
 	assertImageDataUri,
 	GRAPHIC_KINDS,
+	graphicCaption,
 	isImageDataUri,
+	loadImageFileAsDataUri,
+	renderPlatePng,
 	resolveGraphic,
 } from "../../src/lib/ai-edition/document/graphicPlate";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import { buildMediaContext } from "../../src/lib/ai-edition/document/mediaContext";
+import { resolveFfmpeg } from "../media/audioPeaks";
 import {
+	duplicateClip,
 	insertClip,
 	moveClip,
 	openTimelineMedia,
@@ -42,7 +50,17 @@ import {
 	resolvePlaybackSegments,
 	setClipCropRegion,
 	setClipSourceRange,
+	splitClip,
 } from "../../src/lib/ai-edition/document/timeline";
+import {
+	getCaptionSettings,
+	patchCaptionSettings,
+} from "../../src/lib/ai-edition/captions/settings";
+import {
+	getEditorSettings,
+	patchEditorSettings,
+	type EditorSettingsPatch,
+} from "../../src/lib/ai-edition/store/editorSettings";
 import { setDocumentWordText } from "../../src/lib/ai-edition/document/transcript";
 import { type AxcutDocument, clipCropRegionSchema } from "../../src/lib/ai-edition/schema";
 import { hasAnyClipWithCamera } from "../../src/lib/ai-edition/timeline/camera";
@@ -71,12 +89,31 @@ import {
 	MEDIA_EVIDENCE_NOTE,
 	type MediaEvidenceCapabilities,
 } from "./mediaEvidence";
+import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentToolMedia";
+import { assertSafeLocalMediaPath } from "./mediaStudio";
+import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
+import {
+	BUILTIN_CHARACTERS,
+	listCharactersCatalog,
+	registerCharacterOnDocument,
+	resolveCharacterImage,
+} from "./characterLibrary";
 import { mutationAuthorityRefusal } from "./mutationAuthority";
 import {
 	legacyKindToTransitionId,
+	listUserAvailableTransitions,
 	resolveTransitionId,
+	type GpuBackend,
 	validateAndClampTransitionApply,
 } from "./transitionLibrary";
+
+const BUILTIN_CHARACTER_LABELS = new Set(BUILTIN_CHARACTERS.map((c) => c.label));
+
+function defaultGpuBackend(): GpuBackend {
+	if (process.platform === "darwin") return "metal";
+	if (process.platform === "win32") return "d3d11";
+	return "wgpu";
+}
 
 export interface AgentToolExecution {
 	ok: boolean;
@@ -97,6 +134,45 @@ function formatSec(sec: number): string {
 
 function toMs(sec: number): number {
 	return Math.max(0, Math.round(sec * 1000));
+}
+
+function slugLabel(label: string): string {
+	return (
+		label
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-|-$/g, "")
+			.slice(0, 40) || "graphic"
+	);
+}
+
+function maybeWriteGeneratedGraphic(
+	dir: string,
+	stem: string,
+	dataUri: string,
+): string | null {
+	if (!dataUri.startsWith("data:image")) return null;
+	const comma = dataUri.indexOf(",");
+	if (comma < 0) return null;
+	try {
+		mkdirSync(dir, { recursive: true });
+		const path = join(dir, `${stem}.png`);
+		writeFileSync(path, Buffer.from(dataUri.slice(comma + 1), "base64"));
+		return path;
+	} catch {
+		// Fallback when the project folder is not writable. Keep the project
+		// folder name so two projects never overwrite each other's beat-1.png.
+		try {
+			const fallback = join(tmpdir(), "openscreen-generated-graphics", basename(dir), stem);
+			mkdirSync(dirname(fallback), { recursive: true });
+			const path = `${fallback}.png`;
+			writeFileSync(path, Buffer.from(dataUri.slice(comma + 1), "base64"));
+			return path;
+		} catch {
+			return null;
+		}
+	}
 }
 
 // For the effect set* tools: keep the stored span unless the caller passes new
@@ -267,6 +343,16 @@ function editedExtentSec(document: AxcutDocument): { startSec: number; endSec: n
 		endSec: Math.max(...clips.map((c) => c.timelineEndSec)),
 	};
 }
+
+const PRIVACY_PRESET_RECTS: Record<
+	"topStrip" | "topRight" | "bottomRight" | "fullFrame",
+	{ x: number; y: number; width: number; height: number }
+> = {
+	topStrip: { x: 0, y: 0, width: 100, height: 14 },
+	topRight: { x: 58, y: 0, width: 42, height: 16 },
+	bottomRight: { x: 68, y: 72, width: 32, height: 28 },
+	fullFrame: { x: 0, y: 0, width: 100, height: 100 },
+};
 
 /**
  * Refuse rather than store a region that covers no clip. The message carries the
@@ -493,6 +579,43 @@ export const addClipArgs = z.object({
 	reason: z.string().optional(),
 });
 
+export const splitClipArgs = z.object({
+	clipId: z.string().min(1),
+	/** Source-time cut point inside the clip (asset seconds). */
+	atSourceSec: secondsSchema,
+});
+
+export const duplicateClipArgs = z.object({
+	clipId: z.string().min(1),
+	reason: z.string().optional(),
+});
+
+export const importMediaArgs = z.object({
+	/** Absolute path to a video or audio file on this machine. */
+	path: z.string().min(1),
+	kind: z.enum(["video", "audio"]).optional(),
+	label: z.string().optional(),
+	/** Required when ffprobe cannot read duration; seconds. */
+	durationSec: z.number().positive().optional(),
+	/** When true (default for video), place a clip on the timeline. */
+	placeOnTimeline: z.boolean().optional(),
+	beforeClipId: z.string().min(1).nullish(),
+});
+
+export const tightenPacingArgs = z.object({
+	assetId: z.string().min(1).optional(),
+	/** Only cut silence segments at least this long (default 0.45s). */
+	minSilenceSec: z.number().positive().max(30).optional(),
+	/** Leave this much pause after each cut (default 0.12s). */
+	keepPauseSec: z.number().nonnegative().max(2).optional(),
+});
+
+export const removeFillerWordsArgs = z.object({
+	assetId: z.string().min(1).optional(),
+	/** Extra words to treat as filler (default um/uh/erm/ah). */
+	extraWords: z.array(z.string().min(1)).optional(),
+});
+
 export const setClipCropArgs = z.object({
 	clipId: z.string().min(1),
 	crop: clipCropRegionSchema.nullable(),
@@ -636,6 +759,22 @@ export const setAnnotationArgs = z.object({
 	image: imageDataUriSchema.optional(),
 });
 
+/**
+ * Reliable privacy mosaic/blur presets — prefer this over guessing tiny x/y
+ * patches for name / avatar / browser chrome. Defaults span the full edited timeline.
+ */
+export const addPrivacyCoverArgs = z.object({
+	/** Where to cover. topStrip = full browser chrome band (best for name+avatar). */
+	preset: z.enum(["topStrip", "topRight", "bottomRight", "fullFrame"]).default("topStrip"),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	blurKind: z.enum(["blur", "mosaic"]).default("mosaic"),
+	/** Also lay a denser top-right patch (default true for topStrip). */
+	includeTopRight: z.boolean().optional(),
+	/** Drop existing blur annotations that overlap this span (default true). */
+	replaceExistingBlurs: z.boolean().default(true),
+});
+
 export const addGraphicArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
@@ -656,6 +795,125 @@ export const addGraphicArgs = z.object({
 		.enum(["up", "down", "left", "right", "up-right", "up-left", "down-right", "down-left"])
 		.optional(),
 	image: imageDataUriSchema.optional(),
+	/** Absolute path to a PNG/JPEG/GIF/WebP the agent rendered on disk. */
+	imagePath: z.string().min(1).optional(),
+	/** Built-in or registered character → resolves to image (listCharacters). */
+	characterId: z.string().min(1).optional(),
+	/** User-uploaded / agent-made character file (same as imagePath for characters). */
+	characterPath: z.string().min(1).optional(),
+});
+
+/**
+ * Place short on-video highlights that follow the recorded pointer
+ * (finger ring / callout / presenter plate). Requires cursor telemetry.
+ */
+export const addCursorHighlightArgs = z.object({
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	/** ring = oval mosaic; finger = small circle; callout = arrow; character = avatar plate near cursor. */
+	style: z.enum(["ring", "finger", "callout", "character"]).default("finger"),
+	/** Sample spacing in virtual seconds (default 0.5). */
+	everySec: z.number().positive().max(5).default(0.5),
+	maxPoints: z.number().int().min(1).max(48).default(24),
+	/** Highlight diameter as % of frame (default 14; characters default larger in executor). */
+	sizePct: z.number().min(4).max(40).optional(),
+	/** Only place at click/mouseup samples. */
+	clicksOnly: z.boolean().default(false),
+	/** Label for callout/character plates. */
+	label: z.string().optional(),
+	/** Built-in or registered character id (listCharacters). Default guide when style is character. */
+	characterId: z.string().min(1).optional(),
+	/** Absolute path to a user-uploaded or agent-made character PNG/JPEG/WebP. */
+	characterPath: z.string().min(1).optional(),
+	/** Character image as a data URI (alternative to characterPath). */
+	image: imageDataUriSchema.optional(),
+	/** Drop prior cursor-follow character/finger overlays in the span (default true for character). */
+	replaceExisting: z.boolean().optional(),
+});
+
+export const listCharactersArgs = z.object({});
+
+export const registerCharacterArgs = z.object({
+	/** Stable id to reuse later (not a builtin name). */
+	id: z.string().min(1).max(64),
+	label: z.string().optional(),
+	/** Absolute path the user uploaded or you rendered. */
+	imagePath: z.string().min(1).optional(),
+	/** Or pass the pixels as a data URI. */
+	image: imageDataUriSchema.optional(),
+});
+
+/**
+ * Place N image/badge overlays evenly across the edited timeline.
+ * Use for "make 5 images for this video" — no Bash loop required.
+ */
+export const addBeatGraphicsArgs = z.object({
+	count: z.number().int().min(1).max(12).default(5),
+	/** badge|title text plates, or character avatar bubbles. */
+	kind: z.enum(["badge", "title", "lowerThird", "character"]).default("badge"),
+	characterId: z.string().min(1).optional(),
+	/** Optional labels — one per beat; extras use Beat 1…N. */
+	texts: z.array(z.string()).optional(),
+	/** Frame % size for each plate (default 22 for character, 28 for badge/title). */
+	sizePct: z.number().min(8).max(50).optional(),
+	/** Vertical position 0–100 (default 12 top / 72 for lowerThird). */
+	y: z.number().min(0).max(90).optional(),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	/** Each beat visible this many seconds (default 2.2). */
+	holdSec: z.number().positive().max(8).optional(),
+	/**
+	 * When true: render PNGs to generated-graphics/ for the chat preview only —
+	 * do NOT place overlays on the timeline. Use for "create / show me images";
+	 * place later with addGraphic(imagePath) when the user says use on video.
+	 */
+	previewOnly: z.boolean().optional(),
+});
+
+/**
+ * Bake a short motion-graphic MP4 (title cards with zoom/fade) for the chat board.
+ * Does NOT place on the timeline — use importMedia / insertStartThumbnail / addGraphic
+ * when the user says "use on video".
+ */
+export const createMotionGraphicPreviewArgs = z.object({
+	titles: z.array(z.string().min(1)).min(1).max(12),
+	/** Seconds per title card (default 1.8). */
+	holdSec: z.number().positive().max(4).optional(),
+	/** Optional output file stem. */
+	fileStem: z.string().min(1).max(64).optional(),
+});
+
+/**
+ * Full-frame OPENING segment (own timeline clip), not an overlay on the recording.
+ * Prefer this for "thumbnail / cover / start frame at the beginning".
+ */
+export const insertStartThumbnailArgs = z
+	.object({
+		/** Absolute path to a PNG/JPEG/WebP on disk. */
+		imagePath: z.string().min(1).optional(),
+		/** PNG/JPEG data URI when the agent already has pixels in memory. */
+		image: imageDataUriSchema.optional(),
+		/** Title card text — baked to a plate when no image/imagePath is given. */
+		text: z.string().optional(),
+		subtext: z.string().optional(),
+		/** How long the opening segment plays (default 2.5s). */
+		durationSec: z.number().positive().max(30).optional(),
+		label: z.string().optional(),
+		/** Remove near-full-bleed start image overlays (default true). */
+		removeStartOverlays: z.boolean().optional(),
+		/**
+		 * Replace an existing opening start-thumbnail clip. Required when one
+		 * already exists — otherwise the call is refused (do not stack covers).
+		 */
+		replace: z.boolean().optional(),
+	})
+	.refine((a) => Boolean(a.imagePath?.trim() || a.image?.trim() || a.text?.trim()), {
+		message: "insertStartThumbnail needs imagePath, image, or text",
+	});
+
+export const listTransitionsArgs = z.object({
+	/** GPU backend hint — defaults by platform (metal / d3d11 / wgpu). */
+	backend: z.enum(["metal", "d3d11", "wgpu"]).optional(),
 });
 
 export const addAudioArgs = z.object({
@@ -721,6 +979,55 @@ export const setBackgroundArgs = z.object({
 	wallpaper: z.string().min(1),
 });
 
+/** Caption look / enable — transcript stays SSOT; this only styles the burn-in. */
+export const setCaptionSettingsArgs = z.object({
+	enabled: z.boolean().optional(),
+	fontSize: z.number().positive().max(200).optional(),
+	fontWeight: z.enum(["normal", "bold"]).optional(),
+	color: z.string().min(1).optional(),
+	backgroundEnabled: z.boolean().optional(),
+	backgroundColor: z.string().min(1).optional(),
+	backgroundOpacity: z.number().min(0).max(1).optional(),
+	anchorV: z.enum(["bottom", "top"]).optional(),
+	anchorH: z.enum(["left", "center", "right"]).optional(),
+	insetY: z.number().min(0).max(50).optional(),
+	insetX: z.number().min(0).max(50).optional(),
+	minWordsPerLine: z.number().int().positive().max(20).optional(),
+	maxWordsPerLine: z.number().int().positive().max(20).optional(),
+	captionLane: z.enum(["recording", "voiceover"]).optional(),
+});
+
+/**
+ * Composition / look / webcam / cursor settings the Effects + Layout panes edit.
+ * Pass only fields you want to change. fitClip:true zeros padding/roundness/shadow
+ * and sets aspectRatio to the given fitClipAspect (default "native").
+ */
+export const setEditorSettingsArgs = z.object({
+	shadowIntensity: z.number().min(0).max(1).optional(),
+	showBlur: z.boolean().optional(),
+	motionBlurAmount: z.number().min(0).max(1).optional(),
+	borderRadius: z.number().min(0).max(100).optional(),
+	padding: z.number().min(0).max(100).optional(),
+	audioGainDb: z.number().min(-60).max(24).optional(),
+	autoFocusAll: z.boolean().optional(),
+	webcamLayoutPreset: z
+		.enum(["picture-in-picture", "vertical-stack", "dual-frame", "no-webcam"])
+		.optional(),
+	webcamMaskShape: z.enum(["rectangle", "circle", "square", "rounded"]).optional(),
+	webcamMirrored: z.boolean().optional(),
+	webcamReactiveZoom: z.boolean().optional(),
+	webcamSizePreset: z.number().min(10).max(50).optional(),
+	webcamBackgroundMode: z.enum(["none", "transparent", "blur", "custom"]).optional(),
+	webcamBlurIntensity: z.number().min(0).max(1).optional(),
+	cursorShow: z.boolean().optional(),
+	cursorTheme: z.string().min(1).optional(),
+	cursorSize: z.number().min(0.5).max(8).optional(),
+	cursorSmoothing: z.number().min(0).max(1).optional(),
+	/** Zero pad/round/shadow and set aspect to fitClipAspect (default native). */
+	fitClip: z.boolean().optional(),
+	fitClipAspect: z.string().min(1).optional(),
+});
+
 export const listSourcesArgs = z.object({});
 
 export const recordScreenArgs = z.object({
@@ -773,12 +1080,21 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"getTranscriptRange",
 	"getTranscriptWords",
 	"getCursorTrack",
+	"listCharacters",
+	"createMotionGraphicPreview",
 	"setWordText",
 	"addTrim",
 	"addTrims",
 	"setTrim",
+	"tightenPacing",
+	"removeFillerWords",
 	"setClipRange",
 	"addClip",
+	"splitClip",
+	"duplicateClip",
+	"importMedia",
+	"insertStartThumbnail",
+	"listTransitions",
 	"setClipCrop",
 	"setClipIncomingTransition",
 	"moveClip",
@@ -789,6 +1105,10 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"addSpeed",
 	"setSpeed",
 	"addAnnotation",
+	"addPrivacyCover",
+	"addCursorHighlight",
+	"registerCharacter",
+	"addBeatGraphics",
 	"addGraphic",
 	"setAnnotation",
 	"addCameraFullscreen",
@@ -800,6 +1120,8 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"removeClip",
 	"setAspectRatio",
 	"setBackground",
+	"setCaptionSettings",
+	"setEditorSettings",
 	"listSources",
 	"recordScreen",
 	"generateCaptions",
@@ -859,8 +1181,14 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addTrims",
 	"addZooms",
 	"setTrim",
+	"tightenPacing",
+	"removeFillerWords",
 	"setClipRange",
 	"addClip",
+	"splitClip",
+	"duplicateClip",
+	"importMedia",
+	"insertStartThumbnail",
 	"setClipCrop",
 	"setClipIncomingTransition",
 	"moveClip",
@@ -870,6 +1198,10 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addSpeed",
 	"setSpeed",
 	"addAnnotation",
+	"addPrivacyCover",
+	"addCursorHighlight",
+	"registerCharacter",
+	"addBeatGraphics",
 	"addGraphic",
 	"setAnnotation",
 	"addCameraFullscreen",
@@ -881,6 +1213,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"removeClip",
 	"setAspectRatio",
 	"setBackground",
+	"setCaptionSettings",
+	"setEditorSettings",
 	"recordScreen",
 	"generateCaptions",
 ]);
@@ -913,8 +1247,27 @@ function resolveWallpaperInput(input: string): string {
 	) {
 		return trimmed;
 	}
+	if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(trimmed)) {
+		if (trimmed.length > 1_500_000) {
+			throw new Error("wallpaper data URI is too large");
+		}
+		return trimmed;
+	}
+	let abs: string | null = null;
+	try {
+		abs = assertSafeLocalMediaPath(trimmed, "wallpaper");
+	} catch {
+		abs = null;
+	}
+	if (abs && existsSync(abs)) {
+		const ext = extname(abs).toLowerCase();
+		if (![".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) {
+			throw new Error("wallpaper imagePath must be .png, .jpg, .jpeg, .webp, or .gif");
+		}
+		return loadImageFileAsDataUri(abs, { ffmpegPath: resolveFfmpeg() });
+	}
 	throw new Error(
-		"wallpaper must be a bundled /wallpapers/wallpaperN.jpg path, index 1–18, a CSS color, or a CSS gradient",
+		"wallpaper must be a bundled /wallpapers/wallpaperN.jpg path, index 1–18, a CSS color/gradient, an image data URI, or an absolute image path",
 	);
 }
 
@@ -973,17 +1326,28 @@ function projectQueueForModel(document: AxcutDocument): Record<string, unknown> 
 					? Math.max(0, sourceDurationSec - c.sourceEndSec)
 					: null,
 			cropRegion: c.cropRegion ?? null,
+			incomingTransition: c.incomingTransition
+				? {
+						kind: c.incomingTransition.kind,
+						transitionId: c.incomingTransition.transitionId ?? null,
+						durationSec: c.incomingTransition.durationSec ?? null,
+					}
+				: null,
 		};
 	});
 	return {
 		note:
 			"unusedAssets are recordings in this project that are not on the timeline — addClip places one. " +
 			"editedDurationSec is the playback length after trims. sourceDurationSec on each clip is the full file. " +
-			"Clip-to-clip video transitions and multi-band EQ are not fields on this document; do not invent them. " +
-			"Annotation textAnimation is the official text enter animation. Audio gainDb + fadeInSec/fadeOutSec is the official level/fade. " +
-			"addGraphic / addAnnotation land on the timeline and are already composited in preview and export — there is no separate merge step.",
+			"Clip joins: clips[].incomingTransition + setClipIncomingTransition / listTransitions. Multi-band EQ is not a field. " +
+			"Start cover/thumbnail → insertStartThumbnail (refused if one already exists unless replace:true). Overlay titles/CTAs → addGraphic. " +
+			"Caption look → setCaptionSettings; frame/look/webcam/cursor → setEditorSettings. " +
+			"Annotation textAnimation is a text enter animation. Audio gainDb + fadeInSec/fadeOutSec is the official level/fade. " +
+			"addGraphic / addAnnotation land on the footage and are already composited — no separate merge step.",
 		editedDurationSec,
 		clipCount: clips.length,
+		hasStartThumbnail: findStartThumbnailClip(document) != null,
+		startThumbnail: findStartThumbnailClip(document),
 		unusedAssetCount: unusedAssets.length,
 		unusedAudioCount: unusedAudio.length,
 		clips,
@@ -1054,7 +1418,7 @@ export function documentSnapshotForModel(
 		timeBaseNote:
 			"clips and trims are in source-time seconds; zooms, speedRegions, annotations, cameraFullscreenRegions and audioTracks are in virtual (edited-timeline) seconds.",
 		audioNote:
-			"audioTracks are imported voiceover / music files laid over the recording. They are clip-anchored like every other region, so they travel with their clip through reorder and trim, and they play at 1x whatever a speed region does to the picture under them. addAudio places an EXISTING asset of kind 'audio'; nothing here can import a file from disk or record one, so if the project has no audio asset, say so rather than inventing an id.",
+			"audioTracks are imported voiceover / music files laid over the recording. They are clip-anchored like every other region, so they travel with their clip through reorder and trim, and they play at 1x whatever a speed region does to the picture under them. importMedia(path, kind:\"audio\") brings a file into the project; addAudio then places that asset on a lane.",
 		zoomNote:
 			`renderedScale is what the viewer sees (depth is an ordinal, not a factor: ${ZOOM_DEPTH_LEGEND}). ` +
 			"When a zoom carries customScale it wins over depth and depthIsOverridden is true — " +
@@ -1121,8 +1485,45 @@ export function documentSnapshotForModel(
 			timelineStartSec: c.timelineStartSec,
 			timelineEndSec: c.timelineEndSec,
 			...(c.cropRegion ? { cropRegion: c.cropRegion } : {}),
+			...(c.incomingTransition
+				? {
+						incomingTransition: {
+							kind: c.incomingTransition.kind,
+							transitionId: c.incomingTransition.transitionId ?? null,
+							durationSec: c.incomingTransition.durationSec ?? null,
+						},
+					}
+				: {}),
 		})),
 		projectQueue: projectQueueForModel(document),
+		look: (() => {
+			const settings = getEditorSettings(document);
+			return {
+				aspectRatio: settings.aspectRatio,
+				wallpaper: settings.wallpaper,
+				padding: settings.padding,
+				borderRadius: settings.borderRadius,
+				shadowIntensity: settings.shadowIntensity,
+				showBlur: settings.showBlur,
+				motionBlurAmount: settings.motionBlurAmount,
+				audioGainDb: settings.audioGainDb,
+				autoFocusAll: settings.autoFocusAll,
+				webcamLayoutPreset: settings.webcamLayoutPreset,
+				cursorShow: settings.cursorShow,
+			};
+		})(),
+		captions: (() => {
+			const c = getCaptionSettings(document);
+			return {
+				enabled: c.enabled,
+				fontSize: c.fontSize,
+				anchorV: c.anchorV,
+				anchorH: c.anchorH,
+				insetY: c.insetY,
+				insetX: c.insetX,
+				captionLane: c.captionLane,
+			};
+		})(),
 		trimRanges: document.timeline.trimRanges.map((s) => ({
 			id: s.id,
 			assetId: s.assetId,
@@ -1210,7 +1611,7 @@ export function documentSnapshotForModel(
 }
 
 function failure(message: string): AgentToolExecution {
-	return { ok: false, resultJson: JSON.stringify({ error: message }) };
+	return { ok: false, resultJson: JSON.stringify({ error: message }), summary: message };
 }
 
 /**
@@ -1350,6 +1751,12 @@ export interface AgentToolOptions {
 	cursorTelemetry?: CursorTelemetryContext;
 	/** True only when this turn already attached JPEG visual evidence to the model. */
 	visualFramesSupplied?: boolean;
+	/**
+	 * Output of the async media step (`prepareAgentToolMedia`) for THIS call:
+	 * rendered MP4s and probed durations. Tools that render video refuse to run
+	 * without it rather than blocking the main process with a synchronous ffmpeg.
+	 */
+	prepared?: PreparedToolMedia;
 }
 
 /**
@@ -1906,6 +2313,116 @@ export function executeAgentTool(
 			};
 		}
 
+		case "tightenPacing": {
+			const parsed = tightenPacingArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const assetId =
+				parsed.data.assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id;
+			if (!assetId) return failure("Project has no assets — nothing to tighten.");
+			const transcript =
+				document.transcripts.find((t) => t.assetId === assetId) ??
+				(document.transcript?.assetId === assetId ? document.transcript : null);
+			if (!transcript) {
+				return failure(
+					`No transcript for asset ${assetId}. Run generateCaptions first, or cut silences with addTrims using source times.`,
+				);
+			}
+			const minSilenceSec = parsed.data.minSilenceSec ?? 0.45;
+			const keepPauseSec = parsed.data.keepPauseSec ?? 0.12;
+			const ranges = transcript.segments
+				.filter((s) => s.kind === "silence")
+				.map((s) => {
+					const startSec = s.startSec;
+					const endSec = Math.max(startSec, s.endSec - keepPauseSec);
+					return { startSec, endSec, assetId };
+				})
+				.filter((r) => r.endSec - r.startSec >= minSilenceSec);
+			if (ranges.length === 0) {
+				return {
+					ok: true,
+					document,
+					resultJson: JSON.stringify({
+						appliedCount: 0,
+						minSilenceSec,
+						keepPauseSec,
+						note: "No silence segments long enough to cut.",
+					}),
+					summary: "no silences long enough to cut",
+				};
+			}
+			const batch = executeAgentTool(
+				document,
+				"addTrims",
+				JSON.stringify({ ranges }),
+				options,
+			);
+			if (!batch.ok) return batch;
+			let payload: Record<string, unknown> = {};
+			try {
+				payload = JSON.parse(batch.resultJson) as Record<string, unknown>;
+			} catch {
+				payload = {};
+			}
+			return {
+				ok: true,
+				document: batch.document ?? document,
+				resultJson: JSON.stringify({
+					...payload,
+					minSilenceSec,
+					keepPauseSec,
+					requestedSilences: ranges.length,
+				}),
+				summary: `tightened pacing: ${batch.summary ?? `${ranges.length} silence cuts`}`,
+			};
+		}
+
+		case "removeFillerWords": {
+			const parsed = removeFillerWordsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const assetId =
+				parsed.data.assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id;
+			if (!assetId) return failure("Project has no assets — nothing to edit.");
+			const transcript =
+				document.transcripts.find((t) => t.assetId === assetId) ??
+				(document.transcript?.assetId === assetId ? document.transcript : null);
+			if (!transcript) {
+				return failure(
+					`No transcript for asset ${assetId}. Run generateCaptions first, then removeFillerWords.`,
+				);
+			}
+			const extras = (parsed.data.extraWords ?? []).map((w) => w.toLowerCase().trim());
+			const fillers = new Set(["um", "uh", "erm", "ah", "uhh", "umm", ...extras]);
+			const ranges = transcript.words
+				.filter((w) => fillers.has(w.text.toLowerCase().replace(/[^a-z']/g, "")))
+				.map((w) => ({
+					startSec: w.startSec,
+					endSec: w.endSec,
+					assetId,
+				}))
+				.filter((r) => r.endSec > r.startSec);
+			if (ranges.length === 0) {
+				return {
+					ok: true,
+					document,
+					resultJson: JSON.stringify({ appliedCount: 0, note: "No filler words found." }),
+					summary: "no filler words found",
+				};
+			}
+			const batch = executeAgentTool(
+				document,
+				"addTrims",
+				JSON.stringify({ ranges }),
+				options,
+			);
+			if (!batch.ok) return batch;
+			return {
+				ok: true,
+				document: batch.document ?? document,
+				resultJson: batch.resultJson,
+				summary: `removed ${ranges.length} filler word cut(s)`,
+			};
+		}
+
 		case "setClipRange": {
 			const parsed = setClipRangeArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
@@ -1997,6 +2514,248 @@ export function executeAgentTool(
 			};
 		}
 
+		case "splitClip": {
+			const parsed = splitClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { clipId, atSourceSec } = parsed.data;
+			if (!document.timeline.clips.some((c) => c.id === clipId)) {
+				return failure(`Unknown clip: ${clipId}. ${clipRoster(document)}`);
+			}
+			let next: AxcutDocument;
+			try {
+				next = splitClip(document, clipId, atSourceSec, "agent");
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			const leftIdx = next.timeline.clips.findIndex((c) => c.id === clipId);
+			const left = leftIdx >= 0 ? next.timeline.clips[leftIdx] : undefined;
+			const right = leftIdx >= 0 ? next.timeline.clips[leftIdx + 1] : undefined;
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					leftClipId: left?.id ?? clipId,
+					rightClipId: right?.id ?? null,
+					atSourceSec,
+					clipOrder: next.timeline.clips.map((c) => c.id),
+					note: "Style the join with setClipIncomingTransition on rightClipId (dissolve / wipe / …).",
+				}),
+				summary: `split ${clipId} at ${formatSec(atSourceSec)}`,
+			};
+		}
+
+		case "duplicateClip": {
+			const parsed = duplicateClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { clipId } = parsed.data;
+			if (!document.timeline.clips.some((c) => c.id === clipId)) {
+				return failure(`Unknown clip: ${clipId}. ${clipRoster(document)}`);
+			}
+			let next: AxcutDocument;
+			try {
+				next = duplicateClip(document, clipId, "agent", parsed.data.reason ?? "");
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			const previousIds = new Set(document.timeline.clips.map((c) => c.id));
+			const copy = next.timeline.clips.find((c) => !previousIds.has(c.id));
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					clipId,
+					copyClipId: copy?.id ?? null,
+					clipOrder: next.timeline.clips.map((c) => c.id),
+				}),
+				summary: `duplicated ${clipId}`,
+			};
+		}
+
+		case "importMedia": {
+			const parsed = importMediaArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			let abs: string;
+			try {
+				abs = assertSafeLocalMediaPath(parsed.data.path, "importMedia path");
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			if (!existsSync(abs)) {
+				return failure(`importMedia path not found: ${abs}`);
+			}
+			const ext = extname(abs).toLowerCase();
+			const videoExt = new Set([
+				".mp4",
+				".mov",
+				".webm",
+				".mkv",
+				".m4v",
+				".avi",
+				".mpeg",
+				".mpg",
+			]);
+			const audioExt = new Set([".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"]);
+			const kind =
+				parsed.data.kind ??
+				(audioExt.has(ext) ? "audio" : videoExt.has(ext) ? "video" : null);
+			if (!kind) {
+				return failure(
+					`Unsupported media extension ${ext || "(none)"}. Use a common video or audio file.`,
+				);
+			}
+			if (kind === "video" && !videoExt.has(ext)) {
+				return failure(`Extension ${ext} is not a supported video type for importMedia.`);
+			}
+			if (kind === "audio" && !audioExt.has(ext)) {
+				return failure(`Extension ${ext} is not a supported audio type for importMedia.`);
+			}
+			// The probed duration (async media step) wins over a model-supplied
+			// guess; the model's value is only a fallback when ffprobe is missing.
+			const probed = options?.prepared?.mediaDurationSec;
+			const durationSec =
+				typeof probed === "number" && probed > 0 ? probed : parsed.data.durationSec;
+			if (durationSec == null || !(durationSec > 0)) {
+				return failure(
+					"Could not probe media duration. Pass durationSec (seconds) and call importMedia again.",
+				);
+			}
+			let sizeBytes: number | undefined;
+			try {
+				sizeBytes = statSync(abs).size;
+			} catch {
+				sizeBytes = undefined;
+			}
+			const assetId = createId("asset");
+			const label = parsed.data.label?.trim() || basename(abs);
+			const asset = {
+				id: assetId,
+				kind,
+				label,
+				originalPath: abs,
+				durationSec,
+				sizeBytes,
+				cameraTrack: null,
+			} as AxcutDocument["assets"][number];
+			const claimsPrimary = kind !== "audio" && !document.project.primaryAssetId;
+			let next: AxcutDocument = {
+				...document,
+				assets: [...document.assets, asset],
+				project: {
+					...document.project,
+					...(claimsPrimary ? { primaryAssetId: assetId } : {}),
+					updatedAt: new Date().toISOString(),
+				},
+			};
+			const place =
+				parsed.data.placeOnTimeline ?? kind === "video";
+			let clipId: string | null = null;
+			if (place && kind === "video") {
+				const beforeClipId = parsed.data.beforeClipId ?? null;
+				let insertIndex = next.timeline.clips.length;
+				if (beforeClipId !== null) {
+					insertIndex = next.timeline.clips.findIndex((c) => c.id === beforeClipId);
+					if (insertIndex < 0) {
+						return failure(`Unknown clip: ${beforeClipId}. ${clipRoster(document)}`);
+					}
+				}
+				try {
+					const beforeIds = new Set(next.timeline.clips.map((c) => c.id));
+					next = insertClip(next, assetId, insertIndex, "agent", `Imported ${label}`);
+					clipId = next.timeline.clips.find((c) => !beforeIds.has(c.id))?.id ?? null;
+				} catch (err) {
+					return failure(err instanceof Error ? err.message : String(err));
+				}
+			}
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					assetId,
+					kind,
+					durationSec,
+					placedClipId: clipId,
+					placeOnTimeline: place && kind === "video",
+					note:
+						kind === "audio"
+							? "Audio asset imported — use addAudio to lay it on a voiceover/music lane."
+							: clipId
+								? "Video placed on the timeline."
+								: "Video asset imported — use addClip to place it.",
+				}),
+				summary:
+					kind === "audio"
+						? `imported audio ${label}`
+						: clipId
+							? `imported and placed ${label}`
+							: `imported ${label}`,
+			};
+		}
+
+		case "insertStartThumbnail": {
+			const parsed = insertStartThumbnailArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const existing = findStartThumbnailClip(document);
+			if (existing && !parsed.data.replace) {
+				return failure(
+					`A start thumbnail already exists (clip ${existing.clipId}, "${existing.label}" at index ${existing.index}). ` +
+						`Do not stack another opener — keep it, or pass replace:true to swap it. ` +
+						`For polish/attractive asks, use setEditorSettings, addGraphic overlays, and setClipIncomingTransition instead.`,
+				);
+			}
+			const baked = options?.prepared?.startThumbnail;
+			if (!baked) {
+				if (options?.prepared?.renderError) {
+					return failure(`Could not render the start thumbnail: ${options.prepared.renderError}`);
+				}
+				if (!resolveFfmpeg()?.trim()) {
+					return failure(
+						"insertStartThumbnail needs ffmpeg (bundled OpenScreen ffmpeg missing). Cannot bake a start clip.",
+					);
+				}
+				if (
+					!parsed.data.imagePath?.trim() &&
+					!parsed.data.image?.trim() &&
+					!graphicCaption(parsed.data.text ?? "", parsed.data.subtext)
+				) {
+					return failure("insertStartThumbnail needs imagePath, image, or text");
+				}
+				return failure(
+					"insertStartThumbnail renders video, so it must be called directly as an agent tool " +
+						"(not inside a batch). Check that imagePath is an absolute path to a readable image.",
+				);
+			}
+			try {
+				const placed = insertStartThumbnailClip(document, {
+					mp4Path: baked.mp4Path,
+					durationSec: baked.durationSec,
+					label: parsed.data.label,
+					removeStartOverlays: parsed.data.removeStartOverlays,
+					replace: parsed.data.replace === true,
+				});
+				return {
+					ok: true,
+					document: placed.document,
+					resultJson: JSON.stringify({
+						assetId: placed.assetId,
+						clipId: placed.clipId,
+						durationSec: baked.durationSec,
+						width: baked.width,
+						height: baked.height,
+						replaced: Boolean(existing && parsed.data.replace),
+						removedOverlayIds: placed.removedAnnotationIds,
+						note:
+							"Opening segment is a real timeline clip at index 0 — the recording plays after it. " +
+							"This is not an overlay; nothing is covered on the take.",
+					}),
+					summary: existing && parsed.data.replace
+						? `replaced start thumbnail (${baked.durationSec.toFixed(1)}s), recording follows`
+						: `inserted full-frame start thumbnail (${baked.durationSec.toFixed(1)}s), recording follows`,
+				};
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+		}
+
 		case "setClipCrop": {
 			const parsed = setClipCropArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
@@ -2033,7 +2792,14 @@ export function executeAgentTool(
 			if (!clip) return failure(`Unknown clip: ${clipId}. ${clipRoster(document)}`);
 			const clipIndex = document.timeline.clips.findIndex((c) => c.id === clipId);
 			if (clipIndex <= 0) {
-				return failure("incoming transition requires a non-first clip (a join)");
+				const clipCount = document.timeline.clips.length;
+				return failure(
+					`Cannot set an incoming transition on the first timeline clip (${clipId} at index ${clipIndex}). ` +
+						`Transitions only apply to the JOIN into clip index ≥ 1. ` +
+						(clipCount < 2
+							? `Only ${clipCount} clip on the timeline — either skip the dissolve, or splitClip(this clip, atSourceSec) first and then setClipIncomingTransition on the RIGHT half id from the split result. Do not retry the same first-clip call.`
+							: `Pass a non-first clipId (${clipRoster(document)}). If you just removed a start thumbnail, the recording is now index 0 with no join — splitClip mid-take if you still want a dissolve, otherwise skip it and finish.`),
+				);
 			}
 			// Resolve through the canonical Transition Registry.
 			const transitionId = resolveTransitionId({
@@ -2500,13 +3266,667 @@ export function executeAgentTool(
 			);
 		}
 
+		case "addPrivacyCover": {
+			const parsed = addPrivacyCoverArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const extent = editedExtentSec(document);
+			if (extent.endSec <= extent.startSec) {
+				return failure("No clips on the timeline — place footage before adding a privacy cover.");
+			}
+			const startSec = parsed.data.startSec ?? extent.startSec;
+			const endSec = parsed.data.endSec ?? extent.endSec;
+			if (endSec <= startSec) {
+				return failure("addPrivacyCover needs endSec > startSec");
+			}
+			const startMs = toMs(startSec);
+			const endMs = toMs(endSec);
+			let working = document;
+			const removedIds: string[] = [];
+			if (parsed.data.replaceExistingBlurs !== false) {
+				const keep = working.annotations.filter((a) => {
+					if (a.type !== "blur") return true;
+					const aStart = a.startMs ?? 0;
+					const aEnd = a.endMs ?? 0;
+					const overlaps = aStart < endMs && aEnd > startMs;
+					if (overlaps) {
+						removedIds.push(a.id);
+						return false;
+					}
+					return true;
+				});
+				if (removedIds.length > 0) {
+					working = { ...working, annotations: keep };
+				}
+			}
+			const rects: Array<{ x: number; y: number; width: number; height: number; label: string }> =
+				[
+					{
+						...PRIVACY_PRESET_RECTS[parsed.data.preset],
+						label: parsed.data.preset,
+					},
+				];
+			const alsoTopRight =
+				parsed.data.includeTopRight ?? parsed.data.preset === "topStrip";
+			if (alsoTopRight && parsed.data.preset !== "topRight" && parsed.data.preset !== "fullFrame") {
+				rects.push({ ...PRIVACY_PRESET_RECTS.topRight, label: "topRight" });
+			}
+			const appliedIds: string[] = [];
+			let lastSummary = "";
+			for (const rect of rects) {
+				const ann = {
+					type: "blur" as const,
+					content: `privacy:${rect.label}`,
+					textContent: `privacy:${rect.label}`,
+					position: { x: rect.x, y: rect.y },
+					size: { width: rect.width, height: rect.height },
+					style: {
+						color: "#ffffff",
+						backgroundColor: "transparent",
+						fontSize: 32,
+						fontFamily: "Inter",
+						fontWeight: "bold" as const,
+						fontStyle: "normal" as const,
+						textDecoration: "none" as const,
+						textAlign: "center" as const,
+						textAnimation: "none" as const,
+					},
+					zIndex: working.annotations.length + 1 + appliedIds.length,
+					blurData: {
+						type: parsed.data.blurKind,
+						shape: "rectangle" as const,
+						color: "white" as const,
+						intensity: 16,
+						blockSize: 14,
+					},
+				};
+				const result = commitAnnotation(
+					working,
+					ann,
+					startMs,
+					endMs,
+					`privacy ${rect.label} (${parsed.data.blurKind})`,
+				);
+				if (!result.ok || !result.document) return result;
+				working = result.document;
+				lastSummary = result.summary ?? lastSummary;
+				try {
+					const payload = JSON.parse(result.resultJson) as { annotationId?: string };
+					if (payload.annotationId) appliedIds.push(payload.annotationId);
+				} catch {
+					/* ignore */
+				}
+			}
+			return {
+				ok: true,
+				document: working,
+				resultJson: JSON.stringify({
+					preset: parsed.data.preset,
+					blurKind: parsed.data.blurKind,
+					annotationIds: appliedIds,
+					removedBlurIds: removedIds,
+					startSec,
+					endSec,
+					note:
+						"Privacy mosaics are burnt into preview/export. Scrub the opening and any tab-switch moments; if an edge is still readable, call again with preset topRight or fullFrame.",
+				}),
+				summary:
+					`privacy cover ${parsed.data.preset}` +
+					(alsoTopRight && parsed.data.preset === "topStrip" ? "+topRight" : "") +
+					` ${formatSec(startSec)} – ${formatSec(endSec)}` +
+					(removedIds.length ? ` (replaced ${removedIds.length} prior blur(s))` : "") +
+					(lastSummary.includes("clamped") ? " (clamped to clips)" : ""),
+			};
+		}
+
+		case "addCursorHighlight": {
+			const parsed = addCursorHighlightArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const load = options?.cursorTelemetry?.load;
+			if (!load || load.status === "unavailable") {
+				return failure(
+					"addCursorHighlight needs cursor telemetry for this recording. " +
+						"No reader is available in this run — cannot place pointer-following highlights.",
+				);
+			}
+			if (load.status === "no-sidecar") {
+				return failure(
+					"This asset has no cursor-telemetry sidecar, so pointer-following highlights cannot be placed. " +
+						"Use addGraphic / addAnnotation with explicit x/y instead, or record with OpenScreen cursor capture.",
+				);
+			}
+			const asset = document.assets.find((a) => a.id === load.assetId);
+			const track = buildCursorTrack({
+				assetId: load.assetId,
+				samples: load.samples,
+				durationSec: load.durationSec ?? asset?.durationSec ?? 0,
+				clips: document.timeline.clips,
+				trimRanges: document.timeline.trimRanges,
+			});
+			const extent = editedExtentSec(document);
+			const winStart = parsed.data.startSec ?? extent.startSec;
+			const winEnd = parsed.data.endSec ?? extent.endSec;
+			if (winEnd <= winStart) {
+				return failure("addCursorHighlight needs endSec > startSec");
+			}
+			const every = parsed.data.everySec;
+			const size =
+				parsed.data.sizePct ??
+				(parsed.data.style === "character" ? 22 : parsed.data.style === "callout" ? 16 : 14);
+			const half = size / 2;
+			type Pick = { virtualSec: number; cx: number; cy: number; kind?: string };
+			const candidates: Pick[] = [];
+			for (const p of track.points) {
+				if (p.trimmed) continue;
+				const v = p.virtualSec ?? p.atSec;
+				if (v < winStart || v > winEnd) continue;
+				if (parsed.data.clicksOnly) {
+					const k = (p.kind ?? "").toLowerCase();
+					if (k !== "click" && k !== "mouseup" && k !== "mousedown") continue;
+				}
+				candidates.push({ virtualSec: v, cx: p.cx, cy: p.cy, kind: p.kind });
+			}
+			if (candidates.length === 0) {
+				return failure(
+					parsed.data.clicksOnly
+						? "No click samples in that span — try clicksOnly:false or widen the window."
+						: "No cursor samples in that span — check getCursorTrack / hasCursorTelemetry.",
+				);
+			}
+			const picked: Pick[] = [];
+			let lastKept = Number.NEGATIVE_INFINITY;
+			for (const c of candidates) {
+				if (c.virtualSec - lastKept < every && picked.length > 0) continue;
+				picked.push(c);
+				lastKept = c.virtualSec;
+				if (picked.length >= parsed.data.maxPoints) break;
+			}
+			let working = document;
+			const replaceExisting =
+				parsed.data.replaceExisting ?? parsed.data.style === "character";
+			if (replaceExisting) {
+				const startMsWin = toMs(winStart);
+				const endMsWin = toMs(winEnd);
+				working = {
+					...working,
+					annotations: working.annotations.filter((a) => {
+						const text = String(a.textContent ?? a.content ?? "");
+						const knownCharacter =
+							text === "Coach" ||
+							text === "Guide" ||
+							text === "Pointer" ||
+							text === "Spark" ||
+							text === "Bot" ||
+							text === "Follow along" ||
+							BUILTIN_CHARACTER_LABELS.has(text);
+						const isCursorOverlay =
+							(a.type === "blur" && text.startsWith("cursor-")) ||
+							(a.type === "image" && knownCharacter);
+						if (!isCursorOverlay) return true;
+						const aStart = a.startMs ?? 0;
+						const aEnd = a.endMs ?? 0;
+						return !(aStart < endMsWin && aEnd > startMsWin);
+					}),
+				};
+			}
+			const appliedIds: string[] = [];
+			const holdSec =
+				parsed.data.style === "character"
+					? Math.min(Math.max(every * 1.6, 1.8), 3.5)
+					: Math.min(Math.max(every * 0.85, 0.28), 1.2);
+			let characterImage: string | null = null;
+			let characterMeta: { characterId: string; source: string } | null = null;
+			if (parsed.data.style === "character") {
+				try {
+					const resolved = resolveCharacterImage(
+						document,
+						{
+							characterId: parsed.data.characterId ?? "guide",
+							characterPath: parsed.data.characterPath,
+							image: parsed.data.image,
+							label: parsed.data.label,
+						},
+						{ ffmpegPath: resolveFfmpeg() },
+					);
+					characterImage = resolved.image;
+					characterMeta = { characterId: resolved.characterId, source: resolved.source };
+				} catch (err) {
+					return failure(err instanceof Error ? err.message : String(err));
+				}
+			}
+			for (const c of picked) {
+				const x = Math.min(100 - size, Math.max(0, c.cx * 100 - half));
+				const y = Math.min(100 - size, Math.max(0, c.cy * 100 - half));
+				const startMs = toMs(c.virtualSec);
+				const endMs = toMs(Math.min(winEnd, c.virtualSec + holdSec));
+				let ann: Record<string, unknown>;
+				if (parsed.data.style === "callout") {
+					ann = {
+						type: "figure",
+						content: parsed.data.label?.trim() || "Look",
+						textContent: parsed.data.label?.trim() || "Look",
+						position: { x, y },
+						size: { width: size, height: size * 0.7 },
+						style: {
+							color: "#ffcc00",
+							backgroundColor: "transparent",
+							fontSize: 28,
+							fontFamily: "Inter",
+							fontWeight: "bold",
+							fontStyle: "normal",
+							textDecoration: "none",
+							textAlign: "center",
+							textAnimation: "pop",
+						},
+						zIndex: working.annotations.length + 1 + appliedIds.length,
+						figureData: {
+							arrowDirection: "down",
+							color: "#ffcc00",
+							strokeWidth: 4,
+						},
+					};
+				} else if (parsed.data.style === "character" && characterImage) {
+					const label =
+						parsed.data.label?.trim() ||
+						BUILTIN_CHARACTERS.find((c) => c.id === characterMeta?.characterId)?.label ||
+						characterMeta?.characterId ||
+						"Guide";
+					ann = {
+						type: "image",
+						content: characterImage,
+						textContent: label,
+						imageContent: characterImage,
+						position: { x, y },
+						size: { width: size, height: size },
+						style: {
+							color: "#ffffff",
+							backgroundColor: "transparent",
+							fontSize: 24,
+							fontFamily: "Inter",
+							fontWeight: "bold",
+							fontStyle: "normal",
+							textDecoration: "none",
+							textAlign: "center",
+							textAnimation: "none",
+						},
+						zIndex: working.annotations.length + 1 + appliedIds.length,
+					};
+				} else {
+					ann = {
+						type: "blur",
+						content: `cursor-${parsed.data.style}`,
+						textContent: `cursor-${parsed.data.style}`,
+						position: { x, y },
+						size: { width: size, height: size },
+						style: {
+							color: "#ffffff",
+							backgroundColor: "transparent",
+							fontSize: 24,
+							fontFamily: "Inter",
+							fontWeight: "bold",
+							fontStyle: "normal",
+							textDecoration: "none",
+							textAlign: "center",
+							textAnimation: "none",
+						},
+						zIndex: working.annotations.length + 1 + appliedIds.length,
+						blurData: {
+							type: "mosaic",
+							shape: parsed.data.style === "finger" ? "oval" : "oval",
+							color: "white",
+							intensity: parsed.data.style === "ring" ? 10 : 14,
+							blockSize: parsed.data.style === "ring" ? 10 : 16,
+						},
+					};
+				}
+				const result = commitAnnotation(
+					working,
+					ann,
+					startMs,
+					endMs,
+					`cursor ${parsed.data.style}`,
+				);
+				if (!result.ok || !result.document) {
+					if (appliedIds.length === 0) return result;
+					break;
+				}
+				working = result.document;
+				try {
+					const payload = JSON.parse(result.resultJson) as { annotationId?: string };
+					if (payload.annotationId) appliedIds.push(payload.annotationId);
+				} catch {
+					/* ignore */
+				}
+			}
+			if (appliedIds.length === 0) {
+				return failure("No cursor highlights could be placed on playable clips.");
+			}
+			return {
+				ok: true,
+				document: working,
+				resultJson: JSON.stringify({
+					style: parsed.data.style,
+					placed: appliedIds.length,
+					annotationIds: appliedIds,
+					windowSec: { start: winStart, end: winEnd },
+					...(characterMeta ? { character: characterMeta } : {}),
+					note:
+						parsed.data.style === "character"
+							? "Character plates follow pointer samples — not lip-synced speech. Choose characterId via listCharacters, pass characterPath for an upload/agent PNG, or registerCharacter then reuse the id."
+							: "Highlights track recorded pointer positions on the edited timeline.",
+				}),
+				summary: `cursor ${parsed.data.style}${characterMeta ? `:${characterMeta.characterId}` : ""} ×${appliedIds.length} (${formatSec(winStart)} – ${formatSec(winEnd)})`,
+			};
+		}
+
+		case "listCharacters": {
+			return {
+				ok: true,
+				resultJson: JSON.stringify(listCharactersCatalog(document)),
+			};
+		}
+
+		case "createMotionGraphicPreview": {
+			const parsed = createMotionGraphicPreviewArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const baked = options?.prepared?.motionGraphic;
+			if (!baked) {
+				if (options?.prepared?.renderError) {
+					return failure(`Could not render the motion graphic: ${options.prepared.renderError}`);
+				}
+				return failure(
+					resolveFfmpeg()?.trim()
+						? "createMotionGraphicPreview renders video, so it must be called directly as an agent tool (not inside a batch)."
+						: "createMotionGraphicPreview needs ffmpeg (bundled OpenScreen ffmpeg missing).",
+				);
+			}
+			return {
+				ok: true,
+				resultJson: JSON.stringify({
+					previewOnly: true,
+					placed: 0,
+					videoPath: baked.mp4Path,
+					exportedPaths: [baked.mp4Path],
+					exportDir: baked.exportDir,
+					durationSec: baked.durationSec,
+					slideCount: baked.slideCount,
+					titles: parsed.data.titles,
+					note: "Motion graphic MP4 for chat preview — NOT on the timeline. When the user says use on video: importMedia(path) or insertStartThumbnail / addGraphic.",
+				}),
+				summary: `motion graphic preview ×${baked.slideCount} slides (${baked.durationSec.toFixed(1)}s) → ${baked.mp4Path}`,
+			};
+		}
+
+		case "registerCharacter": {
+			const parsed = registerCharacterArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			if (!parsed.data.imagePath?.trim() && !parsed.data.image?.trim()) {
+				return failure("registerCharacter needs imagePath or image");
+			}
+			try {
+				const placed = registerCharacterOnDocument(
+					document,
+					{
+						id: parsed.data.id,
+						label: parsed.data.label,
+						imagePath: parsed.data.imagePath,
+						image: parsed.data.image,
+					},
+					{ ffmpegPath: resolveFfmpeg() },
+				);
+				return {
+					ok: true,
+					document: placed.document,
+					resultJson: JSON.stringify({
+						character: {
+							id: placed.character.id,
+							label: placed.character.label,
+							hasPath: Boolean(placed.character.imagePath),
+							hasImage: Boolean(placed.character.image),
+						},
+						note: "Reuse with addCursorHighlight({ style:\"character\", characterId }) or addGraphic({ kind:\"image\", characterId }).",
+					}),
+					summary: `registered character "${placed.character.id}"`,
+				};
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+		}
+
+		case "addBeatGraphics": {
+			const parsed = addBeatGraphicsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const previewOnly = parsed.data.previewOnly === true;
+			const count = parsed.data.count;
+			const kind = parsed.data.kind;
+			const characterIds = ["guide", "pointer", "coach", "spark", "bot"] as const;
+			const exportDir = resolveGeneratedGraphicsDir(document);
+
+			const renderOne = (i: number, label: string): string | { error: string } => {
+				if (kind === "character") {
+					const cid =
+						(parsed.data.characterId as (typeof characterIds)[number] | undefined) ??
+						characterIds[i % characterIds.length];
+					try {
+						return resolveCharacterImage(
+							document,
+							{ characterId: cid, label },
+							{ ffmpegPath: resolveFfmpeg() },
+						).image;
+					} catch (err) {
+						return { error: err instanceof Error ? err.message : String(err) };
+					}
+				}
+				return renderPlatePng({
+					kind: kind === "title" ? "title" : kind === "lowerThird" ? "lowerThird" : "badge",
+					text: label,
+					color: "#ffffff",
+					backgroundColor: kind === "title" ? "rgba(0,0,0,0.62)" : "rgba(17,24,39,0.92)",
+				});
+			};
+
+			if (previewOnly) {
+				const exportedPaths: string[] = [];
+				for (let i = 0; i < count; i++) {
+					const label =
+						parsed.data.texts?.[i]?.trim() ||
+						(kind === "character"
+							? BUILTIN_CHARACTERS[i % BUILTIN_CHARACTERS.length]?.label || `Beat ${i + 1}`
+							: `Beat ${i + 1}`);
+					const image = renderOne(i, label);
+					if (typeof image !== "string") return failure(image.error);
+					const filePath = maybeWriteGeneratedGraphic(
+						exportDir,
+						`preview-${i + 1}-${slugLabel(label)}`,
+						image,
+					);
+					if (filePath) exportedPaths.push(filePath);
+				}
+				if (exportedPaths.length === 0) {
+					return failure(
+						"Could not write preview graphics — project needs a media path under Application Support.",
+					);
+				}
+				return {
+					ok: true,
+					document,
+					resultJson: JSON.stringify({
+						kind,
+						previewOnly: true,
+						placed: 0,
+						exportedPaths,
+						exportDir: exportDir ?? undefined,
+						note: "Preview files for chat — NOT on the timeline yet. Place with addGraphic(imagePath) when the user says use on video.",
+					}),
+					summary: `preview graphics ×${exportedPaths.length} (${kind}) — chat only; files → ${exportDir}`,
+				};
+			}
+
+			const extent = editedExtentSec(document);
+			if (extent.endSec <= extent.startSec) {
+				return failure("No clips on the timeline — place footage before adding beat graphics.");
+			}
+			const winStart = parsed.data.startSec ?? extent.startSec;
+			const winEnd = parsed.data.endSec ?? extent.endSec;
+			if (winEnd - winStart < 0.5) {
+				return failure("addBeatGraphics needs a longer timeline window");
+			}
+			const hold = parsed.data.holdSec ?? 2.2;
+			const sizePct =
+				parsed.data.sizePct ?? (kind === "character" ? 28 : kind === "title" ? 70 : 56);
+			const yDefault =
+				kind === "lowerThird" ? 74 : kind === "title" ? 14 : kind === "character" ? 58 : 8;
+			const y = parsed.data.y ?? yDefault;
+			// Keep plate aspect: badges are ~4.4:1; characters are square. A square box
+			// on a wide plate squashes text so users think "nothing was created".
+			const width =
+				kind === "character"
+					? Math.min(40, sizePct)
+					: kind === "title"
+						? Math.min(90, sizePct)
+						: Math.min(70, sizePct);
+			const height =
+				kind === "character"
+					? width
+					: kind === "title"
+						? Math.min(22, width * 0.22)
+						: Math.min(16, width * 0.24);
+			const x = Math.max(0, (100 - width) / 2);
+			const span = winEnd - winStart;
+			const step = span / count;
+			let working = document;
+			const appliedIds: string[] = [];
+			const exportedPaths: string[] = [];
+			for (let i = 0; i < count; i++) {
+				const t0 = winStart + step * i + Math.min(0.15, step * 0.08);
+				const t1 = Math.min(winEnd, t0 + Math.min(hold, step * 0.85));
+				const label =
+					parsed.data.texts?.[i]?.trim() ||
+					(kind === "character"
+						? BUILTIN_CHARACTERS[i % BUILTIN_CHARACTERS.length]?.label || `Beat ${i + 1}`
+						: `Beat ${i + 1}`);
+				const startMs = toMs(t0);
+				const endMs = toMs(t1);
+				const imageOrErr = renderOne(i, label);
+				if (typeof imageOrErr !== "string") return failure(imageOrErr.error);
+				const imageDataUri = imageOrErr;
+				const ann: Record<string, unknown> = {
+					type: "image",
+					content: imageDataUri,
+					textContent: label,
+					imageContent: imageDataUri,
+					position: { x, y },
+					size: { width, height },
+					style: {
+						color: "#ffffff",
+						backgroundColor: "transparent",
+						fontSize: kind === "character" ? 24 : 28,
+						fontFamily: "Inter",
+						fontWeight: "bold",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: kind === "character" ? "pop" : "fade",
+					},
+					zIndex: working.annotations.length + 1 + appliedIds.length,
+				};
+				const filePath = maybeWriteGeneratedGraphic(
+					exportDir,
+					`${i + 1}-${slugLabel(label)}`,
+					imageDataUri,
+				);
+				if (filePath) exportedPaths.push(filePath);
+				const result = commitAnnotation(
+					working,
+					ann,
+					startMs,
+					endMs,
+					`beat ${i + 1} ${kind}`,
+				);
+				if (!result.ok || !result.document) {
+					if (appliedIds.length === 0) return result;
+					break;
+				}
+				working = result.document;
+				try {
+					const payload = JSON.parse(result.resultJson) as { annotationId?: string };
+					if (payload.annotationId) appliedIds.push(payload.annotationId);
+				} catch {
+					/* ignore */
+				}
+			}
+			if (appliedIds.length === 0) {
+				return failure("No beat graphics could be placed.");
+			}
+			return {
+				ok: true,
+				document: working,
+				resultJson: JSON.stringify({
+					kind,
+					placed: appliedIds.length,
+					annotationIds: appliedIds,
+					windowSec: { start: winStart, end: winEnd },
+					exportedPaths,
+					exportDir: exportDir ?? undefined,
+					note:
+						"Images are ON the video preview (scrub to each beat). " +
+						(exportedPaths.length
+							? `Also written as PNG files under ${exportDir}.`
+							: "They live in the project file — not only as chat text."),
+				}),
+				summary: `beat graphics ×${appliedIds.length} (${kind}) across ${formatSec(winStart)} – ${formatSec(winEnd)}${
+					exportedPaths.length ? `; files → ${exportDir}` : ""
+				}`,
+			};
+		}
+
 		case "addGraphic": {
 			const parsed = addGraphicArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
 			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
 			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
 			try {
-				const graphic = resolveGraphic(parsed.data);
+				let image = parsed.data.image;
+				if (parsed.data.imagePath) {
+					image = loadImageFileAsDataUri(parsed.data.imagePath, {
+						ffmpegPath: resolveFfmpeg(),
+					});
+				} else if (parsed.data.characterId || parsed.data.characterPath) {
+					image = resolveCharacterImage(
+						document,
+						{
+							characterId: parsed.data.characterId,
+							characterPath: parsed.data.characterPath,
+							image: parsed.data.image,
+							label: parsed.data.text,
+						},
+						{ ffmpegPath: resolveFfmpeg() },
+					).image;
+				}
+				const graphic = resolveGraphic({
+					...parsed.data,
+					kind:
+						image && (parsed.data.characterId || parsed.data.characterPath)
+							? "image"
+							: parsed.data.kind,
+					image,
+				});
+				// Near-full-bleed plate at t≈0 is almost always meant as an opening
+				// segment — as an overlay it hides the take. Force the right tool.
+				const isStartCoverIntent =
+					startMs <= 500 &&
+					endMs - startMs >= 800 &&
+					graphic.size.width >= 70 &&
+					graphic.size.height >= 70 &&
+					(parsed.data.kind === "intro" ||
+						parsed.data.kind === "image" ||
+						parsed.data.kind === "outro");
+				if (isStartCoverIntent && parsed.data.kind !== "outro") {
+					return failure(
+						"Full-bleed graphic at the start would cover the recording. " +
+							"Use insertStartThumbnail(imagePath|image|text, durationSec) so it becomes " +
+							"its own opening timeline clip; the take plays after it.",
+					);
+				}
 				return commitAnnotation(
 					document,
 					{
@@ -2994,12 +4414,125 @@ export function executeAgentTool(
 				return {
 					ok: true,
 					document: next,
-					resultJson: JSON.stringify({ wallpaper }),
-					summary: `background → ${wallpaper}`,
+					resultJson: JSON.stringify({ wallpaper: wallpaper.startsWith("data:") ? "data:image/…" : wallpaper }),
+					summary: `background → ${wallpaper.startsWith("data:") ? "custom image" : wallpaper}`,
 				};
 			} catch (error) {
 				return failure(error instanceof Error ? error.message : String(error));
 			}
+		}
+
+		case "setCaptionSettings": {
+			const parsed = setCaptionSettingsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const keys = Object.entries(parsed.data).filter(([, v]) => v !== undefined);
+			if (keys.length === 0) {
+				return failure("setCaptionSettings needs at least one field to change");
+			}
+			const next = patchCaptionSettings(document, parsed.data);
+			const settings = getCaptionSettings(next);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					enabled: settings.enabled,
+					fontSize: settings.fontSize,
+					anchorV: settings.anchorV,
+					anchorH: settings.anchorH,
+					insetY: settings.insetY,
+					insetX: settings.insetX,
+				}),
+				summary: `captions → ${settings.enabled ? "on" : "off"}${parsed.data.fontSize != null ? `, ${settings.fontSize}px` : ""}`,
+			};
+		}
+
+		case "setEditorSettings": {
+			const parsed = setEditorSettingsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const data = parsed.data;
+			const patch: EditorSettingsPatch = {};
+			if (data.fitClip) {
+				const aspect = data.fitClipAspect?.trim() || "native";
+				if (!isAspectRatioToken(aspect)) {
+					return failure(`fitClipAspect "${aspect}" is not a valid W:H token`);
+				}
+				patch.padding = 0;
+				patch.borderRadius = 0;
+				patch.shadowIntensity = 0;
+				patch.aspectRatio = aspect as EditorSettingsPatch["aspectRatio"];
+			}
+			if (data.shadowIntensity !== undefined) patch.shadowIntensity = data.shadowIntensity;
+			if (data.showBlur !== undefined) patch.showBlur = data.showBlur;
+			if (data.motionBlurAmount !== undefined) patch.motionBlurAmount = data.motionBlurAmount;
+			if (data.borderRadius !== undefined) patch.borderRadius = data.borderRadius;
+			if (data.padding !== undefined) patch.padding = data.padding;
+			if (data.audioGainDb !== undefined) patch.audioGainDb = data.audioGainDb;
+			if (data.autoFocusAll !== undefined) patch.autoFocusAll = data.autoFocusAll;
+			if (data.webcamLayoutPreset !== undefined) {
+				patch.webcamLayoutPreset = data.webcamLayoutPreset;
+			}
+			if (data.webcamMaskShape !== undefined) patch.webcamMaskShape = data.webcamMaskShape;
+			if (data.webcamMirrored !== undefined) patch.webcamMirrored = data.webcamMirrored;
+			if (data.webcamReactiveZoom !== undefined) {
+				patch.webcamReactiveZoom = data.webcamReactiveZoom;
+			}
+			if (data.webcamSizePreset !== undefined) patch.webcamSizePreset = data.webcamSizePreset;
+			if (data.webcamBackgroundMode !== undefined) {
+				patch.webcamBackgroundMode = data.webcamBackgroundMode;
+			}
+			if (data.webcamBlurIntensity !== undefined) {
+				patch.webcamBlurIntensity = data.webcamBlurIntensity;
+			}
+			const cursorPatch: NonNullable<EditorSettingsPatch["cursor"]> = {};
+			if (data.cursorShow !== undefined) cursorPatch.show = data.cursorShow;
+			if (data.cursorTheme !== undefined) cursorPatch.theme = data.cursorTheme;
+			if (data.cursorSize !== undefined) cursorPatch.size = data.cursorSize;
+			if (data.cursorSmoothing !== undefined) cursorPatch.smoothing = data.cursorSmoothing;
+			if (Object.keys(cursorPatch).length > 0) patch.cursor = cursorPatch;
+			if (Object.keys(patch).length === 0) {
+				return failure("setEditorSettings needs at least one field to change");
+			}
+			const next = patchEditorSettings(document, patch);
+			const look = getEditorSettings(next);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					padding: look.padding,
+					borderRadius: look.borderRadius,
+					shadowIntensity: look.shadowIntensity,
+					showBlur: look.showBlur,
+					aspectRatio: look.aspectRatio,
+					autoFocusAll: look.autoFocusAll,
+					webcamLayoutPreset: look.webcamLayoutPreset,
+					cursorShow: look.cursorShow,
+				}),
+				summary: data.fitClip
+					? `fit clip (${look.aspectRatio})`
+					: `look updated (pad ${look.padding}, round ${look.borderRadius}, shadow ${look.shadowIntensity})`,
+			};
+		}
+
+		case "listTransitions": {
+			const parsed = listTransitionsArgs.safeParse(args ?? {});
+			if (!parsed.success) return failure(parsed.error.message);
+			const backend = parsed.data.backend ?? defaultGpuBackend();
+			const transitions = listUserAvailableTransitions(backend).map((t) => ({
+				id: t.id,
+				displayName: t.displayName,
+				category: t.category,
+				defaultDurationSec: t.defaultDurationSec,
+				autonomousEligible: t.autonomousEligible,
+			}));
+			return {
+				ok: true,
+				resultJson: JSON.stringify({
+					backend,
+					count: transitions.length,
+					transitions,
+					note: "Pass transitionId into setClipIncomingTransition on a NON-FIRST clip (after splitClip if needed).",
+				}),
+			};
 		}
 
 		case "listSources":

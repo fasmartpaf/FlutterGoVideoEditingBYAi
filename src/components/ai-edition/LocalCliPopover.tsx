@@ -54,6 +54,9 @@ function selectionForAgent(agent: AiEditionLocalAgent, model?: string) {
 		provider: "local-cli" as const,
 		model: agent.id,
 		baseUrl: agent.path ? `cli:${agent.path}` : undefined,
+		...(agent.id === "claude" && model && !model.startsWith("locked:")
+			? { localCliModel: model }
+			: {}),
 	};
 }
 
@@ -106,8 +109,14 @@ export function LocalCliPopover({
 				)?.id
 			: null;
 
+	const selectedClaudeModel =
+		llmConfig?.provider === "local-cli" && llmConfig.model === "claude"
+			? llmConfig.localCliModel
+			: undefined;
+
 	const select = async (agent: AiEditionLocalAgent, model?: string) => {
-		setBusyId(agent.id);
+		if (model?.startsWith("locked:")) return;
+		setBusyId(model ? `${agent.id}:${model}` : agent.id);
 		try {
 			if (!agent.ready) {
 				const login = await nativeBridgeClient.aiEdition.llmLoginLocalAgent(agent.id);
@@ -119,11 +128,17 @@ export function LocalCliPopover({
 				...selectionForAgent(agent, model),
 				localAgentPermission: llmConfig?.localAgentPermission,
 				allowAgentEdits: llmConfig?.allowAgentEdits,
+				// Keep prior Claude model when switching to Claude without picking one.
+				...(agent.id === "claude" && !model && llmConfig?.localCliModel
+					? { localCliModel: llmConfig.localCliModel }
+					: {}),
 			};
 			const result = await nativeBridgeClient.aiEdition.llmSetConfig(next);
 			if (result.success) {
 				onConfigChange();
-				onClose();
+				if (model || agent.id !== "claude" || !agent.modelOptions?.length) {
+					onClose();
+				}
 			}
 		} finally {
 			setBusyId(null);
@@ -173,28 +188,64 @@ export function LocalCliPopover({
 					const selected = agent.id === selectedId;
 					const meta = !agent.ready
 						? t("chat.localCli.needsLogin")
-						: (agent.version ?? agent.models?.[0] ?? agent.path);
+						: ([agent.activeModel, agent.version].filter(Boolean).join(" · ") ||
+							agent.models?.[0] ||
+							agent.path);
 					const Icon = agent.kind === "http" ? Zap : Star;
+					const showModels = selected && agent.id === "claude" && (agent.modelOptions?.length ?? 0) > 0;
 					return (
-						<button
-							key={agent.id}
-							type="button"
-							role="menuitem"
-							className={styles.localCliRow}
-							data-selected={selected ? "true" : undefined}
-							disabled={busyId === agent.id}
-							onClick={() => void select(agent)}
-						>
-							<Icon size={14} />
-							<span>{agent.name}</span>
-							{meta ? <em>{meta}</em> : null}
-							{selected ? (
+						<div key={agent.id} className={styles.localCliAgentBlock}>
+							<button
+								type="button"
+								role="menuitem"
+								className={styles.localCliRow}
+								data-selected={selected ? "true" : undefined}
+								disabled={busyId === agent.id}
+								onClick={() => void select(agent)}
+							>
+								<Icon size={14} />
+								<span>{agent.name}</span>
+								{meta ? <em>{meta}</em> : null}
+								{selected ? (
+									<>
+										<em>{t("chat.localCli.selected")}</em>
+										<Check size={14} />
+									</>
+								) : null}
+							</button>
+							{showModels ? (
 								<>
-									<em>{t("chat.localCli.selected")}</em>
-									<Check size={14} />
+									<p className={styles.localCliModelsHeading}>{t("chat.localCli.modelsHeading")}</p>
+									{agent.modelOptions!.map((opt) => {
+										const picked = selectedClaudeModel === opt.id;
+										const busy = busyId === `${agent.id}:${opt.id}`;
+										return (
+											<button
+												key={opt.id}
+												type="button"
+												role="menuitem"
+												className={styles.localCliModelRow}
+												data-selected={picked ? "true" : undefined}
+												data-unavailable={opt.available ? undefined : "true"}
+												disabled={!opt.available || busy}
+												title={opt.available ? opt.label : (opt.note ?? t("chat.localCli.modelUpdateRequired"))}
+												onClick={() => void select(agent, opt.id)}
+											>
+												<span>{opt.label}</span>
+												<em>
+													{opt.available
+														? picked
+															? t("chat.localCli.selected")
+															: opt.id
+														: (opt.note ?? t("chat.localCli.modelUpdateRequired"))}
+												</em>
+												{picked ? <Check size={14} /> : null}
+											</button>
+										);
+									})}
 								</>
 							) : null}
-						</button>
+						</div>
 					);
 				})
 			)}

@@ -11,6 +11,7 @@ import {
 	type ProjectPathResult,
 } from "../../src/native/contracts";
 import type { ChatEventSink } from "../ai-edition/chat-service";
+import { broadcastChatRealtimeEvent } from "../ai-edition/chatRealtimeHub";
 import type { DocumentService } from "../ai-edition/document-service";
 import {
 	type CursorTelemetryLoadResult,
@@ -61,6 +62,7 @@ export interface NativeBridgeContext {
 		document?: unknown,
 		sink?: ChatEventSink,
 	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
+	cancelAiEditionChat?: (projectId: string, sessionId: string) => boolean;
 	undoAiEditionToolBatch: (
 		projectId: string,
 		sessionId: string,
@@ -179,6 +181,7 @@ function buildChatEventSink(sender: Electron.WebContents, sessionId: string): Ch
 		} catch {
 			// webContents gone — keep the loop running silently.
 		}
+		broadcastChatRealtimeEvent(payload);
 	};
 	return {
 		text: (delta) => send({ kind: "text", sessionId, delta }),
@@ -186,6 +189,7 @@ function buildChatEventSink(sender: Electron.WebContents, sessionId: string): Ch
 		toolStart: (name, args) => send({ kind: "toolStart", sessionId, name, args }),
 		toolEnd: (name, ok, summary) => send({ kind: "toolEnd", sessionId, name, ok, summary }),
 		error: (message) => send({ kind: "error", sessionId, message }),
+		status: (phase, detail) => send({ kind: "status", sessionId, phase, detail }),
 	};
 }
 
@@ -227,6 +231,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		// hit the macOS Keychain) while wiring the bridge at startup.
 		llmConfig: context.getAiEditionLlmConfig,
 		runChat: context.runAiEditionChat,
+		cancelChat: context.cancelAiEditionChat,
 		undoLastToolBatch: context.undoAiEditionToolBatch,
 		rewindToMessage: context.rewindToMessage,
 		compactNow: context.compactNow,
@@ -559,6 +564,14 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								),
 							);
 						}
+						case "chat.cancel":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatCancel(
+									request.payload.projectId,
+									request.payload.sessionId,
+								),
+							);
 						case "applyPreview.run": {
 							return createSuccessResponse(
 								requestId,

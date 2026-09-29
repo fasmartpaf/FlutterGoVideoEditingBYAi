@@ -1316,6 +1316,24 @@ appReady?.then(async () => {
 
 	await loadAndRegisterGlobalShortcut(showMainWindow);
 
+	const { startChatRealtimeHub, stopChatRealtimeHub, getChatRealtimeEndpoint } = await import(
+		"./ai-edition/chatRealtimeHub"
+	);
+	try {
+		const endpoint = await startChatRealtimeHub();
+		console.info(`[chat-realtime] WebSocket listening on ${endpoint.url}`);
+	} catch (err) {
+		console.warn("[chat-realtime] failed to start hub", err);
+	}
+	ipcMain.handle("ai-edition:chat-realtime-endpoint", () => getChatRealtimeEndpoint());
+	const { abortAllChatRuns } = await import("./ai-edition/chatAbortRegistry");
+	app.on("before-quit", () => {
+		// Local CLI agents run in their own process group; stop them (and any
+		// ffmpeg they started) instead of leaving them running after quit.
+		abortAllChatRuns();
+		void stopChatRealtimeHub();
+	});
+
 	// --bench=<query>: run the export bench instead of the app. Opens the real
 	// editor window (same webPreferences, same preload) pointed at the bench
 	// entry, and quits when it reports back. See src/bench/runBench.ts.

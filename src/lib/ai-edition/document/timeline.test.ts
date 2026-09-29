@@ -11,6 +11,7 @@ import {
 	insertClip,
 	invertIntervals,
 	moveClip,
+	splitClip,
 	normalizeIntervals,
 	openTimelineMedia,
 	planTimelineReplacement,
@@ -944,6 +945,41 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 		];
 		// Raw 18 is past both cuts (3s removed) → output 15.
 		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, 18)).toBeCloseTo(15, 6);
+	});
+});
+
+describe("splitClip", () => {
+	it("cuts one clip into two and keeps an incomingTransition join boundary", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 20 })],
+			},
+		});
+		const next = splitClip(doc, "clip_a", 8);
+		expect(next.timeline.clips).toHaveLength(2);
+		expect(next.timeline.clips[0]).toMatchObject({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 8,
+		});
+		expect(next.timeline.clips[1]).toMatchObject({
+			sourceStartSec: 8,
+			sourceEndSec: 20,
+			incomingTransition: { kind: "cut", transitionId: "openscreen.cut" },
+		});
+		expect(next.timeline.clips[1]!.id).not.toBe("clip_a");
+	});
+
+	it("refuses a cut on the clip edge", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10 })],
+			},
+		});
+		expect(() => splitClip(doc, "clip_a", 0)).toThrow(/strictly inside/);
+		expect(() => splitClip(doc, "clip_a", 10)).toThrow(/strictly inside/);
 	});
 });
 

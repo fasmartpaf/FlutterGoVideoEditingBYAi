@@ -1,3 +1,7 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, extname, isAbsolute, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { deflateSync } from "node:zlib";
 
 /**
@@ -15,6 +19,8 @@ export const GRAPHIC_KINDS = [
 	"bar",
 	"figure",
 	"image",
+	"intro",
+	"outro",
 ] as const;
 
 export type GraphicKind = (typeof GRAPHIC_KINDS)[number];
@@ -46,7 +52,8 @@ export type GraphicLayout = {
 
 const LAYOUTS: Record<GraphicKind, GraphicLayout> = {
 	title: {
-		x: 50,
+		// Top-left percentages (document / compositor contract) — not center.
+		x: 8,
 		y: 16,
 		width: 84,
 		height: 16,
@@ -91,7 +98,7 @@ const LAYOUTS: Record<GraphicKind, GraphicLayout> = {
 		pixelHeight: 96,
 	},
 	cta: {
-		x: 50,
+		x: 32,
 		y: 82,
 		width: 36,
 		height: 12,
@@ -106,7 +113,7 @@ const LAYOUTS: Record<GraphicKind, GraphicLayout> = {
 		pixelHeight: 160,
 	},
 	bar: {
-		x: 50,
+		x: 4,
 		y: 88,
 		width: 92,
 		height: 10,
@@ -121,8 +128,8 @@ const LAYOUTS: Record<GraphicKind, GraphicLayout> = {
 		pixelHeight: 120,
 	},
 	figure: {
-		x: 50,
-		y: 50,
+		x: 42,
+		y: 42,
 		width: 16,
 		height: 16,
 		fontSize: 24,
@@ -136,24 +143,78 @@ const LAYOUTS: Record<GraphicKind, GraphicLayout> = {
 		pixelHeight: 256,
 	},
 	image: {
-		x: 82,
-		y: 10,
-		width: 16,
-		height: 16,
+		// Full-bleed plate: top-left so w×h actually covers the frame.
+		x: 4,
+		y: 6,
+		width: 92,
+		height: 88,
 		fontSize: 22,
 		fontWeight: "bold",
 		textAlign: "center",
 		color: "#ffffff",
 		backgroundColor: "#111827",
+		// none — fade would make t=0 invisible when scrubbed to the start.
 		textAnimation: "none",
 		type: "image",
-		pixelWidth: 640,
-		pixelHeight: 640,
+		pixelWidth: 1280,
+		pixelHeight: 720,
+	},
+	intro: {
+		x: 4,
+		y: 6,
+		width: 92,
+		height: 88,
+		fontSize: 48,
+		fontWeight: "bold",
+		textAlign: "center",
+		color: "#ffffff",
+		backgroundColor: "rgba(0,0,0,0.92)",
+		textAnimation: "none",
+		type: "text",
+		pixelWidth: 1280,
+		pixelHeight: 720,
+	},
+	outro: {
+		x: 4,
+		y: 6,
+		width: 92,
+		height: 88,
+		fontSize: 40,
+		fontWeight: "bold",
+		textAlign: "center",
+		color: "#ffffff",
+		backgroundColor: "rgba(0,0,0,0.92)",
+		textAnimation: "none",
+		type: "text",
+		pixelWidth: 1280,
+		pixelHeight: 720,
 	},
 };
 
 export function graphicLayout(kind: GraphicKind): GraphicLayout {
 	return { ...LAYOUTS[kind] };
+}
+
+/**
+ * Annotation `position` is the TOP-LEFT of the box in frame % (0–100).
+ * If (x+width) or (y+height) overflows past ~100, treat (x,y) as the CENTER
+ * (common agent mistake for “full screen”) and convert to top-left.
+ */
+export function normalizeTopLeftLayout(
+	position: { x: number; y: number },
+	size: { width: number; height: number },
+): { position: { x: number; y: number }; size: { width: number; height: number } } {
+	const width = Math.min(100, Math.max(1, size.width));
+	const height = Math.min(100, Math.max(1, size.height));
+	let x = position.x;
+	let y = position.y;
+	if (x + width > 100.5 || y + height > 100.5) {
+		x = x - width / 2;
+		y = y - height / 2;
+	}
+	x = Math.min(100 - width, Math.max(0, x));
+	y = Math.min(100 - height, Math.max(0, y));
+	return { position: { x, y }, size: { width, height } };
 }
 
 const IMAGE_DATA_URI = /^data:image\/(png|jpeg|jpg|gif|webp);base64,/i;
@@ -172,6 +233,81 @@ export function assertImageDataUri(value: string): string {
 		throw new Error("image data URI is too large to store on the document");
 	}
 	return trimmed;
+}
+
+const IMAGE_EXT_MIME: Record<string, string> = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+};
+
+/** ~1.1MB binary ≈ ~1.5M base64 chars — keeps annotation JSON manageable. */
+export const MAX_GRAPHIC_IMAGE_BYTES = 1_100_000;
+
+function shrinkImageForDocument(abs: string, ffmpegPath: string): string | null {
+	const outDir = mkdtempSync(join(tmpdir(), "os-graphic-"));
+	const out = join(outDir, "plate.jpg");
+	const result = spawnSync(
+		ffmpegPath,
+		["-y", "-i", abs, "-vf", "scale=min(1280\\,iw):-2", "-q:v", "4", out],
+		{ encoding: "utf8", timeout: 60_000 },
+	);
+	if (result.status !== 0 || !existsSync(out) || statSync(out).size > MAX_GRAPHIC_IMAGE_BYTES) {
+		rmSync(outDir, { recursive: true, force: true });
+		return null;
+	}
+	return out;
+}
+
+/**
+ * Load a local PNG/JPEG/GIF/WebP into a data URI for `addGraphic` / annotations.
+ * Used when Local CLI agents render motion-graphic stills to disk and pass
+ * `imagePath` instead of a huge base64 blob in the tool args.
+ * Oversized files are downscaled via ffmpeg when a path is provided.
+ */
+export function loadImageFileAsDataUri(
+	filePath: string,
+	opts?: { ffmpegPath?: string | null },
+): string {
+	const abs = filePath.trim();
+	// A relative path would resolve against the Electron process cwd, and a
+	// protocol string (http:, concat:) would reach ffmpeg — refuse both.
+	if (!isAbsolute(abs) || /^[a-z][a-z0-9+.-]*:\/\//i.test(abs)) {
+		throw new Error(`imagePath must be an absolute file path (got "${abs.slice(0, 80)}")`);
+	}
+	if (!existsSync(abs)) {
+		throw new Error(`imagePath not found: ${abs}`);
+	}
+	const ext = extname(abs).toLowerCase();
+	const mime = IMAGE_EXT_MIME[ext];
+	if (!mime) {
+		throw new Error("imagePath must be a .png, .jpg, .jpeg, .gif, or .webp file");
+	}
+	let loadPath = abs;
+	let loadMime = mime;
+	const size = statSync(abs).size;
+	if (size > MAX_GRAPHIC_IMAGE_BYTES) {
+		const ffmpeg = opts?.ffmpegPath?.trim() || null;
+		const shrunk = ffmpeg ? shrinkImageForDocument(abs, ffmpeg) : null;
+		if (!shrunk) {
+			throw new Error(
+				`imagePath file is too large (${(size / 1_000_000).toFixed(1)}MB). ` +
+					"Resize under ~1MB (e.g. 1280px JPEG) and call addGraphic again.",
+			);
+		}
+		loadPath = shrunk;
+		loadMime = "image/jpeg";
+	}
+	let b64: string;
+	try {
+		b64 = readFileSync(loadPath).toString("base64");
+	} finally {
+		// The downscaled copy is scratch — its bytes now live in the data URI.
+		if (loadPath !== abs) rmSync(dirname(loadPath), { recursive: true, force: true });
+	}
+	return assertImageDataUri(`data:${loadMime};base64,${b64}`);
 }
 
 export function graphicCaption(text: string, subtext?: string): string {
@@ -253,14 +389,17 @@ export function resolveGraphic(request: GraphicRequest): ResolvedGraphic {
 		textAlign,
 		textAnimation,
 	};
-	const position = {
+	const rawPosition = {
 		x: request.x ?? layout.x,
 		y: request.y ?? layout.y,
 	};
-	const size = {
+	const rawSize = {
 		width: request.width ?? layout.width,
 		height: request.height ?? layout.height,
 	};
+	// Document/compositor use TOP-LEFT %. Agents often pass center (x:50,y:50) for
+	// "full screen" — that pushes a 90% plate off-frame. Convert when it would overflow.
+	const { position, size } = normalizeTopLeftLayout(rawPosition, rawSize);
 
 	if (request.kind === "figure") {
 		return {
@@ -355,6 +494,115 @@ export function renderPlatePng(options: {
 		y += lineH;
 	}
 	return `data:image/png;base64,${encodePng(width, height, pixels).toString("base64")}`;
+}
+
+/**
+ * Round avatar bubble for presenter characters — NOT a text joke badge.
+ * Transparent outside the circle so it reads as a character on the video.
+ */
+export function renderAvatarBubblePng(options: {
+	/** Fill color of the head/body circle. */
+	fill: string;
+	/** Eyes / accent strokes. */
+	accent: string;
+	face: "guide" | "pointer" | "coach" | "spark" | "bot";
+	size?: number;
+}): string {
+	const size = Math.max(96, Math.min(320, options.size ?? 192));
+	const pixels = new Uint8Array(size * size * 4);
+	const fill = parseRgba(options.fill, [79, 70, 229, 255]);
+	const accent = parseRgba(options.accent, [255, 255, 255, 255]);
+	const cx = size / 2;
+	const cy = size / 2;
+	const r = size * 0.42;
+	fillCircle(pixels, size, size, cx, cy, r, fill);
+
+	const eyeY = cy - r * 0.18;
+	const eyeR = Math.max(3, size * 0.055);
+	const eyeDx = r * 0.28;
+	fillCircle(pixels, size, size, cx - eyeDx, eyeY, eyeR, accent);
+	fillCircle(pixels, size, size, cx + eyeDx, eyeY, eyeR, accent);
+	// pupils
+	const pupil = parseRgba("#0f172a", [15, 23, 42, 255]);
+	fillCircle(pixels, size, size, cx - eyeDx, eyeY, eyeR * 0.45, pupil);
+	fillCircle(pixels, size, size, cx + eyeDx, eyeY, eyeR * 0.45, pupil);
+
+	if (options.face === "bot") {
+		// antenna
+		fillRect(
+			pixels,
+			size,
+			size,
+			cx - size * 0.02,
+			cy - r - size * 0.12,
+			size * 0.04,
+			size * 0.12,
+			accent,
+		);
+		fillCircle(pixels, size, size, cx, cy - r - size * 0.12, size * 0.05, accent);
+	}
+	if (options.face === "spark") {
+		const spark = parseRgba("#fef08a", [254, 240, 138, 255]);
+		fillCircle(pixels, size, size, cx, cy - r * 0.85, size * 0.04, spark);
+		fillCircle(pixels, size, size, cx + r * 0.75, cy - r * 0.35, size * 0.035, spark);
+		fillCircle(pixels, size, size, cx - r * 0.75, cy - r * 0.35, size * 0.035, spark);
+	}
+	if (options.face === "pointer") {
+		// small chevron / finger tip under the face
+		const tip = parseRgba("#052e16", [5, 46, 22, 255]);
+		fillCircle(pixels, size, size, cx, cy + r * 0.55, size * 0.08, tip);
+	}
+	if (options.face === "coach") {
+		// brim / band
+		fillRect(
+			pixels,
+			size,
+			size,
+			cx - r * 0.7,
+			cy - r * 0.55,
+			r * 1.4,
+			size * 0.06,
+			pupil,
+		);
+	}
+
+	// smile arc (simple thick dots)
+	const smileY = cy + r * 0.28;
+	for (let i = -3; i <= 3; i++) {
+		const sx = cx + i * (r * 0.12);
+		const sy = smileY + Math.abs(i) * (r * 0.04);
+		fillCircle(pixels, size, size, sx, sy, Math.max(2, size * 0.025), accent);
+	}
+
+	return `data:image/png;base64,${encodePng(size, size, pixels).toString("base64")}`;
+}
+
+function fillCircle(
+	pixels: Uint8Array,
+	width: number,
+	height: number,
+	cx: number,
+	cy: number,
+	radius: number,
+	color: readonly [number, number, number, number],
+) {
+	const r2 = radius * radius;
+	const x0 = Math.max(0, Math.floor(cx - radius - 1));
+	const y0 = Math.max(0, Math.floor(cy - radius - 1));
+	const x1 = Math.min(width, Math.ceil(cx + radius + 1));
+	const y1 = Math.min(height, Math.ceil(cy + radius + 1));
+	for (let py = y0; py < y1; py++) {
+		for (let px = x0; px < x1; px++) {
+			const dx = px + 0.5 - cx;
+			const dy = py + 0.5 - cy;
+			if (dx * dx + dy * dy > r2) continue;
+			const i = (py * width + px) * 4;
+			pixels[i] = color[0];
+			pixels[i + 1] = color[1];
+			pixels[i + 2] = color[2];
+			pixels[i + 3] = color[3];
+		}
+	}
 }
 
 function parseRgba(input: string, fallback: [number, number, number, number]) {

@@ -7,7 +7,7 @@ export {
 } from "./change";
 export { matchedVisualIntentFamily, promptWantsVisualEvidence } from "./intent";
 export { prepareVisualEvidenceForTurn } from "./prepare";
-export { providerSupportsAttachedVisualFrames } from "./providers";
+export { providerCanReceiveVisualEvidence, providerSupportsAttachedVisualFrames, providerUsesFrameFilePaths } from "./providers";
 export {
 	applyVisualFrameBudget,
 	collectVisualEvidenceCandidates,

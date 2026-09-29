@@ -32,6 +32,8 @@ export interface LlmConfig {
 	allowAgentEdits?: boolean;
 	/** Local CLI: ask (default), always watch, or never watch recordings. */
 	localAgentPermission?: "ask" | "always" | "never";
+	/** Claude Code model alias / id for `claude --model` (e.g. fable, opus). */
+	localCliModel?: string;
 }
 
 // Only `api-key` remains: the OAuth kinds ("codex", "github-device",

@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "جهد الاستدلال",
 		"sendTitle": "إرسال (Enter)",
 		"send": "إرسال",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "إعادة الضبط هنا؟",
 		"rewindConfirmBody": "سيتم التراجع عن تعديلات الوكيل والأدوار اللاحقة بعد هذه النقطة. سيُستعاد المشروع والمحادثة وحالة الوكيل. وسيتم استبدال أي تعديلات أجريتها منذ ذلك الحين أيضًا.",
 		"rewindConfirm": "إعادة الضبط",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "نماذج Claude",
+			"modelUpdateRequired": "حدّث Claude Code لإلغاء القفل"
+		},
+		"realtimeLive": "مباشر",
+		"realtimeConnecting": "جارٍ الاتصال…",
+		"realtimeFallback": "محلي",
+		"realtimeLiveHint": "تصل تحديثات الوكيل عبر WebSocket مباشر",
+		"realtimeFallbackHint": "يُستخدم Electron IPC حتى يعاد اتصال البث المباشر",
+		"mediaUseOnVideo": "استخدم في الفيديو",
+		"activityDetails": "النشاط",
+		"mediaOpen": "فتح",
+		"mediaReveal": "إظهار"
 	},
 	"newProjectDialog": {
 		"title": "مشروع جديد",

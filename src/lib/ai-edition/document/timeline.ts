@@ -1058,6 +1058,73 @@ export function setClipCropRegion(
 // afterwards, which is the point: editing the copy's cut no longer edits the original's.
 // Only ANCHORED trims are copied — an un-anchored one already reaches the copy through
 // the asset-wide fallback, so copying it would cut the same span twice.
+/**
+ * Cut one clip into two at a SOURCE-time instant. The right half keeps an explicit
+ * `incomingTransition: cut` so `joinContiguous` will not fuse the halves back — that
+ * join is what `setClipIncomingTransition` later styles as a dissolve/wipe.
+ */
+export function splitClip(
+	document: AxcutDocument,
+	clipId: string,
+	atSourceSec: number,
+	origin: "system" | "agent" | "user" = "agent",
+): AxcutDocument {
+	const index = document.timeline.clips.findIndex((c) => c.id === clipId);
+	if (index < 0) {
+		throw new Error(`Unknown clip ${clipId}.`);
+	}
+	const clip = document.timeline.clips[index]!;
+	const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+	const cut = atSourceSec;
+	const eps = 1e-3;
+	if (!(cut > clip.sourceStartSec + eps && cut < sourceEnd - eps)) {
+		throw new Error(
+			`split point ${cut} must be strictly inside source ${clip.sourceStartSec}–${sourceEnd}`,
+		);
+	}
+	const rightId = createId("clip");
+	const left: AxcutClip = {
+		...clip,
+		sourceEndSec: cut,
+		timelineStartSec: 0,
+		timelineEndSec: 0,
+	};
+	const right: AxcutClip = {
+		...clip,
+		id: rightId,
+		sourceStartSec: cut,
+		sourceEndSec: sourceEnd,
+		timelineStartSec: 0,
+		timelineEndSec: 0,
+		origin,
+		reason: reasonLabel(clip.reason, "split"),
+		incomingTransition: { kind: "cut", transitionId: "openscreen.cut" },
+	};
+	const nextClips = [
+		...document.timeline.clips.slice(0, index),
+		left,
+		right,
+		...document.timeline.clips.slice(index + 1),
+	];
+	const both = <T extends { id: string; clipId?: string }>(rows: readonly T[] | undefined): T[] =>
+		(rows ?? []).flatMap((row) =>
+			row.clipId === clipId ? [row, { ...row, id: createId("frag"), clipId: rightId }] : [row],
+		);
+	const fanned: AxcutDocument = {
+		...document,
+		timeline: { ...document.timeline, trimRanges: both(document.timeline.trimRanges) },
+		zoomRanges: both(document.zoomRanges),
+		annotations: both(document.annotations),
+		audioTracks: both(document.audioTracks),
+	};
+	return withClipsChanged(fanned, nextClips);
+}
+
+function reasonLabel(existing: string | undefined, fallback: string): string {
+	const t = existing?.trim();
+	return t && t.length > 0 ? t : fallback;
+}
+
 export function duplicateClip(
 	document: AxcutDocument,
 	clipId: string,
@@ -1074,6 +1141,11 @@ export function duplicateClip(
 		id: createId("clip"),
 		origin,
 		reason: reason || original.reason,
+		// Keep the copy from fusing into a contiguous neighbour (same asset/source meet).
+		incomingTransition: original.incomingTransition ?? {
+			kind: "cut" as const,
+			transitionId: "openscreen.cut",
+		},
 	};
 	const oldClips = document.timeline.clips;
 	const next = [...oldClips.slice(0, index + 1), copy, ...oldClips.slice(index + 1)];
@@ -1253,8 +1325,15 @@ function joinContiguous(clips: AxcutClip[]): {
 
 /** Same media, media timecodes that meet, same framing. Crop is the only property a clip
  *  carries that two otherwise-identical neighbours could legitimately disagree on, so it is
- *  the whole of the guard. */
+ *  the whole of the guard.
+ *
+ *  An authored `incomingTransition` on the right clip is an intentional join boundary
+ *  (hard cut, dissolve, wipe, …). Fusing those neighbours would erase the transition
+ *  and undo `splitClip` — so they stay two clips. */
 function joinable(left: AxcutClip, right: AxcutClip): boolean {
+	// Either side with an authored transition means an intentional cut boundary
+	// (splitClip / duplicateClip / dissolve). Fusing would erase it.
+	if (left.incomingTransition != null || right.incomingTransition != null) return false;
 	return (
 		left.assetId === right.assetId &&
 		left.sourceEndSec !== undefined &&

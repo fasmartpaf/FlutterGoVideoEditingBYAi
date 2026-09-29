@@ -476,6 +476,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("ai-edition.chat-event", listener);
 		return () => ipcRenderer.removeListener("ai-edition.chat-event", listener);
 	},
+	getAiEditionChatRealtimeEndpoint: (): Promise<
+		import("../src/native/contracts").AiEditionChatRealtimeEndpoint | null
+	> => {
+		return ipcRenderer.invoke("ai-edition:chat-realtime-endpoint") as Promise<
+			import("../src/native/contracts").AiEditionChatRealtimeEndpoint | null
+		>;
+	},
 	stt: {
 		transcribe: (request: SttTranscribeRequest): Promise<SttTranscribeResponse> => {
 			return ipcRenderer.invoke("stt:transcribe", request) as Promise<SttTranscribeResponse>;

@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "추론 노력 수준",
 		"sendTitle": "보내기 (Enter)",
 		"send": "보내기",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "여기로 되감을까요?",
 		"rewindConfirmBody": "이 시점 이후의 에이전트 편집과 이후 대화 턴이 롤백됩니다. 프로젝트, 대화, 에이전트 상태가 복원됩니다. 그 이후에 직접 한 편집도 함께 대체됩니다.",
 		"rewindConfirm": "되감기",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Claude 모델",
+			"modelUpdateRequired": "잠금 해제하려면 Claude Code를 업데이트하세요"
+		},
+		"realtimeLive": "실시간",
+		"realtimeConnecting": "연결 중…",
+		"realtimeFallback": "로컬",
+		"realtimeLiveHint": "에이전트 업데이트가 실시간 WebSocket으로 스트리밍됩니다",
+		"realtimeFallbackHint": "라이브 스트림 재연결 전까지 Electron IPC 사용",
+		"mediaUseOnVideo": "영상에 사용",
+		"activityDetails": "활동",
+		"mediaOpen": "열기",
+		"mediaReveal": "표시"
 	},
 	"newProjectDialog": {
 		"title": "새 프로젝트",

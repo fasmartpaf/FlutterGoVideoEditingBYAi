@@ -19,6 +19,7 @@ import {
 	documentSchema,
 } from "../../src/lib/ai-edition/schema";
 import type {
+	AiEditionChatMedia,
 	AiEditionChatMessage,
 	AiEditionChatResult,
 	AiEditionToolCallSummary,
@@ -32,10 +33,21 @@ import {
 	compactionSplitIndex,
 	DEFAULT_BUDGET_TOKENS,
 } from "./chat-compaction";
+import {
+	AGENT_STOPPED_MESSAGE,
+	beginChatRun,
+	cancelChatRun,
+	endChatRun,
+	isAbortError,
+} from "./chatAbortRegistry";
+import { extractChatMediaFromToolResult } from "./chatMedia";
 import type { CliEngine, CursorTelemetryReader } from "./deep-agent/service";
 import type { DocumentService } from "./document-service";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
+
+/** Stop the in-flight agent turn for this session (Stop button). */
+export { cancelChatRun };
 
 const sessionsByProject = new Map<string, Map<string, ChatSession>>();
 const hydratedProjects = new Set<string>();
@@ -365,6 +377,8 @@ export interface ChatEventSink {
 	toolEnd?: (name: string, ok: boolean, summary?: string) => void;
 	/** The agent loop hit a fatal error (provider 4xx, network, parse). */
 	error?: (message: string) => void;
+	/** Coarse phase updates for the live WebSocket / Cursor-like status strip. */
+	status?: (phase: string, detail?: string) => void;
 }
 
 export interface ChatRunEnv {
@@ -384,6 +398,7 @@ const NOOP_SINK: Required<ChatEventSink> = {
 	toolStart: noop,
 	toolEnd: noop,
 	error: noop,
+	status: noop,
 };
 
 export async function runChat(
@@ -536,6 +551,7 @@ export async function runChat(
 	}));
 
 	const appliedToolCalls: AiEditionToolCallSummary[] = [];
+	let turnMedia: AiEditionChatMedia[] = [];
 
 	const agentSink = {
 		text: (delta: string) => emit.text(delta),
@@ -543,41 +559,109 @@ export async function runChat(
 		toolStart: (name: string, args: unknown) => {
 			emit.toolStart(name, args);
 		},
-		toolEnd: (name: string, ok: boolean, summary?: string) => {
+		toolEnd: (name: string, ok: boolean, summary?: string, resultJson?: string) => {
 			emit.toolEnd(name, ok, summary);
 			if (ok && summary) {
 				appliedToolCalls.push({ name, summary });
 			}
+			if (ok && resultJson) {
+				turnMedia = extractChatMediaFromToolResult(resultJson, turnMedia);
+			}
 		},
 		error: (message: string) => emit.error(message),
+		status: (phase: string, detail?: string) => emit.status(phase, detail),
 	};
 
-	const { invokeOpenScreenAgent } = await import("./deep-agent/service");
+	// Register the run BEFORE anything the UI can see, so a Stop pressed right
+	// after "agent started" always finds it.
+	const abortSignal = beginChatRun(projectId, sessionId);
+	emit.status(
+		"agent_started",
+		effectiveConfig.provider === "local-cli"
+			? `Working with ${effectiveConfig.localCliModel ?? effectiveConfig.model}…`
+			: `Working with ${effectiveConfig.model}…`,
+	);
 
-	const result = await invokeOpenScreenAgent({
-		document: workingDocument ?? emptyDocumentForTextOnly(projectId),
-		model: {
-			provider: effectiveConfig.provider,
-			model: effectiveConfig.model,
-			apiKey: apiKey ?? undefined,
-			baseUrl: effectiveConfig.baseUrl,
-			reasoningEffort: effectiveConfig.reasoningEffort,
-			localAgentPermission: effectiveConfig.localAgentPermission,
-			watchGranted:
-				effectiveConfig.localAgentPermission === "always" ||
-				llmConfig.isSessionWatchGranted?.() === true,
-		},
-		history,
-		userMessage: message,
-		sink: agentSink,
-		editsAllowed,
-		cursor: env.cursor,
-		cli: env.cli,
-	});
+	let result: Awaited<
+		ReturnType<(typeof import("./deep-agent/service"))["invokeOpenScreenAgent"]>
+	>;
+	try {
+		// Inside the try so a failed import still clears the run registry.
+		const { invokeOpenScreenAgent } = await import("./deep-agent/service");
+		result = await invokeOpenScreenAgent({
+			document: workingDocument ?? emptyDocumentForTextOnly(projectId),
+			model: {
+				provider: effectiveConfig.provider,
+				model: effectiveConfig.model,
+				apiKey: apiKey ?? undefined,
+				baseUrl: effectiveConfig.baseUrl,
+				reasoningEffort: effectiveConfig.reasoningEffort,
+				localAgentPermission: effectiveConfig.localAgentPermission,
+				localCliModel: effectiveConfig.localCliModel,
+				watchGranted:
+					effectiveConfig.localAgentPermission === "always" ||
+					llmConfig.isSessionWatchGranted?.() === true,
+			},
+			history,
+			userMessage: message,
+			sink: agentSink,
+			editsAllowed,
+			cursor: env.cursor,
+			cli: env.cli,
+			abortSignal,
+			chatSessionId: sessionId,
+		});
+	} catch (err) {
+		endChatRun(projectId, sessionId, abortSignal);
+		if (isAbortError(err) || abortSignal.aborted) {
+			return {
+				success: false,
+				status: "cancelled",
+				failureReason: "request_aborted",
+				error: AGENT_STOPPED_MESSAGE,
+			};
+		}
+		throw err;
+	}
+	endChatRun(projectId, sessionId, abortSignal);
+
+	if (abortSignal.aborted || result.failureReason === "request_aborted") {
+		return {
+			success: false,
+			status: "cancelled",
+			failureReason: "request_aborted",
+			error: result.userMessage ?? AGENT_STOPPED_MESSAGE,
+		};
+	}
 
 	if (!result.text?.trim()) {
-		// Recovery 3: empty finals are never success. Toast gets user-safe copy;
-		// diagnostic stays in logs / InvokeResult.reason for benchmarks.
+		// Tools may have already mutated the document while the model’s final prose
+		// was JSON-only / sanitizer-wiped. Prefer a short outcome (not a receipt dump).
+		if (appliedToolCalls.length > 0 || result.mutated) {
+			const { prepareAssistantContent, summarizeToolActivity } = await import("./editReceipt");
+			const fallback =
+				appliedToolCalls.length > 0
+					? summarizeToolActivity(appliedToolCalls)
+					: "Done — edits were applied to the timeline.";
+			const content = prepareAssistantContent(fallback, appliedToolCalls);
+			const assistantMessage: AiEditionChatMessage = {
+				id: randomUUID(),
+				role: "assistant",
+				content,
+				createdAt: new Date().toISOString(),
+				toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
+				media: turnMedia.length ? turnMedia : undefined,
+			};
+			session.messages.push(assistantMessage);
+			persistProject(projectId);
+			return {
+				success: true,
+				status: "completed",
+				assistantMessage,
+				document: result.document,
+				toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
+			};
+		}
 		if (result.reason) {
 			console.warn("[chat-service] agent delivery failure", {
 				status: result.status,
@@ -586,23 +670,42 @@ export async function runChat(
 				diagnostic: result.reason.slice(0, 500),
 			});
 		}
+		const localCliEmpty =
+			effectiveConfig.provider === "local-cli" &&
+			(result.failureReason === "sanitizer_removed_all_text" ||
+				result.failureReason === "missing_user_facing_response" ||
+				result.failureReason === "agent_tool_loop_no_final");
 		return {
 			success: false,
 			status: result.status ?? "analysis_error",
 			failureReason: result.failureReason,
 			providerHttpStatus: result.providerHttpStatus,
-			error:
-				result.userMessage ??
-				"OpenScreen couldn't complete this analysis. Your project was not changed.",
+			error: localCliEmpty
+				? "The local agent finished without applying an edit. Try again with a concrete ask (e.g. “speed up 1.25×”, “add captions”, “dissolve between clips”, “change wallpaper”)."
+				: (result.userMessage ??
+					"OpenScreen couldn't complete this analysis. Your project was not changed."),
 		};
 	}
 
+	const { prepareAssistantContent, stripEmbeddedReceipt, summarizeToolActivity } =
+		await import("./editReceipt");
+	const { extractChatMediaFromText } = await import("./chatMedia");
+	turnMedia = extractChatMediaFromText(result.text, turnMedia);
+	let rawText =
+		effectiveConfig.provider === "local-cli"
+			? prepareAssistantContent(result.text, appliedToolCalls)
+			: stripEmbeddedReceipt(result.text);
+	// Never leave a blank bubble when tools ran — synthesize a short outcome.
+	if (!rawText.trim() && appliedToolCalls.length > 0) {
+		rawText = summarizeToolActivity(appliedToolCalls);
+	}
 	const assistantMessage: AiEditionChatMessage = {
 		id: randomUUID(),
 		role: "assistant",
-		content: result.text,
+		content: rawText,
 		createdAt: new Date().toISOString(),
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
+		media: turnMedia.length ? turnMedia : undefined,
 	};
 	session.messages.push(assistantMessage);
 	persistProject(projectId);

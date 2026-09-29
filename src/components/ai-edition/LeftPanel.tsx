@@ -1,9 +1,14 @@
-import { ArrowLeft, Check, Copy, Loader2, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Loader2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
+import {
+	type ChatRealtimeConnectionState,
+	connectChatRealtimeSocket,
+} from "@/lib/ai-edition/chatRealtimeClient";
 import { openTimelineMedia } from "@/lib/ai-edition/document/timeline";
 import {
 	applyAgentDocumentIfCurrent,
@@ -15,6 +20,7 @@ import { writeClipboardText } from "@/lib/clipboardText";
 import { nativeBridgeClient } from "@/native/client";
 import type {
 	AiEditionChatEvent,
+	AiEditionChatMedia,
 	AiEditionChatResult,
 	AiEditionLlmConfig,
 	AiEditionLocalAgent,
@@ -26,6 +32,7 @@ import {
 	PROVIDER_DEFINITIONS,
 	type ReasoningEffort,
 } from "../../../electron/ai-edition/provider-registry";
+import { toolActivityStatus } from "../../../electron/ai-edition/toolActivityLabels";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
 import { EditReviewCardView } from "./EditReviewCard";
@@ -40,6 +47,7 @@ interface ChatDisplayMessage {
 	content: string;
 	time?: string;
 	toolCalls?: AiEditionToolCallSummary[];
+	media?: AiEditionChatMedia[];
 	// ponytail: axcut parity — non-null on user messages that have a
 	// rewind-able document snapshot, so the per-message ↩ button shows.
 	checkpointId?: string | null;
@@ -348,6 +356,90 @@ export function ModelQuickPopover({
 	);
 }
 
+// Format stored ISO timestamps into a short clock time for the chat header.
+function formatChatTime(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const asDate = new Date(value);
+	if (!Number.isNaN(asDate.getTime())) {
+		return asDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+	}
+	return value;
+}
+
+/** Short live-row hint so the user sees what the agent is producing (not only the tool name). */
+function formatLiveToolDetail(name: string, args: unknown): string | undefined {
+	if (!args || typeof args !== "object") return undefined;
+	const a = args as Record<string, unknown>;
+	if (name === "addGraphic" || name === "addAnnotation") {
+		const kind = typeof a.kind === "string" ? a.kind : typeof a.type === "string" ? a.type : null;
+		const text = typeof a.text === "string" ? a.text.trim() : "";
+		const path = typeof a.imagePath === "string" ? a.imagePath : null;
+		const bits = [
+			kind,
+			text ? `"${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"` : null,
+			path ? path.split(/[/\\]/).pop() : null,
+		].filter(Boolean);
+		return bits.length ? bits.join(" · ") : undefined;
+	}
+	if (name === "addCursorHighlight") {
+		const style = typeof a.style === "string" ? a.style : "finger";
+		const characterId = typeof a.characterId === "string" ? a.characterId : null;
+		return characterId ? `character ${characterId}` : `follow cursor (${style})`;
+	}
+	if (name === "registerCharacter") {
+		const id = typeof a.id === "string" ? a.id : "character";
+		return `register ${id}`;
+	}
+	if (name === "addBeatGraphics") {
+		const count = typeof a.count === "number" ? a.count : 5;
+		const kind = typeof a.kind === "string" ? a.kind : "badge";
+		return `${count} ${kind} beats`;
+	}
+	if (name === "addPrivacyCover") {
+		const preset = typeof a.preset === "string" ? a.preset : "topStrip";
+		return `privacy ${preset}`;
+	}
+	if (name === "insertStartThumbnail") {
+		const text = typeof a.text === "string" ? a.text.trim() : "";
+		const path = typeof a.imagePath === "string" ? a.imagePath.split(/[/\\]/).pop() : null;
+		return text ? `cover "${text.slice(0, 36)}"` : path ? `cover ${path}` : "start cover";
+	}
+	return undefined;
+}
+
+function mediaBasename(filePath: string): string {
+	const parts = filePath.split(/[/\\]/);
+	return parts[parts.length - 1] || filePath;
+}
+
+function ActivityDetails({
+	toolCalls,
+	label,
+}: {
+	toolCalls: AiEditionToolCallSummary[];
+	label: string;
+}) {
+	if (toolCalls.length === 0) return null;
+	return (
+		<details className={styles.activityDetails}>
+			<summary className={styles.activitySummary}>
+				{label} ({toolCalls.length})
+			</summary>
+			<div className={styles.activityBody}>
+				{toolCalls.map((call, j) => (
+					<div key={`${call.name}-${j}`} className={styles.activityRow}>
+						<span className={styles.activityRowName}>{toolActivityStatus(call.name)}</span>
+						<span className={styles.activityRowDetail}>
+							{call.name}
+							{call.summary ? `: ${call.summary}` : ""}
+						</span>
+					</div>
+				))}
+			</div>
+		</details>
+	);
+}
+
 // ponytail: collapsible block that renders a model's reasoning trace (the
 // streaming text from Anthropic/MiniMax `thinking` blocks). Default state is
 // the last ~240 chars of the trace, clamped to two lines — the latest
@@ -490,7 +582,14 @@ export function ChatStripPanel() {
 	// start; deltas append through the chat-event subscription; once the run
 	// resolves we copy it onto the assistant message and clear it.
 	const [thinkingText, setThinkingText] = useState("");
-	const [thinkingExpanded, setThinkingExpanded] = useState(false);
+	const [streamingText, setStreamingText] = useState("");
+	const [liveTools, setLiveTools] = useState<
+		Array<{ name: string; summary?: string; ok?: boolean; detail?: string }>
+	>([]);
+	const [liveStatus, setLiveStatus] = useState<string | null>(null);
+	const [realtimeState, setRealtimeState] = useState<ChatRealtimeConnectionState>("idle");
+	const realtimeLiveRef = useRef(false);
+	const [thinkingExpanded, setThinkingExpanded] = useState(true);
 	// sessionId of the in-flight run — late events for prior runs (or for
 	// other windows) are ignored so a stale stream can't pollute the new turn.
 	const thinkingRunSessionRef = useRef<string | null>(null);
@@ -579,19 +678,93 @@ export function ChatStripPanel() {
 		if (!providerSettingsOpen) void refreshLlm();
 	}, [providerSettingsOpen, refreshLlm]);
 
-	// ponytail: subscribe to streamed chat events so the reasoning trace (and
-	// any future streaming text deltas) lands live instead of arriving all at
-	// once when chatRun resolves. We only act on `thinking` here — text deltas
-	// are ignored in the renderer today because the chat already renders the
-	// final assistant text on chatRun resolve, and a parallel live stream
-	// would race the final message. Add `text` handling when that flow lands.
+	// Live agent stream: prefer localhost WebSocket (Cursor-like), fall back to IPC.
 	useEffect(() => {
-		const unsubChatEvent = window.electronAPI.onAiEditionChatEvent((event: AiEditionChatEvent) => {
-			if (event.kind !== "thinking") return;
+		const applyEvent = (event: AiEditionChatEvent) => {
+			if (event.kind === "status") {
+				if (event.sessionId && event.sessionId !== thinkingRunSessionRef.current) return;
+				if (event.phase === "connected") return;
+				setLiveStatus(event.detail ?? event.phase);
+				return;
+			}
 			if (event.sessionId !== thinkingRunSessionRef.current) return;
-			setThinkingText((prev) => prev + event.delta);
+			if (event.kind === "thinking") {
+				setThinkingText((prev) => prev + event.delta);
+				return;
+			}
+			if (event.kind === "text") {
+				setStreamingText((prev) => prev + event.delta);
+				return;
+			}
+			if (event.kind === "toolStart") {
+				const detail = formatLiveToolDetail(event.name, event.args);
+				setLiveTools((prev) => [...prev, { name: event.name, detail }]);
+				return;
+			}
+			if (event.kind === "toolEnd") {
+				setLiveTools((prev) => {
+					const next = [...prev];
+					for (let i = next.length - 1; i >= 0; i--) {
+						if (next[i]?.name === event.name && next[i]?.ok === undefined) {
+							next[i] = {
+								name: event.name,
+								ok: event.ok,
+								summary: event.summary,
+							};
+							break;
+						}
+					}
+					return next;
+				});
+			}
+		};
+
+		let unsubSocket: (() => void) | null = null;
+		// Cleanup can run before the endpoint lookup resolves (StrictMode double
+		// mount, fast panel toggles). Without this flag the socket would open
+		// after unmount and never be closed.
+		let disposed = false;
+		const fetchEndpoint = async () =>
+			(await window.electronAPI.getAiEditionChatRealtimeEndpoint?.()) ?? null;
+		void (async () => {
+			try {
+				const endpoint = await fetchEndpoint();
+				if (disposed) return;
+				if (!endpoint) {
+					setRealtimeState("fallback");
+					return;
+				}
+				unsubSocket = connectChatRealtimeSocket({
+					endpoint,
+					// The hub mints a new token when it restarts; re-read it on reconnect.
+					refreshEndpoint: fetchEndpoint,
+					onEvent: (event) => {
+						if (!disposed) applyEvent(event);
+					},
+					onState: (state) => {
+						if (disposed) return;
+						realtimeLiveRef.current = state === "live";
+						setRealtimeState(state);
+					},
+				});
+			} catch {
+				if (!disposed) setRealtimeState("fallback");
+			}
+		})();
+
+		const unsubIpc = window.electronAPI.onAiEditionChatEvent((event: AiEditionChatEvent) => {
+			// When the WebSocket is live, IPC is a duplicate fan-out — skip to avoid
+			// doubled thinking/text. If the socket drops, IPC covers the turn.
+			if (realtimeLiveRef.current) return;
+			applyEvent(event);
 		});
-		return unsubChatEvent;
+
+		return () => {
+			disposed = true;
+			unsubIpc();
+			unsubSocket?.();
+			realtimeLiveRef.current = false;
+		};
 	}, []);
 
 	useEffect(() => {
@@ -621,8 +794,9 @@ export function ChatStripPanel() {
 							id: m.id,
 							role: m.role,
 							content: m.content,
-							time: m.createdAt,
+							time: formatChatTime(m.createdAt),
 							toolCalls: m.toolCalls,
+							media: m.media,
 							checkpointId: m.checkpointId ?? null,
 						})),
 					);
@@ -667,7 +841,10 @@ export function ChatStripPanel() {
 		// from a previous run (or from another panel/window) won't match this
 		// sessionId and are dropped by the subscription above.
 		setThinkingText("");
-		setThinkingExpanded(false);
+		setStreamingText("");
+		setLiveTools([]);
+		setLiveStatus(null);
+		setThinkingExpanded(true);
 		thinkingRunSessionRef.current = null;
 		// ponytail: pre-seed the user message so the rewind ↩ button is
 		// available before the server confirms. Mirrors axcut's
@@ -757,6 +934,7 @@ export function ChatStripPanel() {
 						content: assistant.content,
 						time: new Date().toLocaleTimeString(),
 						toolCalls: assistant.toolCalls,
+						media: assistant.media,
 						// ponytail: snapshot the live reasoning trace onto the
 						// finished message so it can be revisited (collapsed by
 						// default, click-to-expand) instead of vanishing. The
@@ -767,12 +945,33 @@ export function ChatStripPanel() {
 				]);
 				void refreshSessions(projectId);
 			} else {
-				toast.error(result.error ?? t("chat.chatFailed"));
+				const stopped = result.status === "cancelled" || result.failureReason === "request_aborted";
+				const errText = stopped ? t("chat.stopped") : (result.error ?? t("chat.chatFailed"));
+				if (stopped) toast.message(errText);
+				else toast.error(errText);
+				// Also pin the failure in the transcript — a side toast alone is easy to miss.
+				setMessages((prev) => [
+					...prev,
+					{
+						role: "assistant",
+						content: errText,
+						time: new Date().toLocaleTimeString(),
+					},
+				]);
 			}
 		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
 			toast.error(t("chat.chatFailed"), {
-				description: err instanceof Error ? err.message : String(err),
+				description: detail,
 			});
+			setMessages((prev) => [
+				...prev,
+				{
+					role: "assistant",
+					content: detail || t("chat.chatFailed"),
+					time: new Date().toLocaleTimeString(),
+				},
+			]);
 		} finally {
 			setBusy(false);
 			// ponytail: stop accepting thinking deltas and drop the in-flight
@@ -780,9 +979,27 @@ export function ChatStripPanel() {
 			// message above, or there's no message to attach it to (failure).
 			thinkingRunSessionRef.current = null;
 			setThinkingText("");
-			setThinkingExpanded(false);
+			setStreamingText("");
+			setLiveTools([]);
+			setLiveStatus(null);
+			setThinkingExpanded(true);
 		}
 	};
+
+	const stopAgent = useCallback(async () => {
+		// The running turn's session, not `activeSessionId`: on the first message
+		// of a new chat the session is created inside `send`, and this callback's
+		// `activeSessionId` is still null — Stop would silently do nothing.
+		const sessionId = thinkingRunSessionRef.current ?? activeSessionId;
+		if (!projectId || !sessionId || !busy) return;
+		try {
+			await nativeBridgeClient.aiEdition.chatCancel(projectId, sessionId);
+		} catch (err) {
+			toast.error(t("chat.stopFailed"), {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, [projectId, activeSessionId, busy, t]);
 
 	const finishWatchPrompt = async (choice: "session" | "always" | "now") => {
 		const text = watchPromptText;
@@ -849,8 +1066,9 @@ export function ChatStripPanel() {
 						id: m.id,
 						role: m.role,
 						content: m.content,
-						time: m.createdAt,
+						time: formatChatTime(m.createdAt),
 						toolCalls: m.toolCalls,
+						media: m.media,
 						checkpointId: m.checkpointId ?? null,
 					})),
 				);
@@ -889,9 +1107,19 @@ export function ChatStripPanel() {
 
 	const modelLabel =
 		llmConfig?.provider === "local-cli" && llmConfig.model
-			? (localAgents.find(
-					(agent) => agent.id === llmConfig.model || agent.models?.includes(llmConfig.model),
-				)?.name ?? llmConfig.model)
+			? (() => {
+					const agent = localAgents.find(
+						(row) => row.id === llmConfig.model || row.models?.includes(llmConfig.model),
+					);
+					const name = agent?.name ?? llmConfig.model;
+					const chosen =
+						llmConfig.model === "claude" && llmConfig.localCliModel
+							? (agent?.modelOptions?.find((opt) => opt.id === llmConfig.localCliModel)?.label ??
+								llmConfig.localCliModel)
+							: undefined;
+					const detail = chosen ?? agent?.activeModel ?? agent?.version;
+					return detail ? `${name} · ${detail}` : name;
+				})()
 			: llmConfig?.model
 				? llmConfig.model
 				: t("chat.localCli.title");
@@ -994,8 +1222,9 @@ export function ChatStripPanel() {
 					id: m.id,
 					role: m.role,
 					content: m.content,
-					time: m.createdAt,
+					time: formatChatTime(m.createdAt),
 					toolCalls: m.toolCalls,
+					media: m.media,
 					checkpointId: m.checkpointId ?? null,
 				})),
 			);
@@ -1110,6 +1339,24 @@ export function ChatStripPanel() {
 						>
 							<span className={styles.d} aria-hidden />
 							{t("chat.contextPercent", { percent: Math.min(100, Math.round(budget.ratio * 100)) })}
+						</span>
+						<span
+							className={styles.realtimePill}
+							data-state={realtimeState}
+							title={
+								realtimeState === "live"
+									? t("chat.realtimeLiveHint")
+									: realtimeState === "connecting"
+										? t("chat.realtimeConnecting")
+										: t("chat.realtimeFallbackHint")
+							}
+						>
+							<span className={styles.realtimeDot} aria-hidden />
+							{realtimeState === "live"
+								? t("chat.realtimeLive")
+								: realtimeState === "connecting"
+									? t("chat.realtimeConnecting")
+									: t("chat.realtimeFallback")}
 						</span>
 						<span className={styles.stripActions}>
 							<button
@@ -1354,33 +1601,19 @@ export function ChatStripPanel() {
 						}}
 					/>
 				) : messages.length === 0 ? (
-					<p
-						style={{
-							font: "400 12px var(--font-body)",
-							color: "var(--muted)",
-							padding: "24px var(--sp-4)",
-							textAlign: "center",
-							lineHeight: 1.5,
-						}}
-					>
-						{t("chat.emptyState")}
-					</p>
+					<div className={styles.chatEmpty}>
+						<p className={styles.chatEmptyTitle}>{t("chat.welcome.title")}</p>
+						<p className={styles.chatEmptyBody}>{t("chat.emptyState")}</p>
+					</div>
 				) : (
 					<>
 						{messages.map((m, i) => (
-							<div className={styles.msg} key={i}>
+							<div className={styles.msg} data-role={m.role} key={i}>
 								<div className={styles.msgHead}>
 									<span className={styles.msgAuthor}>
 										{m.role === "user" ? t("chat.authorUser") : t("chat.authorAssistant")}
 									</span>
-									{m.time ? (
-										<span
-											className="right"
-											style={{ font: "500 10px/1 var(--font-mono)", color: "var(--muted)" }}
-										>
-											{m.time}
-										</span>
-									) : null}
+									{m.time ? <span className={styles.msgTime}>{m.time}</span> : null}
 								</div>
 								{m.thinking && m.role !== "user" ? (
 									<ThinkingBlock
@@ -1401,7 +1634,79 @@ export function ChatStripPanel() {
 										label={t("chat.thinking")}
 									/>
 								) : null}
-								<div className={styles.msgBubble}>{m.content}</div>
+								{m.content.trim() ? (
+									<div className={styles.msgBubble}>{m.content}</div>
+								) : m.toolCalls?.length ? (
+									<div className={styles.msgBubble}>
+										Done — finished {m.toolCalls.length} timeline action
+										{m.toolCalls.length === 1 ? "" : "s"}.
+									</div>
+								) : null}
+								{m.media?.length ? (
+									<div className={styles.chatMediaGallery}>
+										<div
+											className={styles.chatMediaGrid}
+											data-has-video={m.media.some((x) => x.kind === "video") ? "true" : "false"}
+										>
+											{m.media.map((item) => {
+												const src = toFileUrl(item.path);
+												const name = item.label?.trim() || mediaBasename(item.path);
+												return (
+													<figure key={item.id} className={styles.chatMediaCard}>
+														{item.kind === "video" ? (
+															<video
+																className={styles.chatMediaThumb}
+																data-kind="video"
+																src={src}
+																controls
+																preload="metadata"
+															/>
+														) : (
+															<img className={styles.chatMediaThumb} src={src} alt={name} />
+														)}
+														<figcaption className={styles.chatMediaLabel} title={name}>
+															{name}
+														</figcaption>
+														<div className={styles.chatMediaActions}>
+															<button
+																type="button"
+																className={styles.chatMediaActionBtn}
+																disabled={busy || !canChat}
+																onClick={() => {
+																	void send(
+																		item.kind === "video"
+																			? `Use this motion graphic on the video (importMedia or insertStartThumbnail):\n${item.path}`
+																			: `Use this graphic on the video (addGraphic imagePath):\n${item.path}`,
+																	);
+																}}
+															>
+																{t("chat.mediaUseOnVideo")}
+															</button>
+															<button
+																type="button"
+																className={styles.chatMediaActionBtn}
+																onClick={() => {
+																	window.open(src, "_blank", "noopener,noreferrer");
+																}}
+															>
+																{t("chat.mediaOpen")}
+															</button>
+															<button
+																type="button"
+																className={styles.chatMediaActionBtn}
+																onClick={() => {
+																	void window.electronAPI.revealInFolder?.(item.path);
+																}}
+															>
+																{t("chat.mediaReveal")}
+															</button>
+														</div>
+													</figure>
+												);
+											})}
+										</div>
+									</div>
+								) : null}
 								<div className={styles.msgActions}>
 									{m.role === "user" && m.checkpointId ? (
 										<button
@@ -1457,19 +1762,7 @@ export function ChatStripPanel() {
 									</button>
 								</div>
 								{m.toolCalls?.length ? (
-									<div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
-										{m.toolCalls.map((call, j) => (
-											<div
-												key={j}
-												style={{
-													font: "500 10px/1.5 var(--font-mono)",
-													color: "var(--success)",
-												}}
-											>
-												{t("chat.appliedPrefix")} {call.summary}
-											</div>
-										))}
-									</div>
+									<ActivityDetails toolCalls={m.toolCalls} label={t("chat.activityDetails")} />
 								) : null}
 								{m.editReview?.cards.map((card) => (
 									<EditReviewCardView
@@ -1484,6 +1777,7 @@ export function ChatStripPanel() {
 							<div className={styles.msg} aria-live="polite">
 								<div className={styles.msgHead}>
 									<span className={styles.msgAuthor}>{t("chat.authorAssistant")}</span>
+									{liveStatus ? <span className={styles.msgTime}>{liveStatus}</span> : null}
 								</div>
 								{thinkingText ? (
 									<div
@@ -1511,7 +1805,7 @@ export function ChatStripPanel() {
 											/>
 										</div>
 									</div>
-								) : (
+								) : liveStatus ? null : (
 									<div
 										className={styles.msgBubble}
 										style={{ color: "var(--muted)", fontStyle: "italic" }}
@@ -1524,6 +1818,44 @@ export function ChatStripPanel() {
 										{t("chat.thinking")}
 									</div>
 								)}
+								{liveStatus && !thinkingText ? (
+									<div className={styles.liveStatusRow}>
+										<Loader2 size={12} className="animate-spin" />
+										<span>{liveStatus}</span>
+									</div>
+								) : null}
+								{liveTools.length > 0 ? (
+									<div className={styles.liveTools}>
+										{liveTools.map((tool, idx) => {
+											const status = toolActivityStatus(tool.name);
+											return (
+												<div
+													key={`${tool.name}-${idx}`}
+													className={styles.liveToolRow}
+													data-ok={tool.ok === undefined ? "pending" : tool.ok ? "true" : "false"}
+												>
+													{tool.ok === undefined ? (
+														<Loader2 size={11} className="animate-spin" />
+													) : null}
+													<span>
+														{tool.ok === undefined
+															? tool.detail
+																? `${status} — ${tool.detail}`
+																: `${status}…`
+															: tool.ok
+																? status
+																: `${status} failed`}
+													</span>
+												</div>
+											);
+										})}
+									</div>
+								) : null}
+								{streamingText ? (
+									<div className={styles.msgBubble} style={{ marginTop: 8 }}>
+										{streamingText}
+									</div>
+								) : null}
 							</div>
 						) : null}
 					</>
@@ -1661,28 +1993,41 @@ export function ChatStripPanel() {
 							onAgentsChange={setLocalAgents}
 						/>
 					) : null}
-					<button
-						type="button"
-						className={styles.sendBtn}
-						title={canChat ? t("chat.sendTitle") : t("chat.localCli.composerDisabled")}
-						aria-label={t("chat.send")}
-						onClick={() => void send()}
-						disabled={busy || !input.trim() || !canChat}
-					>
-						<svg
-							width={14}
-							height={14}
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
+					{busy ? (
+						<button
+							type="button"
+							className={styles.stopBtn}
+							title={t("chat.stopTitle")}
+							aria-label={t("chat.stop")}
+							onClick={() => void stopAgent()}
 						>
-							<path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.843 7.627a.498.498 0 0 0 .683.627l18-8.5a.5.5 0 0 0 0-.904Z" />
-							<path d="M6 12h16" />
-						</svg>
-					</button>
+							<Square size={12} fill="currentColor" />
+							<span>{t("chat.stop")}</span>
+						</button>
+					) : (
+						<button
+							type="button"
+							className={styles.sendBtn}
+							title={canChat ? t("chat.sendTitle") : t("chat.localCli.composerDisabled")}
+							aria-label={t("chat.send")}
+							onClick={() => void send()}
+							disabled={!input.trim() || !canChat}
+						>
+							<svg
+								width={14}
+								height={14}
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							>
+								<path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.843 7.627a.498.498 0 0 0 .683.627l18-8.5a.5.5 0 0 0 0-.904Z" />
+								<path d="M6 12h16" />
+							</svg>
+						</button>
+					)}
 				</div>
 			</div>
 			{watchPromptText

@@ -66,6 +66,9 @@ interface Window {
 		onAiEditionChatEvent: (
 			callback: (event: import("../src/native/contracts").AiEditionChatEvent) => void,
 		) => () => void;
+		getAiEditionChatRealtimeEndpoint: () => Promise<
+			import("../src/native/contracts").AiEditionChatRealtimeEndpoint | null
+		>;
 		requestCameraAccess: () => Promise<{
 			success: boolean;
 			granted: boolean;

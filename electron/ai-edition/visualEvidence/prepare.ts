@@ -4,7 +4,7 @@ import type { CursorTelemetryLoad } from "../agent-tools";
 import type { MediaContextNeeds } from "../mediaContextNeeds";
 import { classifyMediaContextNeeds } from "../mediaContextNeeds";
 import { ensureCanonicalSourceDuration } from "../sourceTiming";
-import { buildVisualEvidenceUserContent, toAgentUserMessage } from "./attach";
+import { buildVisualEvidenceUserContent, buildVisualEvidencePathUserContent, toAgentUserMessage } from "./attach";
 import {
 	type ChangeScoreDeps,
 	correlateInteractionsWithChanges,
@@ -18,7 +18,7 @@ import {
 	type ExtractFrameDeps,
 	extractVisualEvidenceFrames,
 } from "./extract";
-import { providerSupportsAttachedVisualFrames } from "./providers";
+import { providerCanReceiveVisualEvidence, providerUsesFrameFilePaths } from "./providers";
 import {
 	applyVisualFrameBudget,
 	collectVisualEvidenceCandidates,
@@ -147,7 +147,7 @@ export async function prepareVisualEvidenceForTurn(
 	if (!wantsVisual || frameCap === 0) {
 		return { userMessage: plain, visualFramesSupplied: false, prepared: null };
 	}
-	if (!providerSupportsAttachedVisualFrames(input.provider)) {
+	if (!providerCanReceiveVisualEvidence(input.provider)) {
 		return { userMessage: plain, visualFramesSupplied: false, prepared: null };
 	}
 
@@ -377,14 +377,19 @@ export async function prepareVisualEvidenceForTurn(
 
 	const attachStarted = Date.now();
 	const semanticTimingOut = { preparationMs: 0, promptChars: 0 };
-	const content = await buildVisualEvidenceUserContent(input.userMessage, frames, {
-		changes,
-		interactionCorrelations: correlations,
-		includeSemanticGrounding: true,
-		semanticTimingOut,
-	});
-	timings.semanticGroundingPreparationMs = semanticTimingOut.preparationMs;
-	timings.semanticGroundingPromptChars = semanticTimingOut.promptChars;
+	const usePaths = providerUsesFrameFilePaths(input.provider);
+	const content = usePaths
+		? buildVisualEvidencePathUserContent(input.userMessage, frames, { changes })
+		: await buildVisualEvidenceUserContent(input.userMessage, frames, {
+				changes,
+				interactionCorrelations: correlations,
+				includeSemanticGrounding: true,
+				semanticTimingOut,
+			});
+	if (!usePaths) {
+		timings.semanticGroundingPreparationMs = semanticTimingOut.preparationMs;
+		timings.semanticGroundingPromptChars = semanticTimingOut.promptChars;
+	}
 	timings.attachMs = Date.now() - attachStarted;
 	logTimings(timings);
 

@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "推理强度",
 		"sendTitle": "发送（回车）",
 		"send": "发送",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "要回退到这里吗？",
 		"rewindConfirmBody": "此时间点之后代理的编辑和后续对话轮次将被回滚。项目、对话和代理状态将被恢复。你在那之后所做的编辑也会被替换。",
 		"rewindConfirm": "回退",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Claude 模型",
+			"modelUpdateRequired": "更新 Claude Code 以解锁"
+		},
+		"realtimeLive": "实时",
+		"realtimeConnecting": "连接中…",
+		"realtimeFallback": "本地",
+		"realtimeLiveHint": "智能体更新通过实时 WebSocket 推送",
+		"realtimeFallbackHint": "实时流重连前使用 Electron IPC",
+		"mediaUseOnVideo": "用于视频",
+		"activityDetails": "活动",
+		"mediaOpen": "打开",
+		"mediaReveal": "显示"
 	},
 	"newProjectDialog": {
 		"title": "新建项目",

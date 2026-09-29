@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "Effort de raisonnement",
 		"sendTitle": "Envoyer (Entrée)",
 		"send": "Envoyer",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "Revenir ici ?",
 		"rewindConfirmBody": "Les modifications de l'agent et les échanges suivants après ce point seront annulés. Le projet, la conversation et l'état de l'agent seront restaurés. Les modifications que vous avez faites depuis seront elles aussi remplacées.",
 		"rewindConfirm": "Revenir en arrière",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Modèles Claude",
+			"modelUpdateRequired": "Mettez à jour Claude Code pour débloquer"
+		},
+		"realtimeLive": "En direct",
+		"realtimeConnecting": "Connexion…",
+		"realtimeFallback": "Local",
+		"realtimeLiveHint": "Les mises à jour de l’agent passent par un WebSocket en direct",
+		"realtimeFallbackHint": "IPC Electron utilisé jusqu’à reconnexion du flux live",
+		"mediaUseOnVideo": "Utiliser sur la vidéo",
+		"activityDetails": "Activité",
+		"mediaOpen": "Ouvrir",
+		"mediaReveal": "Afficher"
 	},
 	"newProjectDialog": {
 		"title": "Nouveau projet",

@@ -165,6 +165,57 @@ export async function buildVisualEvidenceUserContent(
 	return parts;
 }
 
+/**
+ * Text-only visual evidence for Local CLI agents: absolute JPEG paths the
+ * subprocess can Read, without embedding base64 (LocalCliChatModel strips
+ * multimodal image_url parts).
+ */
+export function buildVisualEvidencePathUserContent(
+	userMessage: string,
+	frames: VisualEvidenceFrame[],
+	options?: { changes?: VisualChange[] },
+): string {
+	const lines: string[] = [
+		"VISUAL EVIDENCE — sampled JPEG files from the open recording (NOT every video frame).",
+		"Open each path with Read (or your viewer). Transition scores (when present) are pixel differences between adjacent samples.",
+		"After watching, you may author motion graphics and place them with addGraphic (prefer imagePath for rendered PNG/WebP).",
+		"",
+	];
+	const changes = options?.changes ?? [];
+	for (let i = 0; i < frames.length; i++) {
+		const f = frames[i]!;
+		const timeline =
+			f.virtualTimeSec == null ? "n/a (outside kept timeline)" : formatClock(f.virtualTimeSec);
+		lines.push(
+			[
+				`Frame ${i + 1}/${frames.length}`,
+				`source ${formatClock(f.sourceTimeSec)}`,
+				`timeline ${timeline}`,
+				`reason: ${reasonLabel(f.reason)}`,
+				`path: ${f.imagePath}`,
+			].join(" | "),
+		);
+		const next = frames[i + 1];
+		if (!next) continue;
+		const transition =
+			changes.find(
+				(c) =>
+					Math.abs(c.fromSourceTimeSec - f.sourceTimeSec) < 0.001 &&
+					Math.abs(c.toSourceTimeSec - next.sourceTimeSec) < 0.001,
+			) ?? null;
+		if (!transition) continue;
+		lines.push(
+			[
+				`Transition ${formatClock(transition.fromSourceTimeSec)} → ${formatClock(transition.toSourceTimeSec)}`,
+				`visual change: ${classificationLabel(transition.classification)}`,
+				`score: ${transition.score.toFixed(2)}`,
+			].join(" | "),
+		);
+	}
+	lines.push("", "USER REQUEST", userMessage);
+	return lines.join("\n");
+}
+
 /** Agent message shape used by createAgent / streamEvents. */
 export function toAgentUserMessage(content: string | MultimodalContentPart[]): {
 	role: "user";

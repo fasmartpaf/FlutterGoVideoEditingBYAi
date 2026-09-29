@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "推論の労力",
 		"sendTitle": "送信（Enter）",
 		"send": "送信",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "ここまで巻き戻しますか？",
 		"rewindConfirmBody": "この時点以降のエージェントの編集とやり取りは元に戻されます。プロジェクト、会話、エージェントの状態が復元されます。それ以降にあなたが行った編集も置き換えられます。",
 		"rewindConfirm": "巻き戻す",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Claude モデル",
+			"modelUpdateRequired": "Claude Code を更新して解除"
+		},
+		"realtimeLive": "ライブ",
+		"realtimeConnecting": "接続中…",
+		"realtimeFallback": "ローカル",
+		"realtimeLiveHint": "エージェント更新はライブ WebSocket で配信されます",
+		"realtimeFallbackHint": "ライブ再接続まで Electron IPC を使用",
+		"mediaUseOnVideo": "動画に使う",
+		"activityDetails": "アクティビティ",
+		"mediaOpen": "開く",
+		"mediaReveal": "表示"
 	},
 	"newProjectDialog": {
 		"title": "新規プロジェクト",

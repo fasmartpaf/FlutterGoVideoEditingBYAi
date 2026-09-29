@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "Akıl yürütme çabası",
 		"sendTitle": "Gönder (Enter)",
 		"send": "Gönder",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "Buraya geri sarılsın mı?",
 		"rewindConfirmBody": "Bu noktadan sonraki aracı düzenlemeleri ve takip eden turlar geri alınacak. Proje, konuşma ve aracı durumu geri yüklenecek. O zamandan beri yaptığınız düzenlemeler de değiştirilir.",
 		"rewindConfirm": "Geri sar",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Claude modelleri",
+			"modelUpdateRequired": "Kilidi açmak için Claude Code’u güncelleyin"
+		},
+		"realtimeLive": "Canlı",
+		"realtimeConnecting": "Bağlanıyor…",
+		"realtimeFallback": "Yerel",
+		"realtimeLiveHint": "Ajan güncellemeleri canlı WebSocket ile akar",
+		"realtimeFallbackHint": "Canlı akış yeniden bağlanana kadar Electron IPC kullanılıyor",
+		"mediaUseOnVideo": "Videoya ekle",
+		"activityDetails": "Etkinlik",
+		"mediaOpen": "Aç",
+		"mediaReveal": "Göster"
 	},
 	"newProjectDialog": {
 		"title": "Yeni proje",

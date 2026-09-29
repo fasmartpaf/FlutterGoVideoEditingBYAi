@@ -67,6 +67,23 @@ describe("selectionForAgent", () => {
 			model: "claude",
 			baseUrl: "cli:/opt/homebrew/bin/claude",
 		});
+		expect(
+			selectionForAgent(
+				{
+					id: "claude",
+					name: "Claude Code",
+					kind: "cli",
+					path: "/opt/homebrew/bin/claude",
+					ready: true,
+				},
+				"opus",
+			),
+		).toEqual({
+			provider: "local-cli",
+			model: "claude",
+			baseUrl: "cli:/opt/homebrew/bin/claude",
+			localCliModel: "opus",
+		});
 	});
 });
 
@@ -79,7 +96,6 @@ describe("local CLI helpers", () => {
 			"-p",
 			"--output-format",
 			"text",
-			"--no-session-persistence",
 			"--setting-sources",
 			"user",
 			"--permission-mode",
@@ -87,27 +103,42 @@ describe("local CLI helpers", () => {
 			"--tools",
 			"",
 		]);
+		expect(printArgvForAgent("claude", "hi", { outputFormat: "stream-json" })).toEqual(
+			expect.arrayContaining(["--output-format", "stream-json", "--verbose"]),
+		);
+		expect(printArgvForAgent("claude", "hi", { model: "opus" })).toEqual(
+			expect.arrayContaining(["--model", "opus"]),
+		);
+		expect(printArgvForAgent("claude", "hi", { model: "locked:opus:Opus 5.5" })).not.toEqual(
+			expect.arrayContaining(["--model"]),
+		);
+		const sid = "11111111-1111-1111-1111-111111111111";
+		// First spawn creates the session; later spawns resume it. Never both.
+		const first = printArgvForAgent("claude", "hi", { cliSessionId: sid });
+		expect(first).toEqual(expect.arrayContaining(["--session-id", sid]));
+		expect(first).not.toContain("--resume");
+		const later = printArgvForAgent("claude", "hi", { cliSessionId: sid, resumeCliSession: true });
+		expect(later).toEqual(expect.arrayContaining(["--resume", sid]));
+		expect(later).not.toContain("--session-id");
 		expect(printArgvForAgent("claude", "hi", { addDirs: ["/Users/me/Movies/V Recorder"] })).toEqual(
-			[
-				"-p",
-				"--output-format",
-				"text",
-				"--no-session-persistence",
-				"--setting-sources",
-				"user",
+			expect.arrayContaining([
 				"--permission-mode",
 				"bypassPermissions",
 				"--tools",
 				"Read",
 				"Bash",
-				"--allowedTools",
-				"Read",
-				"Bash",
+				"Edit",
+				"Write",
+				"Glob",
+				"Grep",
 				"--add-dir",
 				"/Users/me/Movies/V Recorder",
 				"--add-dir",
 				os.tmpdir(),
-			],
+			]),
+		);
+		expect(printArgvForAgent("claude", "hi", { addDirs: ["/Users/me/Movies"] })).not.toEqual(
+			expect.arrayContaining(["--no-session-persistence"]),
 		);
 	});
 
@@ -151,9 +182,27 @@ describe("local CLI helpers", () => {
 		expect(formatLocalCliError("needs-login")).toMatch(/claude auth login/);
 	});
 
-	it("turns a Local CLI timeout into a retry hint", () => {
+	it("turns a Local CLI timeout into a retry hint with the right agent name", () => {
+		expect(formatLocalCliError("Local CLI timed out (/Users/me/.local/bin/claude)")).toMatch(
+			/Claude Code timed out/i,
+		);
 		expect(formatLocalCliError("Local CLI timed out (/Users/me/.local/bin/claude)")).toMatch(
 			/watching to Never/i,
 		);
+		expect(
+			formatLocalCliError("Local CLI timed out (/usr/local/bin/cursor-agent)", "cursor"),
+		).toMatch(/Cursor Agent timed out/i);
+		expect(
+			formatLocalCliError("Local CLI timed out (/usr/local/bin/agent)", "cursor"),
+		).not.toMatch(/Claude Code/i);
+	});
+
+	it("turns Claude weekly limit / 429 into a short actionable sentence", () => {
+		const dump =
+			'{"subtype":"success","api_error_status":429,"result":"You\'ve hit your weekly limit · resets Sep 30 at 11pm (Asia/Karachi)","type":"result"}';
+		const msg = formatLocalCliError(dump);
+		expect(msg).toMatch(/weekly limit/i);
+		expect(msg).toMatch(/Sep 30|quota|Switch Local CLI/i);
+		expect(msg.length).toBeLessThan(280);
 	});
 });

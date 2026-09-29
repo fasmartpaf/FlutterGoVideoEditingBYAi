@@ -273,6 +273,10 @@
 		"reasoningEffortLabel": "Уровень рассуждений",
 		"sendTitle": "Отправить (Enter)",
 		"send": "Отправить",
+		"stop": "Stop",
+		"stopTitle": "Stop agent",
+		"stopFailed": "Couldn't stop the agent",
+		"stopped": "Agent stopped.",
 		"rewindConfirmTitle": "Откатить сюда?",
 		"rewindConfirmBody": "Правки агента и последующие сообщения после этой точки будут отменены. Проект, беседа и состояние агента будут восстановлены. Правки, сделанные вами с тех пор, тоже будут заменены.",
 		"rewindConfirm": "Откатить",
@@ -310,8 +314,19 @@
 			"watchPromptBody": "The agent needs ffmpeg on this project's videos to see what's on screen. The rest of your computer stays closed.",
 			"watchAllowSession": "Allow this session",
 			"watchAllowAlways": "Always allow",
-			"watchNotNow": "Not now"
-		}
+			"watchNotNow": "Not now",
+			"modelsHeading": "Модели Claude",
+			"modelUpdateRequired": "Обновите Claude Code, чтобы разблокировать"
+		},
+		"realtimeLive": "Онлайн",
+		"realtimeConnecting": "Подключение…",
+		"realtimeFallback": "Локально",
+		"realtimeLiveHint": "Обновления агента идут по живому WebSocket",
+		"realtimeFallbackHint": "Пока используется Electron IPC, пока поток не переподключится",
+		"mediaUseOnVideo": "Добавить на видео",
+		"activityDetails": "Активность",
+		"mediaOpen": "Открыть",
+		"mediaReveal": "Показать"
 	},
 	"newProjectDialog": {
 		"title": "Новый проект",

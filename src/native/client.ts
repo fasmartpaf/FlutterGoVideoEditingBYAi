@@ -255,6 +255,12 @@ export const nativeBridgeClient = {
 				action: "chat.run",
 				payload: { projectId, sessionId, message, document },
 			}),
+		chatCancel: (projectId: string, sessionId: string): Promise<{ cancelled: boolean }> =>
+			requireNativeBridgeData<{ cancelled: boolean }>({
+				domain: "aiEdition",
+				action: "chat.cancel",
+				payload: { projectId, sessionId },
+			}),
 		applyPreviewRun: (payload: {
 			document: unknown;
 			editProposalV1: unknown;

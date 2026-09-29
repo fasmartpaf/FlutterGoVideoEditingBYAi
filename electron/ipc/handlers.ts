@@ -41,6 +41,7 @@ import type {
 	ProjectPathResult,
 } from "../../src/native/contracts";
 import {
+	cancelChatRun,
 	compactSessionNow,
 	configureChatPersistence,
 	createSession,
@@ -4421,6 +4422,7 @@ export function registerIpcHandlers(
 				cursor: agentCursorTelemetryReader,
 				cli: createInAppCliEngine(),
 			}),
+		cancelAiEditionChat: (projectId, sessionId) => cancelChatRun(projectId, sessionId),
 		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
 			success: false,
 			error: "Per-tool-batch undo retired in favor of per-message rewind.",
