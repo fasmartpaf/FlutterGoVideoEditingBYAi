@@ -134,7 +134,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		id: "graphics",
 		title: "Graphics & motion",
 		instruction:
-			"Following your plan: add a branded intro title card and a closing call-to-action (createMotionClip templates, placed at start / end), plus a few animated callouts, lower thirds or keyword pops on the footage where they help the story (addMotionOverlay). Use the brand kit — it already matches the video's colours. Keep text short and don't cover the UI the viewer needs to see. Look at the previewFrames each render returns. Batch independent renders in one reply.",
+			"Following your plan: add a branded intro and a closing call-to-action (createMotionClip, placed at start / end — for a product or SaaS video the intro is the productIntro template, which shows the real app in a browser window, not a plain title card), plus a few animated callouts, lower thirds or keyword pops on the footage where they help the story (addMotionOverlay). Use the brand kit — it already matches the video's colours. Keep text short and don't cover the UI the viewer needs to see. Look at the previewFrames each render returns. Batch independent renders in one reply.",
 		tools: GRAPHICS_TOOLS,
 		budget: budget(4, 6, 8, 4, 7),
 		preview: true,
@@ -155,19 +155,27 @@ export function stageToolNames(stage: EditStage): string[] {
 	return [...new Set([...READ_TOOLS, ...stage.tools])];
 }
 
-const BROAD_VERB = /\b(make|create|produce|turn|build|edit|polish|improve|clean\s*up|finish|prepare|cut)\b/i;
-const WHOLE_VIDEO = /\b(vi?d[a-z]*|demo|tutorial|shorts?|reels?|promo|walkthrough|recording|launch|product|saas|explainer|trailer|ad)\b/i;
+const BROAD_VERB = /\b(make|create|produce|turn|build|edit|polish|improve|clean\s*up|finish|prepare)\b/i;
+/** The thing being made is a whole video (misspellings like "vidoe" included). */
+const WHOLE_VIDEO = /\b(vid(?:eo|oe|io|e)?s?|vedio|demo|tutorial|shorts?|reels?|promo|walkthrough|explainer|trailer|recording)\b/i;
+/** Explicitly the whole thing, even when a part is also named. */
+const EXPLICIT_WHOLE = /\b(whole|entire|complete|full)\s+(video|edit|recording|thing)\b|\bfull\s+edit\b|\bfrom\s+start\s+to\s+finish\b|\bend[-\s]to[-\s]end\b/i;
+/** Names one part of the video — a targeted edit, not a whole-video one. */
+const PART =
+	/\b(intro|outro|opening|opener|ending|title|card|caption|subtitle|zoom|overlay|graphic|logo|thumbnail|cover|cta|call\s*to\s*action|lower\s*third|callout|badge|transition|music|audio|sound|background|wallpaper|blur|speed|crop|motion|animation|text|font|colou?r|section|part|scene|clip)s?\b/i;
 const NARROW = /\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\b\d{1,2}:\d{2}\b|\b(?:this|that)\s+(?:zoom|caption|overlay|clip|title|graphic)\b/i;
 
 /**
  * True for a whole-video request ("make the SaaS video for fluttergo.ai",
- * "turn this into a 60-second product demo"), false for a targeted edit
- * ("zoom at 0:12", "make that title bigger") or a question.
+ * "turn this into a 60-second product demo"); false for a targeted edit that
+ * names a part ("make the intro amazing", "zoom at 0:12") or a question.
  */
 export function isWholeVideoRequest(message: string): boolean {
 	const m = message.trim();
-	if (m.length < 12 || m.endsWith("?") && !BROAD_VERB.test(m.split(/\s+/).slice(0, 3).join(" "))) return false;
-	if (NARROW.test(m)) return false;
+	if (m.length < 12) return false;
+	if (m.endsWith("?") && !BROAD_VERB.test(m.split(/\s+/).slice(0, 3).join(" "))) return false;
+	if (EXPLICIT_WHOLE.test(m)) return true;
+	if (NARROW.test(m) || PART.test(m)) return false;
 	return BROAD_VERB.test(m) && WHOLE_VIDEO.test(m);
 }
 

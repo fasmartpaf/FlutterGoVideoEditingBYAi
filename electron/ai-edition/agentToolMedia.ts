@@ -23,7 +23,7 @@ import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from "./mediaStudio";
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
 import { type BrandKit, DEFAULT_BRAND_KIT, storedBrandKit } from "./motionStudio/brandKit";
-import { deriveBrandKitFromVideo } from "./motionStudio/videoPalette";
+import { deriveBrandKitFromVideo, paletteSourceVideo } from "./motionStudio/videoPalette";
 import type { CompositedFrameSampler } from "./compositorVerify/types";
 import { type SampleFramesResult, sampleFramesForAgent } from "./frameCheck";
 import { writeComposition } from "./motionStudio/composition";
@@ -462,8 +462,10 @@ async function renderMotionClip(
 		30,
 		Math.max(0.8, num(a.durationSec) ?? (template ? TEMPLATE_DEFAULT_SEC[template as MotionTemplateId] : 3)),
 	);
+	let params: unknown = a.params ?? {};
+	if (template === "productIntro") params = await withRecordingScreenshot(document, params, options.ffmpegPath, options.signal);
 	const source = template
-		? { html: renderTemplate(template as MotionTemplateId, a.params ?? {}, kit, { width, height, durationSec }) }
+		? { html: renderTemplate(template as MotionTemplateId, params, kit, { width, height, durationSec }) }
 		: htmlPath
 			? { htmlPath }
 			: { html: html! };
@@ -507,6 +509,35 @@ async function renderMotionClip(
 	} finally {
 		composition.dispose();
 	}
+}
+
+/**
+ * productIntro shows the product in a browser window: unless the agent passed
+ * a screenshot, use a frame of the recording itself (a third of the way in —
+ * past any loading screen), so the intro shows the real app.
+ */
+async function withRecordingScreenshot(
+	document: AxcutDocument,
+	params: unknown,
+	ffmpegPath: string,
+	signal?: AbortSignal,
+): Promise<unknown> {
+	const p = (params && typeof params === "object" ? { ...(params as Record<string, unknown>) } : {}) as Record<string, unknown>;
+	if (typeof p.screenshot === "string" && p.screenshot.trim()) {
+		if (!p.screenshot.startsWith("data:image/")) p.screenshot = assertSafeLocalMediaPath(p.screenshot, "screenshot");
+		return p;
+	}
+	const src = paletteSourceVideo(document);
+	if (!src) return p;
+	const at = src.durationSec > 0 ? src.durationSec * 0.33 : 1;
+	const { runProcessBuffer } = await import("./mediaStudio");
+	const jpg = await runProcessBuffer(
+		ffmpegPath,
+		["-v", "error", "-ss", at.toFixed(2), "-i", src.path, "-frames:v", "1", "-vf", "scale=1600:-2", "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", "-"],
+		{ timeoutMs: 30_000, signal },
+	).catch(() => null);
+	if (jpg && jpg.length > 1000) p.screenshot = `data:image/jpeg;base64,${jpg.toString("base64")}`;
+	return p;
 }
 
 /** Tools whose output uses the brand kit (so they read the video's colours when none is set). */

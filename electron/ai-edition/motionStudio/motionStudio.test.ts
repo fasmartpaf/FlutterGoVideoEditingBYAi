@@ -89,6 +89,7 @@ describe("templates", () => {
 			statHighlight: { value: 42, label: "users" },
 			bulletList: { title: "Why", bullets: ["Fast"] },
 			logoReveal: {},
+			productIntro: { name: "FlutterGo", headline: "Edit <videos> by chatting", features: ["AI editing"], stat: { value: 10, label: "Faster" } },
 		};
 		for (const id of MOTION_TEMPLATE_IDS) {
 			const html = renderTemplate(id, params[id], kit, { width: 1920, height: 1080, durationSec: TEMPLATE_DEFAULT_SEC[id] });
@@ -153,6 +154,25 @@ describe("placement", () => {
 		const { doc } = fixture();
 		const r = executeAgentTool(doc, "placeMotionClip", JSON.stringify({ videoPath: "clip.mp4", place: "end", durationSec: 2 }));
 		expect(r.ok).toBe(false);
+	});
+});
+
+describe("productIntro", () => {
+	it("shows the product in a browser window: a screenshot when given, a live dashboard otherwise", () => {
+		const frame = { width: 1920, height: 1080, durationSec: 5 };
+		const withShot = renderTemplate(
+			"productIntro",
+			{ name: "FlutterGo", headline: "Edit product videos by chatting", screenshot: "data:image/jpeg;base64,AAAA", url: "fluttergo.ai" },
+			DEFAULT_BRAND_KIT,
+			frame,
+		);
+		expect(withShot).toContain('class="shot" src="data:image/jpeg;base64,AAAA"');
+		expect(withShot).toContain("fluttergo.ai");
+		expect(withShot).toContain(">FG<");
+		const dashboard = renderTemplate("productIntro", { name: "Acme Cloud", headline: "Ship faster" }, DEFAULT_BRAND_KIT, frame);
+		expect(dashboard).toContain('class="dash"');
+		expect(dashboard).toContain(">AC<");
+		expect(dashboard).toContain("window.render");
 	});
 });
 

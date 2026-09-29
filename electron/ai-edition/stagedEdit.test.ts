@@ -12,6 +12,7 @@ describe("which requests run as a staged edit", () => {
 		"turn this into a 60-second product demo for X",
 		"Edit this recording into a polished tutorial",
 		"make a promo video from this",
+		"do a full edit of this recording, intro included",
 	])("whole video: %s", (m) => expect(isWholeVideoRequest(m)).toBe(true));
 
 	it.each([
@@ -21,6 +22,10 @@ describe("which requests run as a staged edit", () => {
 		"add captions",
 		"cut the pause at 14s from the video",
 		"hi",
+		"intro make amazing mositon show some saas type things on it too kinldy not just simple text card",
+		"make the intro better for the SaaS demo",
+		"make the captions look premium",
+		"improve the closing CTA of the video",
 	])("targeted or a question: %s", (m) => expect(isWholeVideoRequest(m)).toBe(false));
 });
 

@@ -224,3 +224,38 @@ export async function shrinkImageFile(input: {
 	}
 	return null;
 }
+
+/** Like runProcess, but returns stdout as bytes (frames, images). Rejects on a non-zero exit. */
+export function runProcessBuffer(bin: string, args: string[], options: RunProcessOptions = {}): Promise<Buffer> {
+	const { timeoutMs = 60_000, signal } = options;
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(abortError());
+			return;
+		}
+		const child = spawn(bin, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+		const chunks: Buffer[] = [];
+		let settled = false;
+		const finish = (fn: () => void) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			fn();
+		};
+		const onAbort = () => {
+			child.kill("SIGKILL");
+			finish(() => reject(abortError()));
+		};
+		const timer = setTimeout(() => {
+			child.kill("SIGKILL");
+			finish(() => reject(new Error(`${basename(bin)} timed out after ${Math.round(timeoutMs / 1000)}s`)));
+		}, timeoutMs);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		child.stdout.on("data", (d: Buffer) => chunks.push(d));
+		child.on("error", (err) => finish(() => reject(err)));
+		child.on("close", (code) =>
+			finish(() => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`${basename(bin)} exited with ${code}`)))),
+		);
+	});
+}
