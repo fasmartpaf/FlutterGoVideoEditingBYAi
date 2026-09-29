@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { insertClip } from "../../../src/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "../../../src/lib/ai-edition/schema";
 import { executeAgentTool } from "../agent-tools";
-import { prepareAgentToolMedia } from "../agentToolMedia";
+import { prepareAgentToolMedia, upgradeOpener } from "../agentToolMedia";
 import { TEST_FFMPEG } from "../testing/ffmpegForTests";
 import { DEFAULT_BRAND_KIT, readBrandKit, writeBrandKit } from "./brandKit";
 import { MOTION_DRIVER_JS, wrapComposition } from "./driver";
@@ -173,6 +173,24 @@ describe("productIntro", () => {
 		expect(dashboard).toContain('class="dash"');
 		expect(dashboard).toContain(">AC<");
 		expect(dashboard).toContain("window.render");
+	});
+});
+
+describe("a plain title card on a screen recording", () => {
+	it("becomes the productIntro opener unless the agent asked for a simple card", () => {
+		const { doc } = fixture();
+		writeFileSync(doc.assets[0]!.originalPath, "video");
+		const up = upgradeOpener(doc, "titleCard", { title: "FlutterGo", subtitle: "One console for your entire SaaS" }, DEFAULT_BRAND_KIT);
+		expect(up).toEqual({ template: "productIntro", params: { name: "FlutterGo", headline: "One console for your entire SaaS" } });
+		const long = upgradeOpener(doc, "titleCard", { title: "Edit product videos just by chatting", subtitle: "No timeline needed" }, { ...DEFAULT_BRAND_KIT, name: "FlutterGo" });
+		expect(long?.params).toEqual({ name: "FlutterGo", headline: "Edit product videos just by chatting", tagline: "No timeline needed" });
+		expect(upgradeOpener(doc, "titleCard", { title: "FlutterGo", simple: true }, DEFAULT_BRAND_KIT)).toBeNull();
+		expect(upgradeOpener(doc, "sectionCard", { title: "Setup" }, DEFAULT_BRAND_KIT)).toBeNull();
+	});
+
+	it("stays plain when there is no recording to show", () => {
+		const { doc } = fixture();
+		expect(upgradeOpener(doc, "titleCard", { title: "FlutterGo" }, DEFAULT_BRAND_KIT)).toBeNull();
 	});
 });
 

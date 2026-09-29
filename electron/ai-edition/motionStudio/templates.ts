@@ -25,7 +25,12 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 /** Params per template (validated before rendering). */
 export const TEMPLATE_PARAMS = {
-	titleCard: z.object({ title: text(80), subtitle: text(120).optional() }),
+	titleCard: z.object({
+		title: text(80),
+		subtitle: text(120).optional(),
+		/** Keep it a plain text card. Without this, on a screen recording it renders as productIntro. */
+		simple: z.boolean().optional(),
+	}),
 	sectionCard: z.object({ title: text(80), kicker: text(40).optional(), number: z.number().int().min(1).max(99).optional() }),
 	outroCta: z.object({ title: text(80), cta: text(40), url: text(80).optional() }),
 	kineticText: z.object({ lines: z.array(text(60)).min(1).max(6) }),
@@ -72,7 +77,7 @@ export const TEMPLATE_DEFAULT_SEC: Record<MotionTemplateId, number> = {
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<MotionTemplateId, string> = {
-	titleCard: "Opening title with subtitle — {title, subtitle?}",
+	titleCard: "Plain text title — {title, subtitle?, simple?}. On a screen recording this is upgraded to productIntro unless simple:true (only when the user asks for a plain/simple card).",
 	sectionCard: "Chapter / section divider — {title, kicker?, number?}",
 	outroCta: "Ending call to action — {title, cta, url?}",
 	kineticText: "Punchy lines popping in one after another — {lines[]}",
@@ -329,8 +334,13 @@ function initials(name: string): string {
 
 function renderProductIntro(p: z.infer<(typeof TEMPLATE_PARAMS)["productIntro"]>, kit: BrandKit, frame: Frame): string {
 	const words = p.headline.split(/\s+/);
+	// The punchline — the last word (last two on a longer line) — carries the brand gradient.
+	const accentFrom = words.length - (words.length >= 5 ? 2 : 1);
 	const headline = words
-		.map((w, i) => `<span class="w" style="${delay(0.35 + i * 0.07)}">${escapeHtml(w)}</span>`)
+		.map(
+			(w, i) =>
+				`<span class="w${i >= accentFrom && words.length > 1 ? " hl" : ""}" style="${delay(0.35 + i * 0.07)}">${escapeHtml(w)}</span>`,
+		)
 		.join(" ");
 	const afterHeadline = 0.45 + words.length * 0.07;
 	const pills = (p.features ?? [])
@@ -373,7 +383,7 @@ window.render=(t)=>{
 .name{font-size:calc(40*var(--u));font-weight:700;letter-spacing:-.01em}
 .h{margin-top:calc(44*var(--u));font-size:calc(92*var(--u));font-weight:800;line-height:1.04;letter-spacing:-.025em}
 .w{display:inline-block;animation:rise var(--enter) var(--ease) both}
-.h .w:nth-child(3n){background:linear-gradient(90deg,var(--p),var(--s));-webkit-background-clip:text;background-clip:text;color:transparent}
+.h .hl{background:linear-gradient(90deg,var(--p),var(--s));-webkit-background-clip:text;background-clip:text;color:transparent}
 .tag{margin-top:calc(30*var(--u));font-size:calc(34*var(--u));line-height:1.45;opacity:.78;max-width:95%;animation:rise var(--enter) var(--ease) ${afterHeadline.toFixed(2)}s both}
 .pills{margin-top:calc(40*var(--u));display:flex;flex-wrap:wrap;gap:calc(16*var(--u))}
 .pill{display:inline-flex;align-items:center;gap:calc(12*var(--u));padding:calc(14*var(--u)) calc(24*var(--u));border-radius:99px;font-size:calc(26*var(--u));font-weight:600;

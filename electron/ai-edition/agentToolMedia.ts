@@ -87,6 +87,8 @@ export interface PreparedToolMedia {
 		label: string;
 		check: MotionClipCheck;
 		pageErrors: string[];
+		/** Asked for a plain titleCard; rendered as the productIntro opener instead. */
+		upgradedFrom?: "titleCard";
 	};
 }
 
@@ -446,7 +448,8 @@ async function renderMotionClip(
 		createFrameSource?: () => Promise<FrameSource | null>;
 	},
 ): Promise<PreparedToolMedia["motionClip"] | null> {
-	const template = str(a.template);
+	const upgrade = upgradeOpener(document, str(a.template), a.params, kit);
+	const template = upgrade?.template ?? str(a.template);
 	const html = typeof a.html === "string" && a.html.trim() ? a.html : undefined;
 	const htmlPath = str(a.htmlPath);
 	if (!template && !html && !htmlPath) return null; // executor explains the missing input
@@ -460,9 +463,12 @@ async function renderMotionClip(
 	const fps = Math.min(60, Math.max(24, Math.round(num(a.fps) ?? 30)));
 	const durationSec = Math.min(
 		30,
-		Math.max(0.8, num(a.durationSec) ?? (template ? TEMPLATE_DEFAULT_SEC[template as MotionTemplateId] : 3)),
+		Math.max(
+			upgrade ? 4 : 0.8,
+			num(a.durationSec) ?? (template ? TEMPLATE_DEFAULT_SEC[template as MotionTemplateId] : 3),
+		),
 	);
-	let params: unknown = a.params ?? {};
+	let params: unknown = upgrade?.params ?? a.params ?? {};
 	if (template === "productIntro") params = await withRecordingScreenshot(document, params, options.ffmpegPath, options.signal);
 	const source = template
 		? { html: renderTemplate(template as MotionTemplateId, params, kit, { width, height, durationSec }) }
@@ -503,12 +509,43 @@ async function renderMotionClip(
 			height: rendered.height,
 			fps: rendered.fps,
 			label: str(a.label) ?? (template ? `${template} graphic` : "Motion graphic"),
+			...(upgrade ? { upgradedFrom: "titleCard" as const } : {}),
 			check,
 			pageErrors: rendered.pageErrors,
 		};
 	} finally {
 		composition.dispose();
 	}
+}
+
+/**
+ * A plain text title card is the weakest possible opener for a screen
+ * recording. When the project has a recording, titleCard renders as the
+ * productIntro opener instead (the real app in a browser window, headline,
+ * motion) — unless the agent asked for `simple: true` because the user wants
+ * a plain card.
+ */
+export function upgradeOpener(
+	document: AxcutDocument,
+	template: string | undefined,
+	rawParams: unknown,
+	kit: BrandKit,
+): { template: "productIntro"; params: Record<string, unknown> } | null {
+	if (template !== "titleCard") return null;
+	const p = (rawParams && typeof rawParams === "object" ? rawParams : {}) as Record<string, unknown>;
+	if (p.simple === true || !paletteSourceVideo(document)) return null;
+	const title = typeof p.title === "string" ? p.title.trim() : "";
+	const subtitle = typeof p.subtitle === "string" ? p.subtitle.trim() : "";
+	if (!title) return null;
+	// A short title reads as the product name ("FlutterGo"); a long one is the headline.
+	const looksLikeName = title.length <= 24 && title.split(/\s+/).length <= 3;
+	const name = looksLikeName ? title : (kit.name ?? title.split(/\s+/).slice(0, 2).join(" ")).slice(0, 40);
+	const headline = looksLikeName ? subtitle || `Meet ${title}` : title;
+	const tagline = looksLikeName ? undefined : subtitle || undefined;
+	return {
+		template: "productIntro",
+		params: { name, headline: headline.slice(0, 90), ...(tagline ? { tagline: tagline.slice(0, 140) } : {}) },
+	};
 }
 
 /**

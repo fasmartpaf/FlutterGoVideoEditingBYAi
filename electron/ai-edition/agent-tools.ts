@@ -3857,6 +3857,13 @@ export function executeAgentTool(
 					checks: { ok: clip.check.ok, problems: clip.check.problems },
 					previewFrames: clip.check.framePaths,
 					pageErrors: clip.pageErrors,
+					...(clip.upgradedFrom
+						? {
+								template: "productIntro",
+								upgraded:
+									"titleCard was rendered as productIntro — the premium opener that shows the real app. Fill productIntro yourself next time (features, stat, url); pass simple:true to titleCard only if the user asked for a plain card.",
+							}
+						: {}),
 					note: clip.check.ok
 						? placed
 							? "Rendered, checked and placed. Look at previewFrames to confirm it reads well."
