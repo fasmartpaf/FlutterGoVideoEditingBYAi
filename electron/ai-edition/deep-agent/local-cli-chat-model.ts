@@ -302,7 +302,7 @@ function sameHuman(a: string, b: string): boolean {
 export function buildIncrementalPrompt(
 	messages: BaseMessage[],
 	tools: BoundTool[],
-	sent: { fingerprints: string[]; frameKey: string; toolsKey: string; humanKeys?: string[] },
+	sent: { fingerprints: string[]; frameKey: string; toolsKey: string; humanKeys?: string[]; systemText?: string },
 	options?: { framePaths?: string[] },
 ): IncrementalPrompt {
 	const fingerprints = messages.map(messageFingerprint);
@@ -318,9 +318,7 @@ export function buildIncrementalPrompt(
 	const sentSet = new Set(sent.fingerprints);
 	const lines: string[] = [];
 	const changedSystem = messages.filter((m, i) => isSystem(m) && !sentSet.has(fingerprints[i]!));
-	for (const m of changedSystem) {
-		lines.push(`UPDATED OPENSCREEN PROJECT STATE (replaces the earlier SYSTEM message):\n${messageText(m)}`);
-	}
+	for (const m of changedSystem) lines.push(systemUpdate(sent.systemText, messageText(m)));
 	const toolsKey = JSON.stringify(tools.map((t) => t.name));
 	if (tools.length > 0 && toolsKey !== sent.toolsKey) {
 		lines.push("Available OpenScreen tools (updated):");
@@ -356,6 +354,40 @@ export function buildIncrementalPrompt(
 		fingerprints: [...new Set([...sent.fingerprints, ...fingerprints])],
 		humanKeys: nowHumans,
 	};
+}
+
+/**
+ * The SYSTEM message is the (long, unchanging) instructions followed by the
+ * project as one JSON line. When it changes, send only the project parts that
+ * changed — not the whole instructions and project again.
+ */
+export function systemUpdate(before: string | undefined, after: string): string {
+	const split = (text: string) => {
+		const at = text.lastIndexOf("\n{");
+		if (at < 0) return null;
+		try {
+			const json = JSON.parse(text.slice(at + 1)) as Record<string, unknown>;
+			return json && typeof json === "object" && !Array.isArray(json) ? { policy: text.slice(0, at), json } : null;
+		} catch {
+			return null;
+		}
+	};
+	const a = before ? split(before) : null;
+	const b = split(after);
+	if (!a || !b || a.policy !== b.policy) {
+		return `UPDATED OPENSCREEN PROJECT STATE (replaces the earlier SYSTEM message):\n${after}`;
+	}
+	const changed: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(b.json)) {
+		if (JSON.stringify(a.json[k]) !== JSON.stringify(v)) changed[k] = v;
+	}
+	const removed = Object.keys(a.json).filter((k) => !(k in b.json));
+	if (Object.keys(changed).length === 0 && removed.length === 0) return "PROJECT STATE: unchanged.";
+	return (
+		"PROJECT STATE UPDATE — only these parts of the project changed since you last saw it; everything else is as before:\n" +
+		JSON.stringify(changed) +
+		(removed.length ? `\nRemoved: ${removed.join(", ")}` : "")
+	);
 }
 
 /** How the long-lived sessions are doing — logged per turn, so a slow turn says why. */
@@ -884,6 +916,7 @@ export class LocalCliChatModel extends BaseChatModel {
 						frameKey: live.sentFrameKey,
 						toolsKey: live.sentToolsKey,
 						humanKeys: live.sentHumanKeys,
+						systemText: live.sentSystemText,
 					},
 					{ framePaths: this.framePaths },
 				);
@@ -908,6 +941,8 @@ export class LocalCliChatModel extends BaseChatModel {
 		});
 		live.sentFingerprints = prompt.fingerprints;
 		live.sentHumanKeys = prompt.humanKeys;
+		const system = messages.filter(isSystem).at(-1);
+		if (system) live.sentSystemText = messageText(system);
 		live.sentFrameKey = this.framePaths.join("\n");
 		live.sentToolsKey = JSON.stringify(this.boundTools.map((t) => t.name));
 		return raw;

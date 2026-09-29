@@ -75,6 +75,8 @@ export class ClaudeLiveSession {
 	sentFingerprints: string[] = [];
 	/** The user messages this process has seen, in order (see buildIncrementalPrompt). */
 	sentHumanKeys: string[] = [];
+	/** The SYSTEM text it last saw (project updates are sent as a diff against it). */
+	sentSystemText: string | undefined = undefined;
 	/** Frame list already described to this process (re-sent only when it changes). */
 	sentFrameKey = "";
 	/** Tool catalogue already given to this process (re-sent only when it changes). */

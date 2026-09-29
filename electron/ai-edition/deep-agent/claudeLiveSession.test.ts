@@ -96,6 +96,23 @@ describe("buildIncrementalPrompt", () => {
 		expect(rewound.kind).toBe("diverged");
 	});
 
+	it("a changed project is sent as just the parts that changed", () => {
+		const policy = "You are the editor. Long instructions...\nOPEN PROJECT:";
+		const v1 = `${policy}\n${JSON.stringify({ clips: [{ id: "c1" }], zooms: [], mediaContext: "long outline" })}`;
+		const v2 = `${policy}\n${JSON.stringify({ clips: [{ id: "c1" }], zooms: [{ id: "z1" }], mediaContext: "long outline" })}`;
+		const sent = { fingerprints: [messageFingerprint(new SystemMessage(v1)), messageFingerprint(new HumanMessage("add a zoom"))], frameKey: "", toolsKey: "", humanKeys: ["add a zoom"], systemText: v1 };
+		const next = buildIncrementalPrompt([new SystemMessage(v2), new HumanMessage("add a zoom"), new HumanMessage("and captions")], [], sent);
+		expect(next.kind).toBe("delta");
+		if (next.kind !== "delta") return;
+		expect(next.text).toContain('PROJECT STATE UPDATE');
+		expect(next.text).toContain('{"zooms":[{"id":"z1"}]}');
+		expect(next.text).not.toContain("Long instructions");
+		expect(next.text).not.toContain("long outline");
+		// Without the earlier text to compare with, the whole message goes (as before).
+		const full = buildIncrementalPrompt([new SystemMessage(v2), new HumanMessage("add a zoom"), new HumanMessage("x")], [], { ...sent, systemText: undefined });
+		if (full.kind === "delta") expect(full.text).toContain("Long instructions");
+	});
+
 	it("keeps the same Claude across turns: last turn's replies and tool calls are not compared", () => {
 		// Turn 1 as the live process saw it: the ask, its tool call, the result, its reply.
 		const turn1 = [
