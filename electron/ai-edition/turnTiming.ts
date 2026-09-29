@@ -14,6 +14,12 @@ export interface TurnTiming {
 	firstToolMs: number | null;
 	totalMs: number | null;
 	toolCount: number;
+	/** Wall time with at least one tool running (renders, ffmpeg, edits). */
+	toolMs: number;
+	/** Everything else — mostly waiting for the model's replies. */
+	modelMs: number | null;
+	/** The slowest tool calls, longest first. */
+	slowTools: Array<{ name: string; ms: number }>;
 }
 
 export function createTurnTimer(now: () => number = Date.now) {
@@ -25,8 +31,15 @@ export function createTurnTimer(now: () => number = Date.now) {
 		firstToolMs: null,
 		totalMs: null,
 		toolCount: 0,
+		toolMs: 0,
+		modelMs: null,
+		slowTools: [],
 	};
-	const mark = (key: Exclude<keyof TurnTiming, "totalMs" | "toolCount">) => {
+	const started = new Map<string, number[]>();
+	const durations: Array<{ name: string; ms: number }> = [];
+	let active = 0;
+	let activeSince = 0;
+	const mark = (key: "firstStatusMs" | "firstThinkingMs" | "firstTextMs" | "firstToolMs") => {
 		if (timing[key] === null) timing[key] = now() - t0;
 	};
 	return {
@@ -50,12 +63,29 @@ export function createTurnTimer(now: () => number = Date.now) {
 				toolStart: (name: string, args: unknown) => {
 					mark("firstToolMs");
 					timing.toolCount += 1;
+					const t = now();
+					started.set(name, [...(started.get(name) ?? []), t]);
+					if (active++ === 0) activeSince = t;
 					sink.toolStart(name, args);
+				},
+				toolEnd: (name: string, ok: boolean, summary?: string) => {
+					const t = now();
+					const queue = started.get(name);
+					const begin = queue?.shift();
+					if (begin !== undefined) durations.push({ name, ms: t - begin });
+					if (active > 0 && --active === 0) timing.toolMs += t - activeSince;
+					sink.toolEnd(name, ok, summary);
 				},
 			};
 		},
 		finish(): TurnTiming {
-			if (timing.totalMs === null) timing.totalMs = now() - t0;
+			if (timing.totalMs === null) {
+				const t = now();
+				if (active > 0) timing.toolMs += t - activeSince;
+				timing.totalMs = t - t0;
+				timing.modelMs = Math.max(0, timing.totalMs - timing.toolMs);
+				timing.slowTools = [...durations].sort((a, b) => b.ms - a.ms).slice(0, 5);
+			}
 			return timing;
 		},
 	};
@@ -73,6 +103,26 @@ export function formatTurnTiming(t: TurnTiming): string {
 		`text ${fmt(t.firstTextMs)}`,
 		`first tool ${fmt(t.firstToolMs)}`,
 		`tools ${t.toolCount}`,
+		`tool time ${fmt(t.toolMs)}`,
+		`model time ${fmt(t.modelMs)}`,
 		`total ${fmt(t.totalMs)}`,
 	].join(" · ");
+}
+
+/**
+ * Append one JSON line per turn to `<generated-graphics>/<project>/.logs/turns.jsonl`
+ * (next to the recording). Silent when the project has no recording folder.
+ */
+export function appendTurnLog(documentInput: unknown, record: Record<string, unknown>): void {
+	void (async () => {
+		const { documentSchema } = await import("../../src/lib/ai-edition/schema");
+		const parsed = documentSchema.safeParse(documentInput);
+		if (!parsed.success) return;
+		const { resolveGeneratedGraphicsDir } = await import("./agentToolMedia");
+		const { appendFileSync, mkdirSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const dir = join(resolveGeneratedGraphicsDir(parsed.data), ".logs");
+		mkdirSync(dir, { recursive: true });
+		appendFileSync(join(dir, "turns.jsonl"), `${JSON.stringify(record)}\n`);
+	})().catch(() => {});
 }

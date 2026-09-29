@@ -42,6 +42,7 @@ import {
 	SYSTEM_PROMPT,
 	TOOL_DESCRIPTIONS,
 	textFromChatModelEnd,
+	inCallOrder,
 } from "./service";
 
 // Both rosters used to be re-typed here, and a third time in the workbench. This
@@ -838,3 +839,26 @@ describe("what the descriptions say about a zoom's focus", () => {
 		expect(SYSTEM_PROMPT).not.toMatch(/cursorAnchor/);
 	});
 });
+
+describe("tool calls from one reply", () => {
+	it("run one at a time, in the order the agent listed them", async () => {
+		const holder = { current: fixtureDocument() };
+		const order: string[] = [];
+		const slow = inCallOrder(holder, async () => {
+			order.push("render:start");
+			await new Promise((r) => setTimeout(r, 30));
+			order.push("render:end");
+		});
+		const fast = inCallOrder(holder, async () => {
+			order.push("zoom");
+		});
+		const failing = inCallOrder(holder, async () => {
+			throw new Error("boom");
+		});
+		const after = inCallOrder(holder, async () => order.push("trim"));
+		await Promise.all([slow, fast, failing.catch(() => {}), after]);
+		expect(order).toEqual(["render:start", "render:end", "zoom", "trim"]);
+		await expect(failing).rejects.toThrow("boom");
+	});
+});
+

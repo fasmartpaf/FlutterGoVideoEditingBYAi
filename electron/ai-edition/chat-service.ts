@@ -425,6 +425,14 @@ export async function runChat(
 		const timing = timer.finish();
 		const line = formatTurnTiming(timing);
 		console.info(`[chat-turn] ${projectId}/${sessionId}: ${line}`);
+		// Also kept beside the project's generated media, so a slow turn can be
+		// diagnosed afterwards (where the minutes went: model replies vs renders).
+		try {
+			const { appendTurnLog } = await import("./turnTiming");
+			appendTurnLog(documentInput, { at: new Date().toISOString(), sessionId, message: message.slice(0, 200), ...timing });
+		} catch {
+			/* logging must never fail a turn */
+		}
 		emit.status("turn_timing", JSON.stringify(timing));
 	}
 }

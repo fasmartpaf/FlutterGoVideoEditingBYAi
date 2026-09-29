@@ -1,6 +1,6 @@
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
-import { buildPrompt, consumeClaudeStreamJsonLine, parseModelJson } from "./local-cli-chat-model";
+import { buildPrompt, consumeClaudeStreamJsonLine, parseModelJson, TURN_BUDGET, turnBudgetNote } from "./local-cli-chat-model";
 
 describe("parseModelJson", () => {
 	it("reads a tool call object, even with chatter around it", () => {
@@ -187,3 +187,28 @@ describe("plan checklist in Local CLI replies", () => {
 		expect(normalizePlan([])).toBeNull();
 	});
 });
+
+describe("turn budget", () => {
+	const t0 = 1_000_000;
+	it("says nothing while the turn is short", () => {
+		expect(turnBudgetNote({ steps: 3, startedAt: t0 }, t0 + 60_000)).toBeNull();
+	});
+	it("asks to wrap up after the soft limit (replies or minutes)", () => {
+		const bySteps = turnBudgetNote({ steps: TURN_BUDGET.softSteps, startedAt: t0 }, t0 + 1_000);
+		expect(bySteps?.mustFinish).toBe(false);
+		expect(bySteps?.note).toMatch(/at most 2 more replies/);
+		expect(turnBudgetNote({ steps: 2, startedAt: t0 }, t0 + TURN_BUDGET.softMs)?.mustFinish).toBe(false);
+	});
+	it("tells it to stop past the finish limit", () => {
+		const n = turnBudgetNote({ steps: TURN_BUDGET.finishSteps, startedAt: t0 }, t0 + 1_000);
+		expect(n?.mustFinish).toBe(true);
+		expect(n?.note).toMatch(/Do NOT call more tools/);
+		expect(turnBudgetNote({ steps: 1, startedAt: t0 }, t0 + TURN_BUDGET.finishMs)?.mustFinish).toBe(true);
+	});
+	it("the prompt asks for batched tool calls", () => {
+		const prompt = buildPrompt([new HumanMessage("edit it")], []);
+		expect(prompt).toMatch(/ONE reply's tool_calls array/);
+		expect(prompt).not.toMatch(/as many times as needed/);
+	});
+});
+

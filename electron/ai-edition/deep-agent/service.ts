@@ -726,6 +726,20 @@ const TOOLS_READING_CURSOR: ReadonlySet<string> = new Set([
 // success, and every write was announced twice (once truthfully here, once as
 // `ok: true` there). One factory, one pair, one verdict. `executeAgentTool`
 // never throws, so `execution.ok` is the only honest signal available.
+/**
+ * One model reply can carry several tool calls, and LangChain runs them
+ * concurrently. Edits must land in the order the agent listed them (a cut
+ * before the zoom that assumes it), so calls on one document run one at a
+ * time, in call order. A failed call does not block the next one.
+ */
+const callQueues = new WeakMap<DocumentHolder, Promise<unknown>>();
+export function inCallOrder<T>(holder: DocumentHolder, run: () => Promise<T>): Promise<T> {
+	const previous = callQueues.get(holder) ?? Promise.resolve();
+	const next = previous.catch(() => {}).then(run);
+	callQueues.set(holder, next.catch(() => {}));
+	return next;
+}
+
 function documentTool<S extends z.ZodType>(
 	holder: DocumentHolder,
 	sink: OpenScreenAgentSink,
@@ -737,7 +751,7 @@ function documentTool<S extends z.ZodType>(
 	telemetry: MutationTelemetry,
 ) {
 	return tool(
-		async (args: z.infer<S>) => {
+		async (args: z.infer<S>) => inCallOrder(holder, async () => {
 			sink.toolStart(name, args);
 			if (isMutatingTool(name)) {
 				telemetry.mutatingToolsAttempted.push(name);
@@ -834,7 +848,7 @@ function documentTool<S extends z.ZodType>(
 			}
 			sink.toolEnd(name, execution.ok, execution.summary, execution.resultJson);
 			return execution.resultJson;
-		},
+		}),
 		{ name, description: TOOL_DESCRIPTIONS[name], schema },
 	);
 }

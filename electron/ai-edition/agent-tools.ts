@@ -2179,7 +2179,9 @@ export function executeAgentTool(
 				document.transcripts.find((t) => t.assetId === assetId) ??
 				(document.transcript?.assetId === assetId ? document.transcript : null);
 			if (!transcript) {
-				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
+				return failure(
+					`No transcript yet for asset ${assetId ?? "(none)"}. Call generateCaptions once (on-device speech-to-text), then read it again. If the recording has no speech, edit from sampleFrames and getCursorTrack instead.`,
+				);
 			}
 			const from = parsed.data.startSec ?? Number.NEGATIVE_INFINITY;
 			const to = parsed.data.endSec ?? Number.POSITIVE_INFINITY;
@@ -2239,7 +2241,9 @@ export function executeAgentTool(
 				document.transcripts.find((t) => t.assetId === assetId) ??
 				(document.transcript?.assetId === assetId ? document.transcript : null);
 			if (!transcript) {
-				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
+				return failure(
+					`No transcript yet for asset ${assetId ?? "(none)"}. Call generateCaptions once (on-device speech-to-text), then read it again. If the recording has no speech, edit from sampleFrames and getCursorTrack instead.`,
+				);
 			}
 			const from = parsed.data.startSec ?? Number.NEGATIVE_INFINITY;
 			const to = parsed.data.endSec ?? Number.POSITIVE_INFINITY;

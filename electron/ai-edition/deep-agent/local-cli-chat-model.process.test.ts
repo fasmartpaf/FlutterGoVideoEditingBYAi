@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LocalCliChatModel } from "./local-cli-chat-model";
+import { LocalCliChatModel, TURN_BUDGET } from "./local-cli-chat-model";
 
 const posix = process.platform !== "win32";
 
@@ -153,6 +153,25 @@ describe.skipIf(!posix)("LocalCliChatModel spawn contract", () => {
 		expect(texts.join("")).toBe("Cut 2 pauses — done ✂️");
 		expect(texts.join("")).not.toContain("{");
 		expect(result.content).toBe("Cut 2 pauses — done ✂️");
+	});
+
+	it("past the hard budget, a reply that still calls tools ends the turn instead", async () => {
+		const reply = JSON.stringify({ tool_calls: [{ name: "addZoom", args: { startSec: 1, endSec: 2 } }] });
+		const streamFile = path.join(dir, "stream.ndjson");
+		writeFileSync(streamFile, `${JSON.stringify({ type: "result", subtype: "success", result: reply })}\n`);
+		process.env.FAKE_CLI_STREAM = streamFile;
+		const model = new LocalCliChatModel({
+			agentId: "claude",
+			binPath: bin,
+			turnBudget: { steps: TURN_BUDGET.hardSteps - 1, startedAt: Date.now() },
+		});
+		const result = await model.invoke([new HumanMessage("make it perfect")]);
+		expect(result.tool_calls ?? []).toHaveLength(0);
+		expect(String(result.content)).toMatch(/continue/);
+		// Within budget the same reply's tool call goes through.
+		const fresh = new LocalCliChatModel({ agentId: "claude", binPath: bin });
+		const ok = await fresh.invoke([new HumanMessage("zoom in")]);
+		expect(ok.tool_calls?.[0]?.name).toBe("addZoom");
 	});
 
 	it("Stop kills the CLI and the processes it started", async () => {

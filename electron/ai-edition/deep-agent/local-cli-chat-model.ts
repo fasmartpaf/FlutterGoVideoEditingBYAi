@@ -55,8 +55,37 @@ interface BoundTool {
 }
 
 
+/** How many replies this chat turn has used, and since when. */
+export interface TurnBudget {
+	steps: number;
+	startedAt: number;
+}
+
+/** Soft limits: past these the agent is told to wrap up; past HARD it must stop. */
+export const TURN_BUDGET = { softSteps: 8, softMs: 4 * 60_000, finishSteps: 13, finishMs: 8 * 60_000, hardSteps: 16 };
+
+/** The line added to this reply's prompt, or null while within budget. */
+export function turnBudgetNote(budget: TurnBudget, now = Date.now()): { note: string; mustFinish: boolean } | null {
+	const minutes = Math.round((now - budget.startedAt) / 6000) / 10;
+	if (budget.steps >= TURN_BUDGET.finishSteps || now - budget.startedAt >= TURN_BUDGET.finishMs) {
+		return {
+			note: `TIME BUDGET REACHED (reply ${budget.steps}, ${minutes} min). Do NOT call more tools. Reply NOW with {"message":"…"}: what you finished, what is left, and offer to continue.`,
+			mustFinish: true,
+		};
+	}
+	if (budget.steps >= TURN_BUDGET.softSteps || now - budget.startedAt >= TURN_BUDGET.softMs) {
+		return {
+			note: `BUDGET: this is reply ${budget.steps} (${minutes} min in). Wrap up: finish the remaining work in at most 2 more replies — batch everything left into one tool_calls array, skip optional polish — then send the final message.`,
+			mustFinish: false,
+		};
+	}
+	return null;
+}
+
 export interface LocalCliChatModelFields {
 	agentId: string;
+	/** Shared reply counter for this chat turn (bindTools copies keep the same one). */
+	turnBudget?: TurnBudget;
 	binPath: string;
 	tools?: BoundTool[];
 	/** Parent folders of open recordings — Claude may Read those videos. */
@@ -158,14 +187,16 @@ function buildPrompt(
 	const lines: string[] = [
 		"You are the autonomous local execution agent behind OpenScreen — behave like Cursor Desktop's agent.",
 		"The user message is a COMPLETE objective. Pass it through UNDERSTAND → EXPLORE → PLAN → ACT → OBSERVE → CORRECT → VERIFY → COMPLETE.",
-		"You may repeat ACT / OBSERVE / CORRECT as many times as needed. A successful tool call is NOT task completion — completion is the original user objective.",
+		"A successful tool call is NOT task completion — completion is the original user objective.",
+		"SPEED MATTERS: every reply you send costs 10–40 s of the user's time. Put ALL independent tool calls in ONE reply's tool_calls array — e.g. getTranscript + getCursorTrack + sampleFrames(from:'recording') together to inspect; all trims/cuts together; all zooms, overlays and motion clips together. A full edit should take about 5–8 replies: inspect (1) → batched edits (1–3) → sampleFrames check (1) → one fix-up batch if needed → export if asked → final message. Do not re-inspect things you already know, and do not tweak the same overlay or zoom repeatedly.",
 		"For non-trivial asks, inspect BEFORE major edits: project metadata, timeline clips, modifiers/annotations/graphics, representative frames, duration/resolution, media, transcript/speech if present, prior agent assets.",
 		"Do NOT collapse a broad ask into a fixed helper recipe (e.g. 'clean / improve / add motion graphics' ≠ immediately addBeatGraphics(5)). OpenScreen tools are capabilities, not the workflow.",
 		"Optional shortcuts (addBeatGraphics, createMotionGraphicPreview, addGraphic, …) exist — use only when they fit. Prefer Bash/FFmpeg/HTML/SVG/Remotion/Node/Python/custom assets when a professional custom result needs it, then import into OpenScreen.",
 		"Motion graphics: createMotionClip renders a full-frame animated MP4 at the project size — use a template (listMotionTemplates: titleCard, sectionCard, outroCta, kineticText, statHighlight, bulletList, logoReveal) or write your own HTML composition (CSS/Web Animations, rAF, or window.render(t)). It uses the project brand kit, which starts as the recording's own colours (listMotionTemplates shows it) — use those colours in custom HTML too; call setBrandKit only when the user names brand colours/fonts. Look at the returned previewFrames and fix any reported problems before placing; place with {atSec} so the cut lands in a pause in the speech.",
-		"Check your work: after editing, call sampleFrames (from:'timeline') and Read the returned stills before you say you're done — fix anything cut off, unreadable, off-brand or blank. After exportProject, sampleFrames from:'export' with its outputPath.",
+		"Check your work ONCE: after your edit batches, call sampleFrames (from:'timeline', count 4–6, in its own reply — not in the same reply as edits) and Read the stills; fix real problems (cut off, unreadable, off-brand, blank) in one batch. After exportProject a single sampleFrames from:'export' is enough; then finish.",
+		"No transcript yet? Call generateCaptions once (on-device speech-to-text) before speech-based cuts, then getTranscript.",
 		"Animated overlays on top of the recording (lower thirds, callouts, badges, keyword pops): addMotionOverlay with a box in % of the recording and startSec — templates are listed under overlays in listMotionTemplates, or pass your own transparent-background HTML.",
-		"Video loop when possible: inspect source → edit → render/preview → sample frames → inspect result → revise. Check clipping, overlays covering UI, timing, generic graphics, hierarchy.",
+		"Loop: inspect → edit (batched) → check frames once → fix once → finish. Check clipping, overlays covering UI, timing, generic graphics, hierarchy.",
 		"The SYSTEM message is the live AxcutDocument. mediaCapabilities states evidence channels; mediaContext is textual outline; visibleMedia paths are inventory. visualFrames is true only when OPENSCREEN SAMPLED FRAMES are listed below.",
 		"OpenScreen JSON tools edit the timeline. Local CLI may also Read/Bash/Edit/Write/Glob/Grep in allowed dirs — use them to inspect, render, and verify. Do not put Read or Bash inside JSON tool_calls; use the CLI's own tools for that.",
 		"Stay inside the assigned project/workspace unless the user explicitly authorizes otherwise. Keep confirmation rules for destructive actions.",
@@ -591,6 +622,8 @@ export class LocalCliChatModel extends BaseChatModel {
 	readonly onPlan?: (items: PlanItem[]) => void;
 	readonly isCliSessionStarted?: () => boolean;
 	readonly watchGranted: boolean;
+	/** Replies used in this chat turn — shared across bindTools copies. */
+	readonly turnBudget: TurnBudget;
 
 	constructor(fields: LocalCliChatModelFields) {
 		super({});
@@ -609,6 +642,7 @@ export class LocalCliChatModel extends BaseChatModel {
 		this.onPlan = fields.onPlan;
 		this.isCliSessionStarted = fields.isCliSessionStarted;
 		this.watchGranted = fields.watchGranted ?? this.mediaDirs.length > 0;
+		this.turnBudget = fields.turnBudget ?? { steps: 0, startedAt: Date.now() };
 	}
 
 	_llmType(): string {
@@ -632,6 +666,7 @@ export class LocalCliChatModel extends BaseChatModel {
 			onPlan: this.onPlan,
 			isCliSessionStarted: this.isCliSessionStarted,
 			watchGranted: this.watchGranted,
+			turnBudget: this.turnBudget,
 		});
 	}
 
@@ -639,7 +674,10 @@ export class LocalCliChatModel extends BaseChatModel {
 		messages: BaseMessage[],
 		onEvent?: (event: LocalCliProgressEvent) => void,
 	): Promise<ChatResult> {
-		const prompt = buildPrompt(messages, this.boundTools, { framePaths: this.framePaths });
+		this.turnBudget.steps += 1;
+		const budget = turnBudgetNote(this.turnBudget);
+		const budgetLine = budget ? `\n${budget.note}` : "";
+		const prompt = buildPrompt(messages, this.boundTools, { framePaths: this.framePaths }) + budgetLine;
 		const streamJson = this.agentId === "claude";
 		const workDir =
 			this.workspaceRoot ??
@@ -688,7 +726,7 @@ export class LocalCliChatModel extends BaseChatModel {
 		let raw: string | null = null;
 		if (this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled()) {
 			try {
-				raw = await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward });
+				raw = await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward, budgetLine });
 			} catch (err) {
 				if ((err as Error)?.name === "AbortError" || this.abortSignal?.aborted) throw err;
 				// The long-lived process failed: keep the chat working on the proven
@@ -735,6 +773,14 @@ export class LocalCliChatModel extends BaseChatModel {
 				args: call.args && typeof call.args === "object" ? call.args : {},
 				type: "tool_call" as const,
 			}));
+		if (toolCalls.length > 0 && this.turnBudget.steps >= TURN_BUDGET.hardSteps) {
+			// It was told to stop and kept going: end the turn here. Every edit so far
+			// is applied (and undoable); the user can say "continue".
+			toolCalls.length = 0;
+			parsed.message =
+				parsed.message ||
+				"I've stopped here to keep this turn from running long. The edits so far are applied — say \"continue\" and I'll finish the rest.";
+		}
 		const text = parsed.message ?? (toolCalls.length ? "" : raw);
 		return {
 			generations: [
@@ -760,6 +806,8 @@ export class LocalCliChatModel extends BaseChatModel {
 			resumeCliSession: boolean | undefined;
 			cwd: string;
 			forward: (event: LocalCliProgressEvent) => void;
+			/** Budget reminder appended to this reply's prompt ("" when within budget). */
+			budgetLine: string;
 		},
 	): Promise<string> {
 		const key = this.cliSessionId!;
@@ -790,7 +838,7 @@ export class LocalCliChatModel extends BaseChatModel {
 				fingerprints: messages.map(messageFingerprint),
 			};
 		}
-		const raw = await live.runTurn(prompt.text, {
+		const raw = await live.runTurn(prompt.text + ctx.budgetLine, {
 			onEvent: ctx.forward,
 			signal: this.abortSignal,
 			agentId: this.agentId,
