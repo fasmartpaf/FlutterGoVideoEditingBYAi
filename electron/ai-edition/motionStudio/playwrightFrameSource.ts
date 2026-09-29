@@ -47,7 +47,8 @@ export async function createPlaywrightFrameSource(): Promise<FrameSource | null>
 	return {
 		async open(filePath, size, options) {
 			transparent = Boolean(options?.transparent);
-			page = await browser.newPage({ viewport: { width: size.width, height: size.height }, deviceScaleFactor: 1 });
+			const scale = options?.scale && options.scale > 0 && options.scale < 1 ? options.scale : 1;
+			page = await browser.newPage({ viewport: { width: size.width, height: size.height }, deviceScaleFactor: scale });
 			await page.route("**/*", (route) =>
 				/^(file|data|blob|about):/i.test(route.request().url()) ? route.continue() : route.abort(),
 			);

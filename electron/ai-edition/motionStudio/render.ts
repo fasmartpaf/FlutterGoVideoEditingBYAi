@@ -17,13 +17,24 @@ export interface FrameSource {
 	 * Load the composition file (already wrapped with the driver). `transparent`
 	 * keeps the page background see-through so frames carry alpha (overlays).
 	 */
-	open(filePath: string, size: { width: number; height: number }, options?: { transparent?: boolean }): Promise<void>;
+	open(
+		filePath: string,
+		size: { width: number; height: number },
+		options?: {
+			transparent?: boolean;
+			/** Draw at this fraction of `size` (the page keeps its CSS size; the encoder scales back up). */
+			scale?: number;
+		},
+	): Promise<void>;
 	/** Seek to `ms` on the virtual clock and return the frame as PNG bytes. */
 	frame(ms: number): Promise<Buffer>;
 	/** Script errors the page reported so far. */
 	errors(): Promise<string[]>;
 	close(): Promise<void>;
 }
+
+/** Longest side a motion page is drawn at; larger outputs are scaled up when encoding. */
+export const MAX_RENDER_SIDE = 1920;
 
 export interface RenderCompositionInput {
 	source: FrameSource;
@@ -139,7 +150,12 @@ export async function renderComposition(input: RenderCompositionInput): Promise<
 	const durationSec = Math.min(60, Math.max(0.5, input.durationSec));
 	const total = Math.max(1, Math.round(durationSec * fps));
 	const encoderName = await pickH264Encoder(input.ffmpegPath, signal);
-	await source.open(input.compositionPath, { width, height });
+	// Retina recordings (3024×1964…) make every frame a 5+ megapixel paint; the
+	// app's off-screen renderer then hands back frames before they finish drawing
+	// (flicker, missing words, judder). Draw at most 1920 on the long side and
+	// let the encoder's lanczos scale bring it back to the project size.
+	const scale = Math.min(1, MAX_RENDER_SIDE / Math.max(width, height));
+	await source.open(input.compositionPath, { width, height }, scale < 1 ? { scale } : undefined);
 	const encoder = startEncoder({ ffmpegPath: input.ffmpegPath, encoder: encoderName, fps, width, height, outPath: input.outPath });
 	let ok = false;
 	try {

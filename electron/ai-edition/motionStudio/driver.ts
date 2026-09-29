@@ -40,6 +40,10 @@ export const MOTION_DRIVER_JS = String.raw`(() => {
   VDate.UTC = RealDate.UTC;
   window.Date = VDate;
 
+  // The browser's own frame callback, kept for __osSettle: the renderer must
+  // wait for real frames to be drawn after a seek, not the virtual ones.
+  const realRaf = window.requestAnimationFrame.bind(window);
+  window.__osSettle = () => new Promise((r) => realRaf(() => realRaf(() => r())));
   window.requestAnimationFrame = (cb) => { rafSeq += 1; rafQueue.set(rafSeq, cb); return rafSeq; };
   window.cancelAnimationFrame = (id) => { rafQueue.delete(id); };
   const addTimer = (fn, ms, args, repeat) => {

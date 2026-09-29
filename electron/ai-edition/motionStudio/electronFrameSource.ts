@@ -31,6 +31,7 @@ export function createElectronFrameSource(): FrameSource {
 	return {
 		async open(filePath, size, options) {
 			const transparent = Boolean(options?.transparent);
+			const scale = options?.scale && options.scale > 0 && options.scale < 1 ? options.scale : 1;
 			// In-memory partition (no "persist:" prefix): nothing survives the render.
 			const ses = session.fromPartition(`motion-render-${randomUUID()}`, { cache: false });
 			ses.webRequest.onBeforeRequest((details, callback) => {
@@ -40,8 +41,8 @@ export function createElectronFrameSource(): FrameSource {
 			ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
 			win = new BrowserWindow({
 				show: false,
-				width: size.width,
-				height: size.height,
+				width: Math.round(size.width * scale),
+				height: Math.round(size.height * scale),
 				useContentSize: true,
 				frame: false,
 				enableLargerThanScreen: true,
@@ -64,11 +65,19 @@ export function createElectronFrameSource(): FrameSource {
 			win.webContents.on("will-navigate", (event) => event.preventDefault());
 			win.webContents.setFrameRate(60);
 			await win.loadFile(filePath);
+			// Same layout at a smaller drawing size (see MAX_RENDER_SIDE).
+			if (scale !== 1) win.webContents.setZoomFactor(scale);
 		},
 		async frame(ms) {
 			const w = win;
 			if (!w) throw new Error("Motion renderer is not open.");
-			await w.webContents.executeJavaScript(`window.__osSeek(${Number(ms)})`, true);
+			// Seek, then wait for two real frames so style, layout and every raster
+			// tile of THIS moment are drawn — capturing right after the seek returned
+			// the previous frame or a half-drawn one (the "shaking" / missing words).
+			await w.webContents.executeJavaScript(
+				`window.__osSeek(${Number(ms)}).then(() => window.__osSettle ? window.__osSettle() : 0)`,
+				true,
+			);
 			const painted = await nextPaint(w);
 			const image = painted && !painted.isEmpty() ? painted : await w.webContents.capturePage();
 			return image.toPNG();
