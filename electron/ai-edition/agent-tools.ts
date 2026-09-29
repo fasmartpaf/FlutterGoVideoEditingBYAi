@@ -3924,8 +3924,9 @@ export function executeAgentTool(
 			}
 			let placed: ReturnType<typeof placeShowcase> | null = null;
 			try {
+				// A draft is a preview in the chat only — never placed on the timeline.
 				placed =
-					parsed.data.place === "none"
+					parsed.data.place === "none" || parsed.data.quality === "draft"
 						? null
 						: placeShowcase(document, { mp4Path: clip.mp4Path, durationSec: clip.durationSec, label: clip.label }, parsed.data.place);
 			} catch (err) {
@@ -3951,12 +3952,17 @@ export function executeAgentTool(
 					dropped: clip.dropped,
 					autoFilled: clip.autoFilled,
 					pageErrors: clip.pageErrors,
-					note: clip.check.ok
+					quality: parsed.data.quality,
+					note: parsed.data.quality === "draft" && clip.check.ok
+						? "Draft rendered (half size, preview only — not placed). Read previewFrames; fix the plan if needed, then show the user and render quality:'final' with the same plan once they are happy."
+						: clip.check.ok
 						? "Rendered and checked. Read previewFrames (the step frames show each card) and fix anything cut off, covering the UI or mistimed by calling again with a corrected plan — an unchanged plan is reused, not re-rendered."
 						: "Rendered, but the automatic check found problems — fix the plan and render again.",
 				}),
 				summary: placed
 					? `showcase video (${clip.durationSec.toFixed(1)}s) ${placed.where}`
+					: parsed.data.quality === "draft"
+					? `showcase draft rendered (${clip.durationSec.toFixed(1)}s) for a quick look`
 					: `showcase video rendered (${clip.durationSec.toFixed(1)}s) for preview`,
 			};
 		}

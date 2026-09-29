@@ -297,3 +297,10 @@ describe("auto plan from the recording", () => {
 		expect(off.filled).toEqual([]);
 	});
 });
+
+describe("draft showcases", () => {
+	it("default to final quality and accept a draft", () => {
+		expect(showcaseArgsSchema.parse({}).quality).toBe("final");
+		expect(showcaseArgsSchema.parse({ quality: "draft" }).quality).toBe("draft");
+	});
+});

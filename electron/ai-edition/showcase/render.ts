@@ -195,8 +195,11 @@ export async function renderShowcase(
 	const intro = args.intro ?? hasBrand;
 	const outro = args.outro ?? (hasBrand || Boolean(args.tagline));
 	const timing = showcaseTiming(footageSec, intro && hasBrand, outro);
-	const size = showcaseOutputSize(document);
-	const fps = args.fps;
+	const draft = args.quality === "draft";
+	const full = showcaseOutputSize(document);
+	// A draft is half size at 30 fps: roughly 8× less to draw, enough to judge the plan.
+	const size = draft ? { width: Math.round(full.width / 4) * 2, height: Math.round(full.height / 4) * 2 } : full;
+	const fps = draft ? 30 : args.fps;
 	const withAudio = args.keepAudio && probe.hasAudio;
 
 	const outDir = outDirFor(options.generatedDir);
@@ -214,11 +217,11 @@ export async function renderShowcase(
 		)
 		.digest("hex")
 		.slice(0, 24);
-	const label = args.label ?? `Showcase${kit.name ? ` — ${kit.name}` : ""}`;
+	const label = args.label ?? `Showcase${draft ? " draft" : ""}${kit.name ? ` — ${kit.name}` : ""}`;
 	const hit = readCache(outDir, cacheKey);
 	if (hit) return { ...hit, label, cached: true };
 
-	const stem = options.stem ?? `showcase-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+	const stem = options.stem ?? `showcase${draft ? "-draft" : ""}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 	const work = join(outDir, `.${stem}`);
 	const framesDir = join(work, "f");
 	mkdirSync(framesDir, { recursive: true });

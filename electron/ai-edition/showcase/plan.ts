@@ -78,6 +78,11 @@ export const showcaseArgsSchema = z.object({
 	keepAudio: z.boolean().default(true),
 	fps: z.union([z.literal(30), z.literal(60)]).default(60),
 	/**
+	 * draft = a fast low-resolution preview (half size, 30 fps, shown in the chat
+	 * only, never placed) to check the plan; final = the full-quality video.
+	 */
+	quality: z.enum(["draft", "final"]).default("final"),
+	/**
 	 * Fill what the plan leaves out from what the recording already knows:
 	 * click ripples and push-ins from the recorded clicks, speed-ups over still
 	 * stretches (waiting, loading). Default true; anything the plan sets wins.
