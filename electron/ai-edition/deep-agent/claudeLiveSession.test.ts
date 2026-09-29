@@ -248,6 +248,30 @@ describe.skipIf(!posix)("long-lived Claude session", () => {
 		expect(last.text).not.toContain("add a title");
 	});
 
+	it("switching model for a stage resumes the same Claude session and sends only the new message", async () => {
+		const sid = "88888888-8888-8888-8888-888888888888";
+		let started = false;
+		const shared = { isCliSessionStarted: () => started, onCliSpawnComplete: () => { started = true; } };
+		const turn1 = [new SystemMessage("doc"), new HumanMessage("plan the edit")];
+		const r1 = await model(sid, { ...shared, cliModel: "opus" }).invoke(turn1);
+		await model(sid, { ...shared, cliModel: "opus" }).invoke([...turn1, r1, new ToolMessage({ content: "{}", tool_call_id: r1.tool_calls![0]!.id! })]);
+		// Next stage on Sonnet: a new process, resuming the same session.
+		await model(sid, { ...shared, cliModel: "sonnet" }).invoke([
+			new SystemMessage("doc"),
+			new HumanMessage("plan the edit"),
+			new AIMessage("Plan ready."),
+			new HumanMessage("now apply the cuts"),
+		]);
+		const log = readLog(logFile);
+		const spawns = log.filter((e) => e.kind === "spawn");
+		expect(spawns).toHaveLength(2);
+		expect(spawns[1]!.argv).toContain("--resume");
+		expect(spawns[1]!.argv).toContain("sonnet");
+		const last = log.filter((e) => e.kind === "turn").at(-1)!;
+		expect(last.text).toContain("USER: now apply the cuts");
+		expect(last.text).not.toContain("plan the edit");
+	});
+
 	it("Stop kills the live process; the next step resumes the same Claude session", async () => {
 		const sid = "44444444-4444-4444-4444-444444444444";
 		const first = model(sid);

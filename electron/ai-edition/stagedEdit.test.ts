@@ -4,7 +4,7 @@ import { type AxcutDocument, createEmptyDocument } from "../../src/lib/ai-editio
 import { executeAgentTool, OPENSCREEN_TOOL_NAMES } from "./agent-tools";
 import { getEditorSettings } from "../../src/lib/ai-edition/store/editorSettings";
 import type { InvokeResult } from "./deep-agent/service";
-import { EDIT_STAGES, isWholeVideoRequest, requestToolScope, stagedFinalMessage, stageToolNames } from "./stagedEdit";
+import { EDIT_STAGES, isWholeVideoRequest, modelForWork, requestToolScope, stagedFinalMessage, stageToolNames } from "./stagedEdit";
 import { runStagedEdit, type StageRun } from "./stagedEditRunner";
 
 describe("which requests run as a staged edit", () => {
@@ -222,6 +222,20 @@ describe("cursor settings the agent can reach", () => {
 		const themes = JSON.parse(executeAgentTool(d, "listCursorThemes", "{}").resultJson);
 		expect(themes.themes[0].id).toBe("default");
 		expect(themes.themes.length).toBeGreaterThan(5);
+	});
+});
+
+describe("which model does the work", () => {
+	it("mechanical stages run on Sonnet; the plan and the review keep the user's model", () => {
+		const byStage = Object.fromEntries(EDIT_STAGES.map((st) => [st.id, modelForWork("claude", "opus", st.mechanical)]));
+		expect(byStage).toEqual({ understand: "opus", pacing: "sonnet", camera: "sonnet", captions: "sonnet", graphics: "sonnet", review: "opus" });
+	});
+	it("leaves lighter picks and other agents alone", () => {
+		expect(modelForWork("claude", "sonnet", true)).toBe("sonnet");
+		expect(modelForWork("claude", "haiku", true)).toBe("haiku");
+		expect(modelForWork("codex", "gpt-5", true)).toBe("gpt-5");
+		expect(modelForWork("claude", "fable", true)).toBe("sonnet");
+		expect(modelForWork("claude", undefined, true)).toBe("sonnet");
 	});
 });
 

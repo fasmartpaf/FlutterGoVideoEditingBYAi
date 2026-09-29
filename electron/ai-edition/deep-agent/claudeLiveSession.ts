@@ -359,6 +359,16 @@ export function acquireLiveSession(
 	const created = new ClaudeLiveSession(binPath, argv, cwd, () => {
 		if (live.get(key) === created) live.delete(key);
 	});
+	// Resuming the same Claude session (another model for this stage, a
+	// restart after Stop): Claude reloads what it has seen from disk, so keep
+	// our record of it too — only new messages get sent, not the whole chat.
+	if (existing && argv.includes("--resume")) {
+		created.sentFingerprints = existing.sentFingerprints;
+		created.sentHumanKeys = existing.sentHumanKeys;
+		created.sentSystemText = existing.sentSystemText;
+		created.sentFrameKey = existing.sentFrameKey;
+		created.sentToolsKey = existing.sentToolsKey;
+	}
 	live.set(key, created);
 	return created;
 }

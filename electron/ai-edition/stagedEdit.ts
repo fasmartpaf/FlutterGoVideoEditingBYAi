@@ -24,6 +24,8 @@ export interface EditStage {
 	budget: TurnBudgetLimits;
 	/** Show the user a frame of the edited video after this stage. */
 	preview: boolean;
+	/** Mechanical work (applying edits): runs on the faster model. Planning and review keep the user's model. */
+	mechanical: boolean;
 }
 
 /** Looking is always allowed. */
@@ -104,6 +106,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		tools: ["generateCaptions"],
 		budget: budget(2, 3, 4, 2, 3),
 		preview: false,
+		mechanical: false,
 	},
 	{
 		id: "pacing",
@@ -113,6 +116,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		tools: PACING_TOOLS,
 		budget: budget(3, 4, 6, 2, 4),
 		preview: true,
+		mechanical: true,
 	},
 	{
 		id: "camera",
@@ -122,6 +126,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		tools: CAMERA_TOOLS,
 		budget: budget(3, 4, 6, 2, 4),
 		preview: true,
+		mechanical: true,
 	},
 	{
 		id: "captions",
@@ -131,6 +136,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		tools: CAPTION_TOOLS,
 		budget: budget(2, 3, 4, 2, 3),
 		preview: true,
+		mechanical: true,
 	},
 	{
 		id: "graphics",
@@ -140,6 +146,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		tools: GRAPHICS_TOOLS,
 		budget: budget(4, 6, 8, 4, 7),
 		preview: true,
+		mechanical: true,
 	},
 	{
 		id: "review",
@@ -149,6 +156,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		tools: [...PACING_TOOLS, ...CAMERA_TOOLS, ...CAPTION_TOOLS, ...GRAPHICS_TOOLS, "exportProject"],
 		budget: budget(3, 5, 6, 3, 5),
 		preview: false,
+		mechanical: false,
 	},
 ];
 
@@ -296,3 +304,20 @@ export function requestToolScope(message: string): string[] | null {
 	if (tools.size === 0) return null;
 	return [...new Set([...READ_TOOLS, ...tools])];
 }
+
+/** Heavy models (slow per reply) and the fast model mechanical work runs on instead. */
+const HEAVY_MODEL = /\b(opus|fable)\b|opus|fable/i;
+export const FAST_CLAUDE_MODEL = "sonnet";
+
+/**
+ * The Claude model for a piece of work: mechanical steps (applying cuts,
+ * placing graphics, adjusting zooms) run on Sonnet when the user picked a
+ * heavy model; planning and review keep the user's choice. Other agents and
+ * lighter models are left alone.
+ */
+export function modelForWork(agentId: string, chosen: string | undefined, mechanical: boolean): string | undefined {
+	if (!mechanical || agentId !== "claude") return chosen;
+	if (!chosen || HEAVY_MODEL.test(chosen)) return FAST_CLAUDE_MODEL;
+	return chosen;
+}
+

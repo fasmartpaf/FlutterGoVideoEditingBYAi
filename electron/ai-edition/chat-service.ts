@@ -701,7 +701,12 @@ async function runChatTimed(
 		const { journalContext } = await import("./projectJournal");
 		const memory = workingDocument ? journalContext(workingDocument) : "";
 		const messageForAgent = memory ? `${message}\n\n${memory}` : message;
-		const { isWholeVideoRequest } = await import("./stagedEdit");
+		const { isWholeVideoRequest, modelForWork } = await import("./stagedEdit");
+		// Mechanical work runs on the fast model; planning and review keep the user's pick.
+		const modelFor = (mechanical: boolean) => ({
+			...modelConfig,
+			localCliModel: modelForWork(effectiveConfig.model, modelConfig.localCliModel, mechanical),
+		});
 		stagedRun =
 			effectiveConfig.provider === "local-cli" &&
 			editsAllowed &&
@@ -713,7 +718,7 @@ async function runChatTimed(
 				invoke: (stage) =>
 					invokeOpenScreenAgent({
 						document: stage.document,
-						model: { ...modelConfig, turnBudgetLimits: stage.budget },
+						model: { ...modelFor(stage.stage.mechanical), turnBudgetLimits: stage.budget },
 						history: [...history, ...stage.history],
 						userMessage: stage.prompt,
 						sink: { ...agentSink, plan: () => {} },
@@ -746,7 +751,7 @@ async function runChatTimed(
 				...(scope ? { allowedToolNames: scope } : {}),
 				document: workingDocument ?? emptyDocumentForTextOnly(projectId),
 				// A targeted ask is a small job: finish it in 1–3 replies.
-				model: scope ? { ...modelConfig, turnBudgetLimits: TARGETED_TURN_BUDGET } : modelConfig,
+				model: scope ? { ...modelFor(true), turnBudgetLimits: TARGETED_TURN_BUDGET } : modelConfig,
 				history,
 				userMessage: messageForAgent,
 				sink: agentSink,
