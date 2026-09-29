@@ -566,6 +566,13 @@ async function runChatTimed(
 		if (parsed.success) workingDocument = parsed.data;
 	}
 
+	// The recording's one-time analysis (normally started when the project was
+	// opened); by the time the agent asks for it, it is usually ready.
+	if (workingDocument) {
+		const doc = workingDocument;
+		void import("./videoSummary").then(({ warmVideoSummary }) => warmVideoSummary(doc)).catch(() => {});
+	}
+
 	const userMessage: AiEditionChatMessage = {
 		id: randomUUID(),
 		role: "user",

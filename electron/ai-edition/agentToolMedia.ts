@@ -63,6 +63,8 @@ export interface PreparedToolMedia {
 	renderError?: string;
 	/** Brand colours read from the recording (used when the project has no brand kit yet). */
 	videoBrandKit?: BrandKit;
+	/** getVideoSummary: the saved analysis of the recording, shaped for the agent (null = none possible). */
+	videoSummary?: Record<string, unknown> | null;
 	/** sampleFrames: stills of the edited timeline / an export / the recording. */
 	sampledFrames?: SampleFramesResult;
 	/** addMotionOverlay: the rendered transparent PNG sequence. */
@@ -322,6 +324,17 @@ export async function prepareAgentToolMedia(
 				prepared.motionOverlay = overlay;
 				discardOnFailure.push(overlay.dir);
 			}
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			prepared.renderError = err instanceof Error ? err.message : String(err);
+		}
+	}
+
+	if (name === "getVideoSummary") {
+		try {
+			const { ensureVideoSummary, videoSummaryForAgent } = await import("./videoSummary");
+			const summary = await ensureVideoSummary(document, { ffmpegPath, signal });
+			prepared.videoSummary = summary ? videoSummaryForAgent(summary, document) : null;
 		} catch (err) {
 			if (err instanceof Error && err.name === "AbortError") throw err;
 			prepared.renderError = err instanceof Error ? err.message : String(err);

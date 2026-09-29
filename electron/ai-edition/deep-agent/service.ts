@@ -89,6 +89,7 @@ import {
 	placeMotionClipArgs,
 	sampleFramesArgs,
 	listCursorThemesArgs,
+	getVideoSummaryArgs,
 	addMotionOverlayArgs,
 	setBrandKitArgs,
 } from "../agent-tools";
@@ -505,6 +506,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
 	importMedia:
 		"Import a video or audio file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk.",
+	getVideoSummary:
+		"START HERE for any edit: the recording analysed once and saved — duration, screen changes (section boundaries), still stretches (loading / waiting: speed up or cut), silences, whether there is audio / a transcript, key frames to Read, the video's colours, and plain hints. Much faster than re-watching; use sampleFrames only for a specific moment.",
 	listCursorThemes:
 		"List the installed cursor themes (ids + names) and the current cursor look (theme, size, smoothing, motion blur, click bounce). Set them with setEditorSettings.",
 	sampleFrames:
@@ -671,6 +674,7 @@ export async function defaultFrameSource(): Promise<FrameSource | null> {
  * never blocks on ffmpeg.
  */
 const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
+	"getVideoSummary",
 	"sampleFrames",
 	"importMedia",
 	"insertStartThumbnail",
@@ -918,6 +922,7 @@ export function buildTools(
 		build("getTranscriptWords", getTranscriptWordsArgs),
 		build("getCursorTrack", getCursorTrackArgs),
 		build("listCharacters", listCharactersArgs),
+		build("getVideoSummary", getVideoSummaryArgs),
 		build("listCursorThemes", listCursorThemesArgs),
 		build("sampleFrames", sampleFramesArgs),
 		build("createMotionGraphicPreview", createMotionGraphicPreviewArgs),

@@ -45,6 +45,7 @@ const OPENSCREEN_STATUS: Record<string, string> = {
 	addMotionOverlay: "Animating an overlay",
 	sampleFrames: "Checking frames",
 	listCursorThemes: "Reading cursor styles",
+	getVideoSummary: "Reading the video summary",
 	listMotionTemplates: "Listing motion templates",
 	setBrandKit: "Updating brand kit",
 	removeModifier: "Cleaning timeline",

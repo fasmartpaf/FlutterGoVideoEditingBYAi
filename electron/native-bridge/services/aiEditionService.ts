@@ -85,6 +85,16 @@ export interface AiEditionServiceOptions {
 	deleteSession: (projectId: string, sessionId: string) => boolean;
 }
 
+/**
+ * Opening a project or importing a video starts the one-time analysis of the
+ * recording in the background, so the agent's first turn already has it.
+ */
+function warmSummary(document: unknown): void {
+	void import("../../ai-edition/videoSummary")
+		.then(({ warmVideoSummary }) => warmVideoSummary(document as Parameters<typeof warmVideoSummary>[0]))
+		.catch(() => {});
+}
+
 export class AiEditionService {
 	constructor(private readonly options: AiEditionServiceOptions) {}
 
@@ -108,6 +118,7 @@ export class AiEditionService {
 	async get(projectId: string): Promise<AiEditionDocumentResult> {
 		try {
 			const document = await this.options.documents.getProject(projectId);
+			warmSummary(document);
 			return { success: true, document };
 		} catch (error) {
 			return {
@@ -161,6 +172,7 @@ export class AiEditionService {
 		kind?: "video" | "audio",
 	): Promise<AiEditionAssetResult> {
 		const document = await this.options.documents.addAsset(projectId, { path, label, kind });
+		if (kind !== "audio") warmSummary(document);
 		// The just-added asset is always the last one; primaryAssetId is only a
 		// fallback for the video case and would point at the wrong asset for an
 		// audio import (which never claims primary), so prefer the tail.

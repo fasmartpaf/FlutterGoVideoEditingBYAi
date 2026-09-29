@@ -28,6 +28,7 @@ export interface EditStage {
 
 /** Looking is always allowed. */
 export const READ_TOOLS = [
+	"getVideoSummary",
 	"getCurrentDocument",
 	"getTranscript",
 	"getTranscriptRange",
@@ -99,7 +100,7 @@ export const EDIT_STAGES: readonly EditStage[] = [
 		id: "understand",
 		title: "Understand the recording",
 		instruction:
-			"Look before editing, in ONE reply: getTranscript (if it fails because there is no transcript and the recording has speech, call generateCaptions, then getTranscript), getCursorTrack, and sampleFrames from:'recording' (count 4); Read the frames. Then reply with a short EDIT PLAN for the next stages: the story in one line, the key moments to keep (with times), what to cut, where zooms help, whether captions fit, which intro / callouts / closing CTA to add, and the target length. Make no edits in this stage.",
+			"Look before editing, in ONE reply: getVideoSummary (the recording, already analysed: screen changes, still stretches, silences, key frames — Read its keyFrames), getTranscript (if there is no transcript and the recording has speech, call generateCaptions, then getTranscript) and getCursorTrack. Take extra frames with sampleFrames only if the summary is missing. Then reply with a short EDIT PLAN for the next stages: the story in one line, the key moments to keep (with times), what to cut, where zooms help, whether captions fit, which intro / callouts / closing CTA to add, and the target length. Make no edits in this stage.",
 		tools: ["generateCaptions"],
 		budget: budget(2, 3, 4, 2, 3),
 		preview: false,

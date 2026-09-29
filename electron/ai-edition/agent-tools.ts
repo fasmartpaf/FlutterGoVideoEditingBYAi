@@ -948,6 +948,9 @@ export const listMotionTemplatesArgs = z.object({});
 
 export const listCursorThemesArgs = z.object({});
 
+/** The recording, analysed once and saved: screen changes, still stretches, silences, key frames, colours. */
+export const getVideoSummaryArgs = z.object({});
+
 /**
  * Stills the agent looks at to check its work: the EDITED timeline (what the
  * viewer will see), a finished export, or the raw recording.
@@ -1204,6 +1207,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"getTranscriptWords",
 	"getCursorTrack",
 	"listCharacters",
+	"getVideoSummary",
 	"listCursorThemes",
 	"sampleFrames",
 	"createMotionGraphicPreview",
@@ -3885,6 +3889,18 @@ export function executeAgentTool(
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
 			};
+		}
+
+		case "getVideoSummary": {
+			const prepared = options?.prepared;
+			if (prepared && "videoSummary" in prepared) {
+				if (!prepared.videoSummary) {
+					return failure("No recording to analyse in this project (or ffmpeg is missing). Use sampleFrames from:'recording' instead.");
+				}
+				return { ok: true, resultJson: JSON.stringify(prepared.videoSummary) };
+			}
+			if (prepared?.renderError) return failure(`Could not analyse the recording: ${prepared.renderError}`);
+			return failure("getVideoSummary reads the recording's analysis, so it must be called directly as an agent tool.");
 		}
 
 		case "listCursorThemes": {

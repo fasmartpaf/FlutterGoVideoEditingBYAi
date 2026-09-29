@@ -67,6 +67,7 @@ const ARGS: Record<string, unknown> = {
 	listCharacters: {},
 	sampleFrames: { count: 2 },
 	listCursorThemes: {},
+	getVideoSummary: {},
 	createMotionGraphicPreview: { titles: ["Demo"] },
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
@@ -335,7 +336,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "addMotionOverlay", "sampleFrames"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "addMotionOverlay", "sampleFrames", "getVideoSummary"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {
@@ -460,6 +461,7 @@ describe("one description of the tools, not two", () => {
 			"getTranscriptWords",
 			"getCursorTrack",
 			"listCharacters",
+			"getVideoSummary",
 			"listCursorThemes",
 			"sampleFrames",
 			"createMotionGraphicPreview",
