@@ -37,6 +37,8 @@ export interface ShowcasePageInput {
 	url: string;
 	tags: string[];
 	theme: "dark" | "light";
+	/** premium = dark and cinematic; clean = light and calm; bold = saturated brand colours, stronger motion. */
+	style?: "premium" | "clean" | "bold";
 	/** Music beats (video seconds): the background pulses on them. */
 	beats?: number[];
 }
@@ -103,19 +105,23 @@ function splitName(name: string): [string, string] {
 }
 
 export function renderShowcasePage(input: ShowcasePageInput): string {
-	const { kit, theme } = input;
-	const dark = theme === "dark";
+	const { kit } = input;
+	const style = input.style ?? (input.theme === "light" ? "clean" : "premium");
+	const dark = style !== "clean";
+	const bold = style === "bold";
 	const p = kit.primary;
 	const s = kit.secondary;
 	const a1 = dark ? readableOnDark(p) : readableOnLight(p);
 	const a2 = dark ? readableOnDark(s) : readableOnLight(s);
-	const base = dark
-		? luminance(kit.background) < 0.05
-			? kit.background
-			: "#06142a"
-		: "#f4f7fb";
-	const baseDeep = dark ? mix(base, "#000000", 0.45) : "#eaf0f7";
-	const baseLift = dark ? mix(base, p, 0.22) : mix("#ffffff", s, 0.08);
+	const base = bold
+		? mix(p, "#000000", 0.55)
+		: dark
+			? luminance(kit.background) < 0.05
+				? kit.background
+				: "#06142a"
+			: "#f4f7fb";
+	const baseDeep = bold ? mix(p, "#000000", 0.78) : dark ? mix(base, "#000000", 0.45) : "#eaf0f7";
+	const baseLift = bold ? mix(s, "#000000", 0.3) : dark ? mix(base, p, 0.22) : mix("#ffffff", s, 0.08);
 	const ink = dark ? "#ffffff" : "#0f172a";
 	const inkSoft = dark ? "rgba(226,240,255,.76)" : "rgba(15,23,42,.66)";
 	const portrait = input.height > input.width;
@@ -193,6 +199,7 @@ export function renderShowcasePage(input: ShowcasePageInput): string {
 			track: c.track,
 		})),
 		tags: input.tags.slice(0, 8),
+		style,
 		beats: (input.beats ?? []).filter((b) => b >= 0).slice(0, 2000),
 	};
 
@@ -223,10 +230,10 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 .base{position:absolute;inset:0;background:linear-gradient(135deg,${baseDeep} 0%,${base} 50%,${baseLift} 100%)}
 #stage{position:absolute;left:0;top:0;width:${SW}px;height:${SH}px;transform-origin:0 0}
 .blob{position:absolute;left:0;top:0;width:1300px;height:1300px;margin:-650px 0 0 -650px;border-radius:50%;${dark ? "mix-blend-mode:screen" : ""}}
-#b1{background:radial-gradient(closest-side,${rgba(p, dark ? 0.5 : 0.22)},${rgba(p, 0)})}
-#b2{background:radial-gradient(closest-side,${rgba(s, dark ? 0.46 : 0.2)},${rgba(s, 0)})}
+#b1{background:radial-gradient(closest-side,${rgba(p, bold ? 0.75 : dark ? 0.5 : 0.22)},${rgba(p, 0)})}
+#b2{background:radial-gradient(closest-side,${rgba(s, bold ? 0.7 : dark ? 0.46 : 0.2)},${rgba(s, 0)})}
 #b3{background:radial-gradient(closest-side,${rgba(mix(p, s, 0.5), dark ? 0.38 : 0.16)},${rgba(p, 0)})}
-#floor{position:absolute;left:-700px;right:-700px;bottom:${portrait ? -300 : -260}px;height:${portrait ? 900 : 760}px;transform-origin:50% 0;transform:perspective(900px) rotateX(72deg);
+#floor{${style === "clean" ? "display:none;" : ""}position:absolute;left:-700px;right:-700px;bottom:${portrait ? -300 : -260}px;height:${portrait ? 900 : 760}px;transform-origin:50% 0;transform:perspective(900px) rotateX(72deg);
  background-image:linear-gradient(${rgba(a2, dark ? 0.3 : 0.2)} 1.5px,transparent 1.5px),linear-gradient(90deg,${rgba(a2, dark ? 0.3 : 0.2)} 1.5px,transparent 1.5px);background-size:90px 90px;
  -webkit-mask-image:linear-gradient(to bottom,transparent 0%,#000 45%,#000 100%);opacity:.55}
 #bigmark{position:absolute;width:${portrait ? 900 : 980}px;height:${portrait ? 900 : 980}px;left:${portrait ? 380 : 1160}px;top:${portrait ? -200 : -240}px;opacity:${dark ? 0.08 : 0.07};object-fit:contain}
@@ -261,7 +268,7 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 .co:before{content:"";position:absolute;left:0;top:28px;bottom:28px;width:5px;border-radius:0 5px 5px 0;background:linear-gradient(${a2},${p})}
 .co .k{font:700 16px/1 ShowInter;letter-spacing:.2em;color:${a2};text-transform:uppercase;display:flex;align-items:center;gap:10px}
 .co .k b{display:inline-block;width:26px;height:2px;background:${a2}}
-.co .t{margin-top:16px;font:800 44px/1.08 ShowInter;letter-spacing:-.025em;color:${ink}}
+.co .t{margin-top:16px;font:800 ${bold ? 50 : 44}px/1.08 ShowInter;letter-spacing:-.025em;color:${ink}}
 .co .t em{font-style:normal;background:linear-gradient(90deg,${a2},${a1});-webkit-background-clip:text;background-clip:text;color:transparent}
 .co .s{margin-top:14px;font:500 22px/1.4 ShowInter;color:${inkSoft}}
 .cnt{display:flex;align-items:flex-end;gap:18px;margin-top:10px}.cnt .t{margin:0 0 14px}
@@ -307,10 +314,11 @@ const back=x=>{const c1=1.5,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,
 const stage=$('stage');const sc=Math.min(C.W/C.SW,C.H/C.SH);
 stage.style.transform='translate('+((C.W-C.SW*sc)/2)+'px,'+((C.H-C.SH*sc)/2)+'px) scale('+sc+')';
 let seed=7;const rnd=()=>{seed=(seed*16807)%2147483647;return (seed-1)/2147483646};
-const dots=[];for(let i=0;i<46;i++){const d=document.createElement('div');d.className='dot';const s=2+rnd()*4;d.style.width=d.style.height=s+'px';
+const TILT=C.style==='clean'?0.35:C.style==='bold'?1.4:1;
+const dots=[];for(let i=0;i<(C.style==='clean'?14:C.style==='bold'?70:46);i++){const d=document.createElement('div');d.className='dot';const s=2+rnd()*4;d.style.width=d.style.height=s+'px';
  $('dots').appendChild(d);dots.push({el:d,x:rnd()*C.SW,y:rnd()*C.SH,sp:14+rnd()*30,ph:rnd()*6.28,a:.15+rnd()*.5});}
 // Tags sit in the margins around the window and cards.
-const W0=C.win;const spots=C.portrait?[[80,120],[640,120],[90,1500],[640,1560],[330,70],[120,1820],[700,1830],[400,1760]]
+const W0=C.win;const spots=C.portrait?[[620,110],[850,50],[90,1520],[640,1580],[120,1820],[700,1840],[380,1700],[820,1700]]
  :[[110,C.card.cy-250],[330,C.card.cy-325],[120,C.card.cy+260],[300,C.card.cy+345],[W0.x+W0.w*.7,24],[W0.x+W0.w*.85,C.SH-54],[W0.x+W0.w*.38,C.SH-54],[W0.x+W0.w*.25,24]];
 const chips=C.tags.map((txt,i)=>{const d=document.createElement('div');d.className='fchip'+(i%2?'':' g');d.innerHTML='<i></i>';d.appendChild(document.createTextNode(txt));$('chips').appendChild(d);const p=spots[i%spots.length];return {el:d,x:p[0],y:p[1],ph:i*1.3}});
 const SX=C.vw/C.fw,SY=C.vh/C.fh;const marks=$('marks');
@@ -352,7 +360,7 @@ window.render=async(T)=>{
  // window
  const wi=eout(lin(T,C.t0-.3,C.t0+.65)), wo=C.outro?eio(lin(T,OUT,OUT+.75)):0;
  const sway=Math.sin(T*.55)*1.3;
- const ry=-26*(1-wi)-(C.portrait?0:5)+sway+wo*10, rx=16*(1-wi)+2+Math.cos(T*.4)*.6, ty=160*(1-wi)+wo*40, s=(0.9+0.1*wi)*(1-0.22*wo);
+ const ry=(-26*(1-wi)-(C.portrait?0:5)+sway)*TILT+wo*10, rx=(16*(1-wi)+2+Math.cos(T*.4)*.6)*TILT, ty=160*(1-wi)+wo*40, s=(0.9+0.1*wi)*(1-0.22*wo);
  $('win').style.transform='translateY('+ty.toFixed(1)+'px) rotateY('+ry.toFixed(2)+'deg) rotateX('+rx.toFixed(2)+'deg) scale('+s.toFixed(4)+')';
  $('win').style.opacity=(clamp(wi*1.4)*(1-wo)).toFixed(3);
  $('winwrap').style.filter=wo>0?'blur('+(wo*8).toFixed(1)+'px)':'none';

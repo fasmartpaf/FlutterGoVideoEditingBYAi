@@ -24,7 +24,7 @@ export interface PlacedShowcase extends PlacedMotionClip {
 
 export function placeShowcase(
 	document: AxcutDocument,
-	input: { mp4Path: string; durationSec: number; label: string },
+	input: { mp4Path: string; durationSec: number; label: string; width?: number; height?: number },
 	place: ShowcasePlacement,
 ): PlacedShowcase {
 	if (place !== "replace") {
@@ -47,6 +47,8 @@ export function placeShowcase(
 		borderRadius: 0,
 		shadowIntensity: 0,
 		cropRegion: DEFAULT_CROP_REGION,
+		// A vertical showcase makes the whole programme vertical (and back).
+		...(input.width && input.height ? { aspectRatio: input.height > input.width ? ("9:16" as const) : ("16:9" as const) } : {}),
 	});
 	return { ...placed, document: fullBleed, where: "as the whole video (replacing the previous edit)", cleared };
 }

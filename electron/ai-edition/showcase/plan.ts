@@ -114,6 +114,10 @@ export const showcaseArgsSchema = z.object({
 	/** Logo outro (default true when the brand kit has a name or logo). */
 	outro: z.boolean().optional(),
 	theme: z.enum(["dark", "light"]).default("dark"),
+	/** Look: premium (dark, cinematic — default), clean (light, calm), bold (saturated brand colours, stronger motion). Overrides theme. */
+	style: z.enum(["premium", "clean", "bold"]).optional(),
+	/** Shape: the project's own (default), 16:9 landscape, or 9:16 vertical for Shorts / Reels / TikTok. */
+	format: z.enum(["project", "16:9", "9:16"]).default("project"),
 	/** Sharpen and lift contrast of the recording (default true). */
 	enhance: z.boolean().default(true),
 	/** Keep the recording's sound (sped-up parts are time-stretched). Default true. */

@@ -3930,7 +3930,11 @@ export function executeAgentTool(
 				placed =
 					parsed.data.place === "none" || parsed.data.quality === "draft"
 						? null
-						: placeShowcase(document, { mp4Path: clip.mp4Path, durationSec: clip.durationSec, label: clip.label }, parsed.data.place);
+						: placeShowcase(
+								document,
+								{ mp4Path: clip.mp4Path, durationSec: clip.durationSec, label: clip.label, width: clip.width, height: clip.height },
+								parsed.data.place,
+							);
 			} catch (err) {
 				return failure(err instanceof Error ? err.message : String(err));
 			}

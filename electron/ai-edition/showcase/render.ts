@@ -202,7 +202,8 @@ export async function renderShowcase(
 	const outro = args.outro ?? (hasBrand || Boolean(args.tagline));
 	const timing = showcaseTiming(footageSec, intro && hasBrand, outro);
 	const draft = args.quality === "draft";
-	const full = showcaseOutputSize(document);
+	const full =
+		args.format === "16:9" ? { width: 1920, height: 1080 } : args.format === "9:16" ? { width: 1080, height: 1920 } : showcaseOutputSize(document);
 	// A draft is half size at 30 fps: roughly 8× less to draw, enough to judge the plan.
 	const size = draft ? { width: Math.round(full.width / 4) * 2, height: Math.round(full.height / 4) * 2 } : full;
 	const fps = draft ? 30 : args.fps;
@@ -337,6 +338,7 @@ export async function renderShowcase(
 			url: args.url ?? "",
 			tags: args.tags ?? [],
 			theme: args.theme,
+			style: args.style,
 			beats: beatGrid?.beats ?? [],
 		});
 		const htmlPath = join(work, "showcase.html");

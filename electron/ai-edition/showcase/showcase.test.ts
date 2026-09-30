@@ -379,3 +379,45 @@ describe("music", () => {
 		expect(musicOnly).not.toContain("sidechain");
 	});
 });
+
+describe("styles and formats", () => {
+	it("draws the three looks", () => {
+		const tl = resolveTimeline({}, buildSegments(0, 4), { x: 0, y: 0, width: 1480, height: 1080 }, { width: 1480, height: 1080 });
+		const page = (style: "premium" | "clean" | "bold", width = 1920, height = 1080) =>
+			renderShowcasePage({
+				width,
+				height,
+				fps: 30,
+				frameCount: 120,
+				frameDigits: 5,
+				timeline: tl,
+				kit: brandKitSchema.parse({ primary: "#1E9BE8", secondary: "#4FC5FC" }),
+				name: "Acme",
+				logoFile: null,
+				intro: true,
+				outro: true,
+				tagline: "",
+				url: "",
+				tags: [],
+				theme: "dark",
+				style,
+			});
+		expect(page("clean")).toContain("#floor{display:none;");
+		expect(page("clean")).toContain("#f4f7fb");
+		expect(page("bold")).toContain('"style":"bold"');
+		expect(page("premium", 1080, 1920)).toContain('"portrait":true');
+		expect(showcaseArgsSchema.parse({}).format).toBe("project");
+	});
+
+	it("a vertical showcase makes the project vertical when it replaces the edit", async () => {
+		const { mkdtempSync, writeFileSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const dir = mkdtempSync(join(tmpdir(), "showcase-v-"));
+		const mp4 = join(dir, "v.mp4");
+		writeFileSync(mp4, "x");
+		const doc = createEmptyDocument({ title: "t", projectId: "p", createdAt: "2026-01-01T00:00:00.000Z" });
+		const placed = placeShowcase(doc, { mp4Path: mp4, durationSec: 5, label: "S", width: 1080, height: 1920 }, "replace");
+		expect(getEditorSettings(placed.document).aspectRatio).toBe("9:16");
+	});
+});
