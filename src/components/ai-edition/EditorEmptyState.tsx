@@ -62,8 +62,12 @@ export function EditorEmptyState({
 		try {
 			const projectId = await ensureProject();
 			if (!projectId) return;
-			const label = result.name || result.path.split(/[\\/]/).pop() || "Recording";
-			await addAsset(result.path, label);
+			const paths = result.paths?.length ? result.paths : [result.path];
+			for (const path of paths) {
+				const label =
+					(paths.length === 1 && result.name) || path.split(/[\\/]/).pop() || "Recording";
+				await addAsset(path, label);
+			}
 		} catch (err) {
 			setDropError("load-failed");
 			// ponytail: surface as a console message only — the dialog above

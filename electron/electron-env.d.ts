@@ -287,6 +287,11 @@ interface Window {
 		openVideoFilePicker: () => Promise<{
 			success: boolean;
 			path?: string;
+			/** Every file picked (the picker allows several); `path` is the first. */
+			paths?: string[];
+			/** Picked files that can't be used (names). */
+			rejected?: string[];
+			message?: string;
 			// Browser-mode shim only: a blob: URL has no meaningful basename, so
 			// the shim carries the picked File's real name here for the label.
 			name?: string;

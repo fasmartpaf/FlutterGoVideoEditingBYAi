@@ -88,6 +88,7 @@
 		"audioFiles": "音频文件",
 		"openscreenProject": "OpenScreen 项目",
 		"allFiles": "所有文件",
-		"pictureFiles": "Pictures"
+		"pictureFiles": "Pictures",
+		"mediaFiles": "视频文件"
 	}
 }

@@ -101,16 +101,30 @@ export function MediaStage({
 			return;
 		}
 		const picker = await window.electronAPI?.openVideoFilePicker();
-		if (!picker?.success || !picker.path) return;
+		if (!picker?.success || !picker.path) {
+			if (picker?.message && !picker.canceled) toast.error(picker.message);
+			return;
+		}
+		// Several files can be picked at once; add them one by one, in the order picked,
+		// so one bad file doesn't stop the rest.
+		const paths = picker.paths?.length ? picker.paths : [picker.path];
 		setBusy(true);
+		const added: string[] = [];
 		try {
-			const label = picker.name || basename(picker.path);
-			await addAsset(picker.path, label);
-			toast.success(t("mediaStage.added", { label }));
-		} catch (err) {
-			toast.error(t("mediaStage.couldNotAddAsset"), {
-				description: err instanceof Error ? err.message : String(err),
-			});
+			for (const path of paths) {
+				const label = paths.length === 1 && picker.name ? picker.name : basename(path);
+				try {
+					await addAsset(path, label);
+					added.push(label);
+				} catch (err) {
+					toast.error(t("mediaStage.couldNotAddAsset"), {
+						description: `${label}: ${err instanceof Error ? err.message : String(err)}`,
+					});
+				}
+			}
+			if (added.length === 1) toast.success(t("mediaStage.added", { label: added[0] }));
+			else if (added.length > 1) toast.success(`Added ${added.length} files`);
+			if (picker.rejected?.length) toast.message(`Skipped (not a video or picture): ${picker.rejected.join(", ")}`);
 		} finally {
 			setBusy(false);
 		}

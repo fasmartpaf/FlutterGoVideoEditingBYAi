@@ -88,6 +88,7 @@
 		"audioFiles": "Tệp âm thanh",
 		"openscreenProject": "Dự án OpenScreen",
 		"allFiles": "Tất cả các tệp",
-		"pictureFiles": "Pictures"
+		"pictureFiles": "Pictures",
+		"mediaFiles": "Tệp Video"
 	}
 }

@@ -88,6 +88,7 @@
 		"audioFiles": "오디오 파일",
 		"openscreenProject": "OpenScreen 프로젝트",
 		"allFiles": "모든 파일",
-		"pictureFiles": "Pictures"
+		"pictureFiles": "Pictures",
+		"mediaFiles": "비디오 파일"
 	}
 }

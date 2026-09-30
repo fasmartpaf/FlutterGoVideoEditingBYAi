@@ -3708,7 +3708,14 @@ export function registerIpcHandlers(
 				{
 					title: mainT("dialogs", "fileDialogs.selectVideo"),
 					defaultPath: RECORDINGS_DIR,
+					// ONE combined filter first: on macOS the picker only enables the files of
+					// the selected filter, so a separate "Pictures" entry left every PNG greyed
+					// out until the user found the Format menu.
 					filters: [
+						{
+							name: mainT("dialogs", "fileDialogs.mediaFiles"),
+							extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts", "png", "jpg", "jpeg", "webp", "bmp"],
+						},
 						{
 							name: mainT("dialogs", "fileDialogs.videoFiles"),
 							extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"],
@@ -3719,7 +3726,7 @@ export function registerIpcHandlers(
 						},
 						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
 					],
-					properties: ["openFile"],
+					properties: ["openFile", "multiSelections"],
 				},
 				getMainWindow(),
 			);
@@ -3729,22 +3736,31 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true };
 			}
 
-			// A picture is imported as a clip (baked to video by the document service).
-			const picked = result.filePaths[0];
-			const normalizedPath = hasAllowedImportPictureExtension(picked)
-				? await approveReadableMediaPath(picked, hasAllowedImportPictureExtension)
-				: await approveReadableVideoPath(picked);
-			if (!normalizedPath) {
+			// Several files at once; a picture is imported as a clip (baked to video by
+			// the document service). Files that can't be used are reported, not fatal.
+			const paths: string[] = [];
+			const rejected: string[] = [];
+			for (const picked of result.filePaths) {
+				const normalized = hasAllowedImportPictureExtension(picked)
+					? await approveReadableMediaPath(picked, hasAllowedImportPictureExtension)
+					: await approveReadableVideoPath(picked);
+				if (normalized) paths.push(normalized);
+				else rejected.push(path.basename(picked));
+			}
+			if (paths.length === 0) {
 				return {
 					success: false,
-					message: "Selected file is not a supported readable video file",
+					message: "The selected files are not videos or pictures this app can read",
+					rejected,
 				};
 			}
 
 			currentProjectPath = null;
 			return {
 				success: true,
-				path: normalizedPath,
+				path: paths[0],
+				paths,
+				...(rejected.length ? { rejected } : {}),
 			};
 		} catch (error) {
 			console.error("Failed to open file picker:", error);

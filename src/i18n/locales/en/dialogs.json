@@ -88,6 +88,7 @@
 		"audioFiles": "Audio Files",
 		"openscreenProject": "OpenScreen Project",
 		"allFiles": "All Files",
-		"pictureFiles": "Pictures (become clips)"
+		"pictureFiles": "Pictures (become clips)",
+		"mediaFiles": "Videos and pictures"
 	}
 }
