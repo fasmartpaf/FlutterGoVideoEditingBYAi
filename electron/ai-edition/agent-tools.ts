@@ -95,6 +95,7 @@ import { IMAGE_CLIP_FITS, IMAGE_CLIP_MOTIONS, isImageClipPath } from "./imageCli
 import { applyLayerTool } from "./layers/layerTools";
 import { dropUnusedDerivedAssets, makeDuckedAsset, planDuck, swapTrackAsset } from "./audioPro/duck";
 import { VOICE_LEVELS, setVoiceSource, voiceTargets } from "./audioPro/cleanVoice";
+import { LOUDNESS_TARGETS, loudnessGainDb } from "./audioPro/loudness";
 import { findLayer, layerCanvasSize, layerSpanMs, updateLayer } from "../../src/lib/ai-edition/document/layers";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
@@ -654,6 +655,13 @@ export const cleanVoiceArgs = z.object({
 	assetId: z.string().min(1).optional(),
 	/** Put the original, uncleaned sound back. */
 	undo: z.boolean().optional(),
+});
+
+export const setLoudnessArgs = z.object({
+	/** Where the video goes: youtube / tiktok / instagram / reels / shorts / spotify (−14 LUFS), podcast (−16), broadcast (−23). */
+	platform: z.enum(["youtube", "tiktok", "instagram", "reels", "shorts", "spotify", "podcast", "broadcast"]).optional(),
+	/** Or an exact target, LUFS. */
+	targetLufs: z.number().min(-30).max(-8).optional(),
 });
 
 export const tightenPacingArgs = z.object({
@@ -1263,6 +1271,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"setLoudness",
 	"cleanVoice",
 	"duckMusic",
 	"createShowcaseVideo",
@@ -1392,6 +1401,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"setLoudness",
 	"cleanVoice",
 	"duckMusic",
 	"addLayer",
@@ -3971,6 +3981,33 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "setLoudness": {
+			const parsed = setLoudnessArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const target = parsed.data.targetLufs ?? LOUDNESS_TARGETS[parsed.data.platform ?? "youtube"];
+			const measured = options?.prepared?.loudness;
+			if (!measured) {
+				return failure(`Could not measure the loudness${options?.prepared?.loudnessError ? `: ${options.prepared.loudnessError}` : " (is there any sound?)"}.`);
+			}
+			const { gainDb, peakLimited } = loudnessGainDb(measured, target);
+			const next = patchEditorSettings(document, { audioGainDb: gainDb });
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					targetLufs: target,
+					measuredLufs: Math.round(measured.integratedLufs * 10) / 10,
+					truePeakDb: Math.round(measured.truePeakDb * 10) / 10,
+					programmeGainDb: gainDb,
+					expectedLufs: Math.round((measured.integratedLufs + gainDb) * 10) / 10,
+					...(peakLimited
+						? { note: "Held back so the loudest peak stays under −1 dBTP; the video lands a little under the target. cleanVoice (it compresses) lets it get closer." }
+						: {}),
+				}),
+				summary: `programme volume ${gainDb >= 0 ? "+" : ""}${gainDb} dB → about ${Math.round(measured.integratedLufs + gainDb)} LUFS (target ${target})`,
 			};
 		}
 

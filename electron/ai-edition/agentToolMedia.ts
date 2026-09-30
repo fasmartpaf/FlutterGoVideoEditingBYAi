@@ -25,6 +25,7 @@ import { createId as createLayerId } from "../../src/lib/ai-edition/document/ids
 import { findLayer, layerCanvasSize } from "../../src/lib/ai-edition/document/layers";
 import { bakeLayer } from "./layers/bake";
 import { VOICE_LEVELS, type VoiceLevel, bakeCleanVoice, voiceTargets } from "./audioPro/cleanVoice";
+import { measureProgrammeLoudness } from "./audioPro/loudness";
 import {
 	DEFAULT_DUCK_DB,
 	bakeDuckedAudio,
@@ -86,6 +87,9 @@ export interface PreparedToolMedia {
 	/** cleanVoice: one cleaned copy per recording. */
 	voice?: Array<{ assetId: string; path?: string; chain?: string; error?: string }>;
 	voiceError?: string;
+	/** setLoudness: the programme as it mixes now (before its programme gain). */
+	loudness?: { integratedLufs: number; truePeakDb: number; lra: number };
+	loudnessError?: string;
 	/** importMedia of a picture: the picture baked into a clip. */
 	imageClip?: BakedImageClip;
 	/** Why a picture could not be baked (the executor reports it). */
@@ -321,6 +325,20 @@ export async function prepareAgentToolMedia(
 				}
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;
+			}
+		}
+	}
+
+	if (name === "setLoudness" && options.mayMutate) {
+		if (!ffmpegPath) prepared.loudnessError = "ffmpeg is not available";
+		else {
+			try {
+				options.onProgress?.("Measuring the loudness of the whole video");
+				prepared.loudness = (await measureProgrammeLoudness(document, ffmpegPath, signal)) ?? undefined;
+				if (!prepared.loudness) prepared.loudnessError = "the video has no measurable sound";
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") throw err;
+				prepared.loudnessError = err instanceof Error ? err.message : String(err);
 			}
 		}
 	}
