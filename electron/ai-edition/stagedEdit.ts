@@ -297,6 +297,11 @@ const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
 		match: /\b(motion|graphics?|intro|outro|opener|title|overlay|lower\s*third|callout|badge|cta|call\s*to\s*action|logo|animat\w*|thumbnail|cover|brand\w*|card)s?\b/i,
 		tools: GRAPHICS_TOOLS,
 	},
+	{
+		// Pictures (as clips or layers), picture-in-picture, attached files.
+		match: /\b(pictures?|images?|photos?|png|jpe?g|webp|logos?|layers?|picture[\s-]*in[\s-]*picture|pip|stickers?|attached)\b/i,
+		tools: ["importMedia", "addLayer", "setLayer", "removeLayer", "addClip", "moveClip", "removeClip", "removeModifier"],
+	},
 	{ match: /\b(captions?|subtitles?|transcript)\b/i, tools: CAPTION_TOOLS },
 	{
 		match: /\b(zoom\w*|camera|cursor|mouse|crop\w*|aspect|vertical|portrait|square|9:16|1:1|16:9|background|wallpaper|padding|shadow|rounded|frame\s+look|speed\s*up|slow\s*down)\b/i,
