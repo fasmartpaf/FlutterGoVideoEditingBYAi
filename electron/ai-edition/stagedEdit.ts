@@ -176,7 +176,11 @@ const PART =
 	/\b(intro|outro|opening|opener|ending|title|card|caption|subtitle|zoom|overlay|graphic|logo|thumbnail|cover|cta|call\s*to\s*action|lower\s*third|callout|badge|transition|music|audio|sound|background|wallpaper|blur|speed|crop|motion|animation|text|font|colou?r|section|part|scene|clip)s?\b/i;
 /** The recording itself restyled ("make it look premium", "better look", "motion graphics into it"): one showcase render, not the staged edit. */
 export const SHOWCASE_REQUEST =
-	/\b(showcase|premium|branded|branding|better\s+look\w*|look\w*\s+(?:better|amazing|premium|professional|beautiful|clean|attractive)|motion\s+graphics?\s+(?:in|into|on|over|to)\b)/i;
+	/\b(showcase|premium|branded|branding|restyle|re-?design|aesthetic|cinematic|apple[-\s]?like|minimal(?:ist)?|sleek|elegant|stylish|better\s+look\w*|look\w*\s+(?:\w+\s+){0,3}?(?:better|amazing|premium|professional|beautiful|clean|attractive|minimal|calm|modern|sleek|cinematic|elegant|stylish|bold|energetic|fresh|polished)|motion\s+graphics?\s+(?:in|into|on|over|to)\b)/i;
+
+/** Asks that change a showcase already on the timeline (its look, shape, music, cards). */
+const SHOWCASE_FOLLOW_UP =
+	/\b(vertical|horizontal|9:16|16:9|tiktok|reels?|shorts?|style|look|design|layout|frame|background|cards?|steps?|theme|colou?rs?|music|song|beat|energetic|calm|bold|clean|dark|light|logo|intro|outro|tagline|faster|slower|zoom\w*|highlight\w*|draft|final|render)\b/i;
 const NARROW = /\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\b\d{1,2}:\d{2}\b|\b(?:this|that)\s+(?:zoom|caption|overlay|clip|title|graphic)\b/i;
 
 /**
@@ -184,8 +188,10 @@ const NARROW = /\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds)\b|\b\d{1,2}:\d{2}\b|\b(
  * "turn this into a 60-second product demo"); false for a targeted edit that
  * names a part ("make the intro amazing", "zoom at 0:12") or a question.
  */
-export function isWholeVideoRequest(message: string): boolean {
+export function isWholeVideoRequest(message: string, context: { hasShowcase?: boolean } = {}): boolean {
 	const m = message.trim();
+	// With a showcase on the timeline, changes go to the showcase, not a six-stage edit of it.
+	if (context.hasShowcase) return false;
 	if (m.length < 12) return false;
 	if (m.endsWith("?") && !BROAD_VERB.test(m.split(/\s+/).slice(0, 3).join(" "))) return false;
 	if (SHOWCASE_REQUEST.test(m)) return false;
@@ -307,9 +313,10 @@ const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
  * zoom. Null when the request names no specific area (the agent keeps every
  * tool). Read tools are always included.
  */
-export function requestToolScope(message: string): string[] | null {
+export function requestToolScope(message: string, context: { hasShowcase?: boolean } = {}): string[] | null {
 	const tools = new Set<string>();
 	for (const scope of SCOPES) if (scope.match.test(message)) for (const t of scope.tools) tools.add(t);
+	if (context.hasShowcase && SHOWCASE_FOLLOW_UP.test(message)) for (const t of ["createShowcaseVideo", "setBrandKit"]) tools.add(t);
 	if (tools.size === 0) return null;
 	return [...new Set([...READ_TOOLS, ...tools])];
 }

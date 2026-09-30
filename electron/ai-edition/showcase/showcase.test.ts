@@ -206,6 +206,9 @@ describe("showcase plumbing", () => {
 			"make my screen recording look amazing with motion graphics into it",
 			"make this video look premium",
 			"turn it into a branded showcase",
+			"Make this recording look minimal and calm, Apple-like",
+			"make the video look really polished",
+			"restyle it, cinematic",
 		]) {
 			expect(SHOWCASE_REQUEST.test(m)).toBe(true);
 			expect(isWholeVideoRequest(m)).toBe(false);
@@ -485,5 +488,16 @@ describe("forgiving plans and chosen designs", () => {
 		expect(def).toContain('"layout":"side"');
 		expect(def).toContain(".co{position:absolute;left:96px");
 		expect(page({ layout: "bottom" })).toContain('"layout":"bottom"');
+	});
+});
+
+describe("follow-ups on a showcase", () => {
+	it("restyle the showcase on the timeline instead of starting a six-stage edit", () => {
+		for (const m of ["Make it energetic and bold for a product launch", "Make a vertical 9:16 version for TikTok", "use this music"]) {
+			expect(isWholeVideoRequest(m, { hasShowcase: true })).toBe(false);
+			expect(requestToolScope(m, { hasShowcase: true })).toContain("createShowcaseVideo");
+		}
+		expect(isWholeVideoRequest("make a 60 second product demo video", { hasShowcase: true })).toBe(false);
+		expect(requestToolScope("add captions", { hasShowcase: false }) ?? []).not.toContain("createShowcaseVideo");
 	});
 });

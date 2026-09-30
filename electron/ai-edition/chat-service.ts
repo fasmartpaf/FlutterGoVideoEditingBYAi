@@ -415,6 +415,15 @@ const TARGETED_TURN_BUDGET = {
 	finishMs: 4 * 60_000,
 };
 
+/** A showcase turn: look at the recording, maybe set the brand, render a draft (minutes). */
+const SHOWCASE_TURN_BUDGET = {
+	softSteps: 6,
+	finishSteps: 9,
+	hardSteps: 11,
+	softMs: 8 * 60_000,
+	finishMs: 15 * 60_000,
+};
+
 /** Add a finished turn to the project journal (best effort — never fails the turn). */
 async function rememberTurn(
 	document: AxcutDocument | null | undefined,
@@ -702,6 +711,12 @@ async function runChatTimed(
 		const memory = workingDocument ? journalContext(workingDocument) : "";
 		const messageForAgent = memory ? `${message}\n\n${memory}` : message;
 		const { isWholeVideoRequest, modelForWork } = await import("./stagedEdit");
+		// A showcase already on the timeline: follow-ups restyle it rather than edit it.
+		const hasShowcase = Boolean(
+			workingDocument?.timeline.clips.some((c) =>
+				/^showcase\b/i.test(workingDocument.assets.find((a) => a.id === c.assetId)?.label ?? ""),
+			),
+		);
 		// Mechanical work runs on the fast model; planning and review keep the user's pick.
 		const modelFor = (mechanical: boolean) => ({
 			...modelConfig,
@@ -712,7 +727,7 @@ async function runChatTimed(
 			editsAllowed &&
 			workingDocument !== null &&
 			process.env.OPENSCREEN_STAGED_EDIT !== "0" &&
-			isWholeVideoRequest(message);
+			isWholeVideoRequest(message, { hasShowcase });
 		if (stagedRun && workingDocument) {
 			const staged = await runStagedEdit({
 				invoke: (stage) =>
@@ -746,12 +761,19 @@ async function runChatTimed(
 			// A targeted ask ("make the intro amazing") only gets the tools for
 			// what it names — no surprise cuts, captions or zooms.
 			const { requestToolScope } = await import("./stagedEdit");
-			const scope = effectiveConfig.provider === "local-cli" ? requestToolScope(message) : null;
+			const scope = effectiveConfig.provider === "local-cli" ? requestToolScope(message, { hasShowcase }) : null;
+			// Designing a showcase is creative work that renders for minutes: the user's
+			// own model plans it, with room for a look, a draft and a render.
+			const showcaseTurn = Boolean(scope?.includes("createShowcaseVideo"));
 			result = await invokeOpenScreenAgent({
 				...(scope ? { allowedToolNames: scope } : {}),
 				document: workingDocument ?? emptyDocumentForTextOnly(projectId),
 				// A targeted ask is a small job: finish it in 1–3 replies.
-				model: scope ? { ...modelFor(true), turnBudgetLimits: TARGETED_TURN_BUDGET } : modelConfig,
+				model: scope
+					? showcaseTurn
+						? { ...modelFor(false), turnBudgetLimits: SHOWCASE_TURN_BUDGET }
+						: { ...modelFor(true), turnBudgetLimits: TARGETED_TURN_BUDGET }
+					: modelConfig,
 				history,
 				userMessage: messageForAgent,
 				sink: agentSink,
