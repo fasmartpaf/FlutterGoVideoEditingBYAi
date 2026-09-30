@@ -3957,6 +3957,26 @@ export function executeAgentTool(
 				document: nextDocument,
 				resultJson: JSON.stringify({
 					keptFromLastShowcase: effective.changed ? { changedOnly: effective.changed } : null,
+					// What is actually in this video — say only what is true of it.
+					contains: {
+						stepCards: parsed.data.steps?.length ?? 0,
+						stepTitles: (parsed.data.steps ?? []).map((st) => st.title),
+						zooms: parsed.data.focus?.length ?? 0,
+						highlights: parsed.data.highlights?.length ?? 0,
+						ticks: parsed.data.checks?.length ?? 0,
+						covers: parsed.data.covers?.length ?? 0,
+						music: Boolean(parsed.data.music),
+						style: parsed.data.style ?? (parsed.data.theme === "light" ? "clean" : "premium"),
+						design: parsed.data.design ?? {},
+						autoFilled: clip.autoFilled,
+					},
+					warnings: [
+						...((parsed.data.design?.layout && parsed.data.design.layout !== "side") || effective.changed?.includes("design")
+							? (parsed.data.steps?.length ?? 0) === 0
+								? ["This video has NO step cards, so moving cards or changing their layout shows nothing. Tell the user, and offer to add step cards (steps) — do not claim the cards moved."]
+								: []
+							: []),
+					],
 					videoPath: clip.mp4Path,
 					exportedPaths: [clip.mp4Path],
 					durationSec: clip.durationSec,
