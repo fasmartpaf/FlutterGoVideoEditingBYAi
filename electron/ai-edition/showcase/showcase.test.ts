@@ -421,3 +421,69 @@ describe("styles and formats", () => {
 		expect(getEditorSettings(placed.document).aspectRatio).toBe("9:16");
 	});
 });
+
+describe("forgiving plans and chosen designs", () => {
+	it("bends an over-eager plan into the limits instead of refusing it", async () => {
+		const { sanitizeShowcaseArgs, showcaseToolSchema } = await import("./plan");
+		const raw = {
+			steps: Array.from({ length: 11 }, (_, i) => ({
+				startSec: i,
+				endSec: i + 1,
+				title: "A very long headline that keeps going well past the forty-eight character limit",
+			})),
+			focus: [{ startSec: 1, endSec: 2, x: 1.4, y: -0.2, zoom: 3 }],
+			speed: [{ startSec: 1, endSec: 3, rate: 20 }],
+			tags: ["Dart", "", 3, "A tag that is far too long to fit in a chip"],
+			fps: 50,
+		};
+		expect(showcaseToolSchema.safeParse(raw).success).toBe(true);
+		const parsed = showcaseArgsSchema.safeParse(sanitizeShowcaseArgs(raw));
+		expect(parsed.success).toBe(true);
+		const a = parsed.data!;
+		expect(a.steps).toHaveLength(8);
+		expect(a.steps![0]!.title.length).toBeLessThanOrEqual(48);
+		expect(a.steps![0]!.title.endsWith("…")).toBe(true);
+		expect(a.focus![0]).toMatchObject({ x: 1, y: 0, zoom: 2.2 });
+		expect(a.speed![0]!.rate).toBe(8);
+		expect(a.tags).toEqual(["Dart", "A tag that is far too…"]);
+		expect(a.fps).toBe(60);
+	});
+
+	it("draws the layout, frame and card look the plan chose", () => {
+		const tl = resolveTimeline(
+			{ steps: [{ startSec: 0.5, endSec: 3, title: "One step" }] },
+			buildSegments(0, 4),
+			{ x: 0, y: 0, width: 1480, height: 1080 },
+			{ width: 1480, height: 1080 },
+		);
+		const page = (design: Record<string, string>) =>
+			renderShowcasePage({
+				width: 1920,
+				height: 1080,
+				fps: 30,
+				frameCount: 120,
+				frameDigits: 5,
+				timeline: tl,
+				kit: brandKitSchema.parse({}),
+				name: "Acme",
+				logoFile: null,
+				intro: true,
+				outro: true,
+				tagline: "",
+				url: "",
+				tags: [],
+				theme: "dark",
+				design,
+			});
+		const right = page({ layout: "right", frame: "device", cards: "minimal", background: "particles", entrance: "zoom", motion: "energetic" });
+		expect(right).toContain('"layout":"right"');
+		expect(right).toContain(".co{position:absolute;left:1344px");
+		expect(right).toContain("border:16px solid #0b0f17");
+		expect(right).toContain(".chrome{display:none!important;");
+		expect(right).toContain("#floor{display:none;");
+		const def = page({});
+		expect(def).toContain('"layout":"side"');
+		expect(def).toContain(".co{position:absolute;left:96px");
+		expect(page({ layout: "bottom" })).toContain('"layout":"bottom"');
+	});
+});

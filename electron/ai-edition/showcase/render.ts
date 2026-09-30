@@ -11,6 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { cpus } from "node:os";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
@@ -159,6 +160,10 @@ export async function renderShowcase(
 		stem?: string;
 		/** Live progress for the chat. */
 		onProgress?: (detail: string) => void;
+		/** Pages drawing at once (default: from the number of CPU cores). */
+		workers?: number;
+		/** A still of the video as it renders (path), for the chat. */
+		onStill?: (path: string) => void;
 		/** Recorded clicks and still stretches, for filling the plan's gaps. */
 		signals?: RecordingSignals;
 	},
@@ -339,6 +344,7 @@ export async function renderShowcase(
 			tags: args.tags ?? [],
 			theme: args.theme,
 			style: args.style,
+			design: args.design,
 			beats: beatGrid?.beats ?? [],
 		});
 		const htmlPath = join(work, "showcase.html");
@@ -361,6 +367,13 @@ export async function renderShowcase(
 				ffmpegPath,
 				signal,
 				maxDurationSec: 300,
+				// Several pages draw slices of the video at once, joined without re-encoding.
+				workers: options.workers ?? Math.max(1, Math.min(4, Math.floor(cpus().length / 3))),
+				createSource: options.createFrameSource,
+				// A few stills of the finished look, shown in the chat while it renders.
+				stills: options.onStill
+					? { dir: join(outDir, ".frames", `${stem}-live`), count: 8, onStill: (path) => options.onStill?.(path) }
+					: undefined,
 				onProgress: renderProgress(options.onProgress),
 			});
 		} finally {

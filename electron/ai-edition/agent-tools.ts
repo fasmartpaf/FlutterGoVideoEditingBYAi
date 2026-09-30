@@ -101,7 +101,7 @@ function withVideoBrandKit(document: AxcutDocument, prepared: PreparedToolMedia 
 	return writeBrandKit(document, prepared.videoBrandKit).document;
 }
 import { type MotionPlacement, placeMotionClip } from "./motionStudio/placement";
-import { showcaseArgsSchema } from "./showcase/plan";
+import { sanitizeShowcaseArgs, showcaseArgsSchema, showcaseToolSchema } from "./showcase/plan";
 import { placeShowcase } from "./showcase/placement";
 import {
 	MOTION_TEMPLATE_IDS,
@@ -953,7 +953,7 @@ export const setBrandKitArgs = brandKitPatchSchema.extend({
  * seconds; positions are fractions of the recording frame. Rendered in the
  * async media step.
  */
-export const createShowcaseVideoArgs = showcaseArgsSchema;
+export const createShowcaseVideoArgs = showcaseToolSchema;
 
 /** What the agent hears when it tries to export: the user exports with the Export button. */
 export const EXPORT_IS_USERS_CALL =
@@ -3911,7 +3911,7 @@ export function executeAgentTool(
 		}
 
 		case "createShowcaseVideo": {
-			const parsed = createShowcaseVideoArgs.safeParse(args);
+			const parsed = showcaseArgsSchema.safeParse(sanitizeShowcaseArgs(args));
 			if (!parsed.success) return failure(parsed.error.message);
 			const clip = options?.prepared?.showcaseClip;
 			if (!clip) {

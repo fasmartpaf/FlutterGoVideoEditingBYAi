@@ -41,7 +41,7 @@ import {
 	TEMPLATE_DEFAULT_SEC,
 } from "./motionStudio/templates";
 import { type MotionClipCheck, verifyMotionClip } from "./motionStudio/verify";
-import { type RecordingSignals, showcaseArgsSchema } from "./showcase/plan";
+import { type RecordingSignals, sanitizeShowcaseArgs, showcaseArgsSchema } from "./showcase/plan";
 import { renderProgress, renderShowcase, type ShowcaseClip } from "./showcase/render";
 import {
 	bakeStillToMp4,
@@ -217,6 +217,8 @@ export async function prepareAgentToolMedia(
 		createCompositorSampler?: () => Promise<CompositedFrameSampler | null>;
 		/** Live progress for long renders ("Rendering 420 / 930 frames · ~40s left"). */
 		onProgress?: (detail: string) => void;
+		/** A still of a long render as it is made (path). */
+		onStill?: (path: string) => void;
 		/** The recording's pointer samples (clicks), when the tool reads the cursor. */
 		cursorSamples?: RecordingSignals["cursor"];
 	},
@@ -379,7 +381,7 @@ export async function prepareAgentToolMedia(
 
 	if (name === "createShowcaseVideo" && ffmpegPath) {
 		try {
-			const parsed = showcaseArgsSchema.safeParse(a);
+			const parsed = showcaseArgsSchema.safeParse(sanitizeShowcaseArgs(a));
 			if (parsed.success) {
 				const { ensureVideoSummary } = await import("./videoSummary");
 				const summary = parsed.data.auto
@@ -399,9 +401,15 @@ export async function prepareAgentToolMedia(
 					signal,
 					createFrameSource: options.createFrameSource,
 					onProgress: options.onProgress,
+					onStill: options.onStill,
 				});
 				prepared.showcaseClip = clip;
 				if (!clip.cached) discardOnFailure.push(clip.mp4Path);
+			} else {
+				prepared.renderError = `the plan does not fit the showcase: ${parsed.error.issues
+					.slice(0, 4)
+					.map((i) => `${i.path.join(".")}: ${i.message}`)
+					.join("; ")}`;
 			}
 		} catch (err) {
 			if (err instanceof Error && err.name === "AbortError") throw err;

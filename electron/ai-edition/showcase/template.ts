@@ -41,7 +41,33 @@ export interface ShowcasePageInput {
 	style?: "premium" | "clean" | "bold";
 	/** Music beats (video seconds): the background pulses on them. */
 	beats?: number[];
+	/** Layout, frame, background, motion, entrance and card look — chosen to fit the request. */
+	design?: Partial<ShowcaseDesign>;
 }
+
+export interface ShowcaseDesign {
+	/** side = cards left of the window; right = cards on the right; bottom = a wide card under a bigger window. */
+	layout: "side" | "right" | "bottom";
+	/** browser = window with traffic-light bar; minimal = rounded screen only; device = a dark bezel like a laptop screen. */
+	frame: "browser" | "minimal" | "device";
+	/** aurora = moving light + grid floor; grid = strong tech grid; gradient = calm colour wash; particles = drifting sparks. */
+	background: "aurora" | "grid" | "gradient" | "particles";
+	/** How much the window tilts and sways. */
+	motion: "calm" | "normal" | "energetic";
+	/** How the window arrives: swing (3D turn), rise (up from below), zoom (grows in). */
+	entrance: "swing" | "rise" | "zoom";
+	/** Step card look: glass (frosted), solid, minimal (text and an accent bar only). */
+	cards: "glass" | "solid" | "minimal";
+}
+
+export const DEFAULT_DESIGN: ShowcaseDesign = {
+	layout: "side",
+	frame: "browser",
+	background: "aurora",
+	motion: "normal",
+	entrance: "swing",
+	cards: "glass",
+};
 
 export interface ShowcaseTiming {
 	/** When the recording starts playing in the finished video. */
@@ -133,24 +159,53 @@ export function renderShowcasePage(input: ShowcasePageInput): string {
 	const fw = input.timeline.footage.width;
 	const fh = input.timeline.footage.height;
 	const aspect = fw / fh;
-	const CHROME = 44;
+	const design: ShowcaseDesign = { ...DEFAULT_DESIGN, ...(input.design ?? {}) };
+	const layout = portrait ? "bottom" : design.layout;
+	const CHROME = design.frame === "browser" ? 44 : 0;
+	const BEZEL = design.frame === "device" ? 16 : 0;
 	const area = portrait
 		? { x: 60, y: hasSteps ? 190 : 260, w: 960, h: hasSteps ? 1080 : 1340 }
-		: hasSteps
-			? { x: 628, y: 70, w: 1212, h: 940 }
-			: { x: 170, y: 90, w: 1580, h: 900 };
-	let vw = area.w;
+		: !hasSteps
+			? { x: 170, y: 90, w: 1580, h: 900 }
+			: layout === "right"
+				? { x: 80, y: 70, w: 1212, h: 940 }
+				: layout === "bottom"
+					? { x: 250, y: 46, w: 1420, h: 770 }
+					: { x: 628, y: 70, w: 1212, h: 940 };
+	let vw = area.w - 2 * BEZEL;
 	let vh = vw / aspect;
-	if (vh > area.h - CHROME) {
-		vh = area.h - CHROME;
+	if (vh > area.h - CHROME - 2 * BEZEL) {
+		vh = area.h - CHROME - 2 * BEZEL;
 		vw = vh * aspect;
 	}
 	vw = Math.round(vw);
 	vh = Math.round(vh);
-	const win = { w: vw, h: vh + CHROME, x: Math.round(area.x + (area.w - vw) / 2), y: Math.round(area.y + (area.h - vh - CHROME) / 2) };
+	const ww = vw + 2 * BEZEL;
+	const wh = vh + CHROME + 2 * BEZEL;
+	const win = { w: ww, h: wh, x: Math.round(area.x + (area.w - ww) / 2), y: Math.round(area.y + (area.h - wh) / 2) };
 	const card = portrait
 		? { x: 90, w: 900, cy: Math.min(SH - 250, win.y + win.h + 230) }
-		: { x: 96, w: 480, cy: SH / 2 };
+		: layout === "right"
+			? { x: SW - 96 - 480, w: 480, cy: SH / 2 }
+			: layout === "bottom"
+				? { x: (SW - 1100) / 2, w: 1100, cy: Math.min(SH - 110, win.y + win.h + 125) }
+				: { x: 96, w: 480, cy: SH / 2 };
+	const link =
+		layout === "side"
+			? { left: card.x + card.w, width: Math.max(0, win.x - card.x - card.w), dotRight: true }
+			: layout === "right"
+				? { left: win.x + win.w, width: Math.max(0, card.x - win.x - win.w), dotRight: false }
+				: null;
+	const cardBg =
+		design.cards === "minimal"
+			? "transparent"
+			: design.cards === "solid"
+				? dark
+					? mix(base, "#ffffff", 0.1)
+					: "#ffffff"
+				: dark
+					? "linear-gradient(145deg,rgba(255,255,255,.14),rgba(255,255,255,.04))"
+					: "linear-gradient(145deg,rgba(255,255,255,.92),rgba(255,255,255,.72))";
 
 	const [nameMain, nameSuffix] = splitName(input.name);
 	const logoTag = input.logoFile
@@ -200,6 +255,8 @@ export function renderShowcasePage(input: ShowcasePageInput): string {
 		})),
 		tags: input.tags.slice(0, 8),
 		style,
+		layout,
+		design,
 		beats: (input.beats ?? []).filter((b) => b >= 0).slice(0, 2000),
 	};
 
@@ -233,7 +290,7 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 #b1{background:radial-gradient(closest-side,${rgba(p, bold ? 0.75 : dark ? 0.5 : 0.22)},${rgba(p, 0)})}
 #b2{background:radial-gradient(closest-side,${rgba(s, bold ? 0.7 : dark ? 0.46 : 0.2)},${rgba(s, 0)})}
 #b3{background:radial-gradient(closest-side,${rgba(mix(p, s, 0.5), dark ? 0.38 : 0.16)},${rgba(p, 0)})}
-#floor{${style === "clean" ? "display:none;" : ""}position:absolute;left:-700px;right:-700px;bottom:${portrait ? -300 : -260}px;height:${portrait ? 900 : 760}px;transform-origin:50% 0;transform:perspective(900px) rotateX(72deg);
+#floor{${style === "clean" || design.background === "gradient" || design.background === "particles" ? "display:none;" : ""}${design.background === "grid" ? "opacity:.85!important;" : ""}position:absolute;left:-700px;right:-700px;bottom:${portrait ? -300 : -260}px;height:${portrait ? 900 : 760}px;transform-origin:50% 0;transform:perspective(900px) rotateX(72deg);
  background-image:linear-gradient(${rgba(a2, dark ? 0.3 : 0.2)} 1.5px,transparent 1.5px),linear-gradient(90deg,${rgba(a2, dark ? 0.3 : 0.2)} 1.5px,transparent 1.5px);background-size:90px 90px;
  -webkit-mask-image:linear-gradient(to bottom,transparent 0%,#000 45%,#000 100%);opacity:.55}
 #bigmark{position:absolute;width:${portrait ? 900 : 980}px;height:${portrait ? 900 : 980}px;left:${portrait ? 380 : 1160}px;top:${portrait ? -200 : -240}px;opacity:${dark ? 0.08 : 0.07};object-fit:contain}
@@ -248,8 +305,8 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 #win{position:absolute;inset:0;transform-origin:30% 50%}
 #glow{position:absolute;inset:-3px;border-radius:25px;background:linear-gradient(135deg,${a2},${a1} 50%,${p})}
 #halo{position:absolute;inset:-40px;border-radius:60px;background:radial-gradient(closest-side,${rgba(a1, dark ? 0.35 : 0.22)},transparent)}
-#frame{position:absolute;inset:0;border-radius:22px;overflow:hidden;background:#fff;box-shadow:0 60px 140px -30px rgba(0,0,0,${dark ? 0.75 : 0.35})}
-.chrome{height:${CHROME}px;display:flex;align-items:center;gap:9px;padding:0 20px;background:linear-gradient(#FBFCFE,#F2F5F9);border-bottom:1px solid rgba(15,23,42,.08)}
+#frame{position:absolute;inset:0;border-radius:${BEZEL ? 30 : 22}px;overflow:hidden;background:#fff;box-shadow:0 60px 140px -30px rgba(0,0,0,${dark ? 0.75 : 0.35});${BEZEL ? `border:${BEZEL}px solid #0b0f17;` : ""}}
+.chrome{${CHROME ? "" : "display:none!important;"}height:${CHROME}px;display:flex;align-items:center;gap:9px;padding:0 20px;background:linear-gradient(#FBFCFE,#F2F5F9);border-bottom:1px solid rgba(15,23,42,.08)}
 .chrome i{width:12px;height:12px;border-radius:50%;background:#FF5F57}.chrome i:nth-child(2){background:#FEBC2E}.chrome i:nth-child(3){background:#28C840}
 .view{position:absolute;top:${CHROME}px;left:0;width:${vw}px;height:${vh}px;overflow:hidden;background:#fff}
 #cam{position:absolute;left:0;top:0;width:${vw}px;height:${vh}px;transform-origin:0 0}
@@ -263,8 +320,8 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 .chk{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;background:linear-gradient(135deg,#22C55E,#15803D);box-shadow:0 0 0 5px rgba(34,197,94,.18),0 6px 14px -4px rgba(21,128,61,.6);opacity:0;display:flex;align-items:center;justify-content:center}
 .chk svg{width:20px;height:20px}
 .co{position:absolute;left:${card.x}px;width:${card.w}px;padding:30px 32px 32px 38px;border-radius:26px;opacity:0;
- background:${dark ? "linear-gradient(145deg,rgba(255,255,255,.14),rgba(255,255,255,.04))" : "linear-gradient(145deg,rgba(255,255,255,.92),rgba(255,255,255,.72))"};border:1px solid ${dark ? "rgba(255,255,255,.2)" : "rgba(15,23,42,.08)"};
- box-shadow:0 40px 80px -30px rgba(0,0,0,${dark ? 0.6 : 0.25}),inset 0 1px 0 rgba(255,255,255,.25);backdrop-filter:blur(18px)}
+ background:${cardBg};border:1px solid ${design.cards === "minimal" ? "transparent" : dark ? "rgba(255,255,255,.2)" : "rgba(15,23,42,.08)"};
+ box-shadow:${design.cards === "minimal" ? "none" : `0 40px 80px -30px rgba(0,0,0,${dark ? 0.6 : 0.25}),inset 0 1px 0 rgba(255,255,255,.25)`};${design.cards === "glass" ? "backdrop-filter:blur(18px)" : ""}}
 .co:before{content:"";position:absolute;left:0;top:28px;bottom:28px;width:5px;border-radius:0 5px 5px 0;background:linear-gradient(${a2},${p})}
 .co .k{font:700 16px/1 ShowInter;letter-spacing:.2em;color:${a2};text-transform:uppercase;display:flex;align-items:center;gap:10px}
 .co .k b{display:inline-block;width:26px;height:2px;background:${a2}}
@@ -275,8 +332,8 @@ html,body{width:${input.width}px;height:${input.height}px;overflow:hidden;backgr
 .num{font:800 120px/1 ShowInter;letter-spacing:-.05em;background:linear-gradient(135deg,${dark ? mix(a2, "#ffffff", 0.5) : a2},${a1});-webkit-background-clip:text;background-clip:text;color:transparent}
 .bar{margin-top:20px;display:flex;gap:10px}.bar i{flex:1;height:8px;border-radius:4px;background:${dark ? "rgba(255,255,255,.14)" : "rgba(15,23,42,.08)"}}
 .bar i.on{background:linear-gradient(90deg,${a2},${a1});box-shadow:0 0 14px ${rgba(a2, 0.6)}}
-.link{position:absolute;height:2px;left:${card.x + card.w}px;width:${Math.max(0, win.x - card.x - card.w)}px;background:linear-gradient(90deg,${rgba(a2, 0.9)},${rgba(a2, 0.2)});opacity:0;transform-origin:0 50%;${portrait ? "display:none;" : ""}}
-.link:after{content:"";position:absolute;right:-6px;top:-5px;width:12px;height:12px;border-radius:50%;background:${a2};box-shadow:0 0 14px ${a2}}
+.link{position:absolute;height:2px;left:${link?.left ?? 0}px;width:${link?.width ?? 0}px;background:linear-gradient(${link?.dotRight === false ? 270 : 90}deg,${rgba(a2, 0.9)},${rgba(a2, 0.2)});opacity:0;transform-origin:${link?.dotRight === false ? "100%" : "0"} 50%;${link ? "" : "display:none;"}}
+.link:after{content:"";position:absolute;${link?.dotRight === false ? "left" : "right"}:-6px;top:-5px;width:12px;height:12px;border-radius:50%;background:${a2};box-shadow:0 0 14px ${a2}}
 #lock{position:absolute;left:0;top:0;display:flex;align-items:center;gap:28px;transform-origin:0 50%;opacity:0}
 #lock .lg{width:150px;height:150px;object-fit:contain}
 .lg.mono{border-radius:36px;background:linear-gradient(135deg,${a2},${p});display:flex;align-items:center;justify-content:center;font:800 64px/1 ShowInter;color:#fff}
@@ -314,12 +371,17 @@ const back=x=>{const c1=1.5,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,
 const stage=$('stage');const sc=Math.min(C.W/C.SW,C.H/C.SH);
 stage.style.transform='translate('+((C.W-C.SW*sc)/2)+'px,'+((C.H-C.SH*sc)/2)+'px) scale('+sc+')';
 let seed=7;const rnd=()=>{seed=(seed*16807)%2147483647;return (seed-1)/2147483646};
-const TILT=C.style==='clean'?0.35:C.style==='bold'?1.4:1;
-const dots=[];for(let i=0;i<(C.style==='clean'?14:C.style==='bold'?70:46);i++){const d=document.createElement('div');d.className='dot';const s=2+rnd()*4;d.style.width=d.style.height=s+'px';
+const MOTION={calm:.45,normal:1,energetic:1.6}[C.design.motion]||1;
+const TILT=(C.style==='clean'?0.35:C.style==='bold'?1.4:1)*MOTION;
+const SIDE=C.layout==='right'?-1:C.layout==='side'?1:0;
+const ENTER=C.design.entrance==='rise'?{ry:0,rx:12,ty:260,s:.95}:C.design.entrance==='zoom'?{ry:0,rx:0,ty:0,s:.72}:{ry:26*(SIDE||1),rx:16,ty:160,s:.9};
+const NDOTS=C.design.background==='particles'?110:C.design.background==='gradient'?10:C.style==='clean'?14:C.style==='bold'?70:46;
+const dots=[];for(let i=0;i<NDOTS;i++){const d=document.createElement('div');d.className='dot';const s=2+rnd()*4;d.style.width=d.style.height=s+'px';
  $('dots').appendChild(d);dots.push({el:d,x:rnd()*C.SW,y:rnd()*C.SH,sp:14+rnd()*30,ph:rnd()*6.28,a:.15+rnd()*.5});}
 // Tags sit in the margins around the window and cards.
 const W0=C.win;const spots=C.portrait?[[620,110],[850,50],[90,1520],[640,1580],[120,1820],[700,1840],[380,1700],[820,1700]]
- :[[110,C.card.cy-250],[330,C.card.cy-325],[120,C.card.cy+260],[300,C.card.cy+345],[W0.x+W0.w*.7,24],[W0.x+W0.w*.85,C.SH-54],[W0.x+W0.w*.38,C.SH-54],[W0.x+W0.w*.25,24]];
+ :C.layout==='bottom'?[[40,260],[60,560],[1700,300],[1690,600],[W0.x+W0.w*.3,4],[W0.x+W0.w*.7,4],[40,860],[1720,880]]
+ :[[C.card.x+14,C.card.cy-250],[C.card.x+234,C.card.cy-325],[C.card.x+24,C.card.cy+260],[C.card.x+204,C.card.cy+345],[W0.x+W0.w*.7,24],[W0.x+W0.w*.85,C.SH-54],[W0.x+W0.w*.38,C.SH-54],[W0.x+W0.w*.25,24]];
 const chips=C.tags.map((txt,i)=>{const d=document.createElement('div');d.className='fchip'+(i%2?'':' g');d.innerHTML='<i></i>';d.appendChild(document.createTextNode(txt));$('chips').appendChild(d);const p=spots[i%spots.length];return {el:d,x:p[0],y:p[1],ph:i*1.3}});
 const SX=C.vw/C.fw,SY=C.vh/C.fh;const marks=$('marks');
 const mk=(cls,html)=>{const d=document.createElement('div');d.className=cls;if(html)d.innerHTML=html;marks.appendChild(d);return d};
@@ -360,7 +422,7 @@ window.render=async(T)=>{
  // window
  const wi=eout(lin(T,C.t0-.3,C.t0+.65)), wo=C.outro?eio(lin(T,OUT,OUT+.75)):0;
  const sway=Math.sin(T*.55)*1.3;
- const ry=(-26*(1-wi)-(C.portrait?0:5)+sway)*TILT+wo*10, rx=(16*(1-wi)+2+Math.cos(T*.4)*.6)*TILT, ty=160*(1-wi)+wo*40, s=(0.9+0.1*wi)*(1-0.22*wo);
+ const ry=(-ENTER.ry*(1-wi)-5*SIDE+sway)*TILT+wo*10*(SIDE||1), rx=(ENTER.rx*(1-wi)+2+Math.cos(T*.4)*.6)*TILT, ty=ENTER.ty*(1-wi)+wo*40, s=(ENTER.s+(1-ENTER.s)*wi)*(1-0.22*wo);
  $('win').style.transform='translateY('+ty.toFixed(1)+'px) rotateY('+ry.toFixed(2)+'deg) rotateX('+rx.toFixed(2)+'deg) scale('+s.toFixed(4)+')';
  $('win').style.opacity=(clamp(wi*1.4)*(1-wo)).toFixed(3);
  $('winwrap').style.filter=wo>0?'blur('+(wo*8).toFixed(1)+'px)':'none';
@@ -378,7 +440,7 @@ window.render=async(T)=>{
   const vis=T>=C.t0?1:0;const e=back(inn);
   el.style.top=(C.card.cy-h/2)+'px';
   el.style.opacity=(vis*clamp(inn*1.6)*(1-out)).toFixed(3);
-  el.style.transform=(C.portrait?'translateY('+(60*(1-e)).toFixed(1)+'px)':'translate('+(-70*(1-e)).toFixed(1)+'px,'+(-34*out).toFixed(1)+'px)')+' scale('+(0.94+0.06*e).toFixed(4)+')';
+  el.style.transform=(C.layout==='bottom'?'translateY('+(60*(1-e)+20*out).toFixed(1)+'px)':'translate('+(-70*SIDE*(1-e)).toFixed(1)+'px,'+(-34*out).toFixed(1)+'px)')+' scale('+(0.94+0.06*e).toFixed(4)+')';
   const l=$('l'+k);if(l){l.style.top=C.card.cy+'px';const lp=lin(ft,st.in+.3,st.in+.6);l.style.opacity=(vis*lp*(1-out)).toFixed(3);l.style.transform='scaleX('+eout(lp).toFixed(3)+')'}
   if(st.count!==null){const inWin=done.filter(a=>a>=st.in-.5&&a<=st.out).length;const hasChecks=C.checks.some(c=>c.at>=st.in-.5&&c.at<=st.out);
    const v=hasChecks?Math.min(st.count,inWin):Math.round(st.count*eout(lin(ft,st.in+.35,st.in+1.5)));
@@ -388,7 +450,7 @@ window.render=async(T)=>{
  if(C.hasBrand){
   const lw=lock.scrollWidth;const cx=C.SW/2-lw/2, cy=C.SH/2-75;
   const mv=C.intro?eio(lin(T,.8,1.3)):1;const bk=C.outro?eio(lin(T,OUT+.3,OUT+1.0)):0;const k=mv*(1-bk);
-  const bs=0.34,bxp=C.portrait?54:60,byp=C.portrait?40:-8;
+  const bs=0.34,bxp=C.portrait?54:C.layout==='right'?C.SW-60-lw*bs:60,byp=C.portrait?40:-8;
   const X=cx+(bxp-cx)*k,Y=cy+(byp-cy)*k,S=1+(bs-1)*k;
   const intro=C.intro?lin(T,0,.55):1;
   lock.style.transform='translate('+X.toFixed(1)+'px,'+Y.toFixed(1)+'px) scale('+S.toFixed(4)+')';

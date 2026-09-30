@@ -116,6 +116,20 @@ export const showcaseArgsSchema = z.object({
 	theme: z.enum(["dark", "light"]).default("dark"),
 	/** Look: premium (dark, cinematic — default), clean (light, calm), bold (saturated brand colours, stronger motion). Overrides theme. */
 	style: z.enum(["premium", "clean", "bold"]).optional(),
+	/**
+	 * The design, chosen to fit what the user asked for and what the video is —
+	 * not the same every time. Anything left out uses the default look.
+	 */
+	design: z
+		.object({
+			layout: z.enum(["side", "right", "bottom"]).optional(),
+			frame: z.enum(["browser", "minimal", "device"]).optional(),
+			background: z.enum(["aurora", "grid", "gradient", "particles"]).optional(),
+			motion: z.enum(["calm", "normal", "energetic"]).optional(),
+			entrance: z.enum(["swing", "rise", "zoom"]).optional(),
+			cards: z.enum(["glass", "solid", "minimal"]).optional(),
+		})
+		.optional(),
 	/** Shape: the project's own (default), 16:9 landscape, or 9:16 vertical for Shorts / Reels / TikTok. */
 	format: z.enum(["project", "16:9", "9:16"]).default("project"),
 	/** Sharpen and lift contrast of the recording (default true). */
@@ -143,6 +157,77 @@ export const showcaseArgsSchema = z.object({
 });
 
 export type ShowcaseArgs = z.infer<typeof showcaseArgsSchema>;
+
+/**
+ * What the agent's tool call is checked against: every field still documented
+ * (so the model sees the plan's shape), but nothing is refused at the door —
+ * an over-long title or an extra card would otherwise fail the whole call
+ * before it starts. `sanitizeShowcaseArgs` then trims the plan to fit.
+ */
+export const showcaseToolSchema = z.object(
+	Object.fromEntries(
+		Object.entries(showcaseArgsSchema.shape).map(([key, field]) => [key, z.union([field, z.unknown()]).optional()]),
+	) as { [K in keyof typeof showcaseArgsSchema.shape]: z.ZodOptional<z.ZodUnion<[(typeof showcaseArgsSchema.shape)[K], z.ZodUnknown]>> },
+);
+
+const clampNum = (v: unknown, min: number, max: number) =>
+	typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : v;
+const cut = (v: unknown, max: number) => {
+	if (typeof v !== "string") return v;
+	const t = v.trim().replace(/\s+/g, " ");
+	if (t.length <= max) return t;
+	const at = t.lastIndexOf(" ", max - 1);
+	return `${t.slice(0, at > max * 0.6 ? at : max - 1).trim()}…`.slice(0, max);
+};
+const list = (v: unknown, max: number) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object").slice(0, max) : v);
+
+/**
+ * Bend an agent's plan into the showcase's limits instead of refusing it:
+ * numbers clamped, lists shortened, text trimmed at a word. Anything the
+ * schema still rejects after this is reported back as a real error.
+ */
+export function sanitizeShowcaseArgs(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const a: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+	const box = (o: Record<string, unknown>) => {
+		for (const k of ["x", "y"]) o[k] = clampNum(o[k], 0, 1);
+		for (const k of ["width", "height"]) o[k] = clampNum(o[k], 0.001, 1);
+		for (const k of ["startSec", "endSec", "atSec", "untilSec"]) o[k] = clampNum(o[k], 0, 1e6);
+		return o;
+	};
+	const each = (v: unknown, max: number, fix: (o: Record<string, unknown>) => Record<string, unknown>) => {
+		const l = list(v, max);
+		return Array.isArray(l) ? l.map((o) => fix({ ...(o as Record<string, unknown>) })) : l;
+	};
+	a.speed = each(a.speed, 12, (o) => ({ ...box(o), rate: clampNum(o.rate, 1.1, 8) }));
+	a.focus = each(a.focus, 12, (o) => ({ ...box(o), zoom: clampNum(o.zoom, 1.05, 2.2) }));
+	a.steps = each(a.steps, 8, (o) => ({
+		...box(o),
+		title: cut(o.title, 48),
+		accent: cut(o.accent, 40),
+		body: cut(o.body, 110),
+		kicker: cut(o.kicker, 24),
+		count: typeof o.count === "number" ? Math.round(Math.min(999, Math.max(0, o.count))) : o.count,
+	}));
+	a.highlights = each(a.highlights, 12, box);
+	a.checks = each(a.checks, 20, box);
+	a.clicks = each(a.clicks, 20, box);
+	a.covers = each(a.covers, 12, box);
+	if (a.crop && typeof a.crop === "object") a.crop = box({ ...(a.crop as Record<string, unknown>) });
+	if (Array.isArray(a.tags)) a.tags = a.tags.filter((t) => typeof t === "string" && t.trim()).slice(0, 8).map((t) => cut(t, 24));
+	a.tagline = cut(a.tagline, 60);
+	a.url = cut(a.url, 40);
+	a.label = cut(a.label, 80);
+	if (a.music && typeof a.music === "object") {
+		const m = { ...(a.music as Record<string, unknown>) };
+		m.volume = clampNum(m.volume, 0.05, 1);
+		m.startAtSec = clampNum(m.startAtSec, 0, 1e6);
+		a.music = m;
+	}
+	if (typeof a.fps === "number") a.fps = a.fps > 45 ? 60 : 30;
+	for (const k of Object.keys(a)) if (a[k] === undefined) delete a[k];
+	return a;
+}
 
 /** A stretch of the source played at one rate. */
 export interface TimeSegment {
