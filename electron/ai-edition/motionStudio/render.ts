@@ -28,6 +28,11 @@ export interface FrameSource {
 	): Promise<void>;
 	/** Seek to `ms` on the virtual clock and return the frame as PNG bytes. */
 	frame(ms: number): Promise<Buffer>;
+	/**
+	 * Optional fast path: the frame as raw pixels (no PNG encode/decode, which
+	 * costs more than drawing the frame). Every frame must have the same size.
+	 */
+	frameRaw?(ms: number): Promise<{ data: Buffer; width: number; height: number; format: "bgra" | "rgba" }>;
 	/** Script errors the page reported so far. */
 	errors(): Promise<string[]>;
 	close(): Promise<void>;
@@ -50,6 +55,15 @@ export interface RenderCompositionInput {
 	onProgress?: (done: number, total: number) => void;
 	/** Longest render allowed (default 60 s; a showcase of a whole recording is longer). */
 	maxDurationSec?: number;
+	/**
+	 * Render in this many pages at once (each takes a slice of the frames and
+	 * the slices are joined without re-encoding). Needs `createSource`.
+	 */
+	workers?: number;
+	/** Opens another page for a parallel worker. */
+	createSource?: () => Promise<FrameSource | null>;
+	/** Save a still every so often while rendering (for the chat to show) and report its path. */
+	stills?: { dir: string; count: number; onStill: (path: string, frame: number) => void };
 }
 
 export interface RenderCompositionResult {
@@ -82,7 +96,12 @@ function startEncoder(input: {
 	width: number;
 	height: number;
 	outPath: string;
+	/** Raw pixels on stdin instead of PNGs. */
+	raw?: { width: number; height: number; format: "bgra" | "rgba" };
 }) {
+	const inputArgs = input.raw
+		? ["-f", "rawvideo", "-pix_fmt", input.raw.format, "-s", `${input.raw.width}x${input.raw.height}`, "-framerate", String(input.fps), "-i", "-"]
+		: ["-f", "image2pipe", "-framerate", String(input.fps), "-c:v", "png", "-i", "-"];
 	const child = spawn(
 		input.ffmpegPath,
 		[
@@ -90,14 +109,7 @@ function startEncoder(input: {
 			"-hide_banner",
 			"-loglevel",
 			"error",
-			"-f",
-			"image2pipe",
-			"-framerate",
-			String(input.fps),
-			"-c:v",
-			"png",
-			"-i",
-			"-",
+			...inputArgs,
 			"-vf",
 			`scale=${input.width}:${input.height}:flags=lanczos,format=yuv420p`,
 			"-c:v",
@@ -157,29 +169,128 @@ export async function renderComposition(input: RenderCompositionInput): Promise<
 	// (flicker, missing words, judder). Draw at most 1920 on the long side and
 	// let the encoder's lanczos scale bring it back to the project size.
 	const scale = Math.min(1, MAX_RENDER_SIDE / Math.max(width, height));
-	await source.open(input.compositionPath, { width, height }, scale < 1 ? { scale } : undefined);
-	const encoder = startEncoder({ ffmpegPath: input.ffmpegPath, encoder: encoderName, fps, width, height, outPath: input.outPath });
-	let ok = false;
+	const openOptions = scale < 1 ? { scale } : undefined;
+
+	// Long renders are split across several pages; short ones are not worth the start-up.
+	const workers = input.createSource ? Math.max(1, Math.min(input.workers ?? 1, Math.floor(total / 90))) : 1;
+	const done = new Array<number>(workers).fill(0);
+	const report = () => input.onProgress?.(done.reduce((a, b) => a + b, 0), total);
+	const slices = Array.from({ length: workers }, (_, k) => [Math.floor((total * k) / workers), Math.floor((total * (k + 1)) / workers)] as const);
+	const parts = workers === 1 ? [input.outPath] : slices.map((_, k) => `${input.outPath}.part${k}.mp4`);
+	const pageErrors: string[] = [];
+	// Evenly spaced stills of the video as it is made (a few, so they cost little).
+	const stillFrames = new Set<number>();
+	if (input.stills && input.stills.count > 0) {
+		mkdirSync(input.stills.dir, { recursive: true });
+		for (let j = 1; j <= input.stills.count; j++) stillFrames.add(Math.min(total - 1, Math.floor((total * j) / (input.stills.count + 1))));
+	}
+	// One slice failing stops the others instead of letting them draw for nothing.
+	let sliceFailed = false;
+
+	const renderSlice = async (k: number, src: FrameSource) => {
+		const [from, to] = slices[k]!;
+		let encoder: ReturnType<typeof startEncoder> | null = null;
+		let ok = false;
+		try {
+			await src.open(input.compositionPath, { width, height }, openOptions);
+			for (let i = from; i < to; i++) {
+				if (signal?.aborted || sliceFailed) throw abortError();
+				const ms = (i * 1000) / fps;
+				if (src.frameRaw) {
+					const raw = await src.frameRaw(ms);
+					encoder ??= startEncoder({
+						ffmpegPath: input.ffmpegPath,
+						encoder: encoderName,
+						fps,
+						width,
+						height,
+						outPath: parts[k]!,
+						raw: { width: raw.width, height: raw.height, format: raw.format },
+					});
+					await encoder.write(raw.data);
+				} else {
+					encoder ??= startEncoder({ ffmpegPath: input.ffmpegPath, encoder: encoderName, fps, width, height, outPath: parts[k]! });
+					await encoder.write(await src.frame(ms));
+				}
+				if (stillFrames.has(i)) {
+					try {
+						const png = await src.frame(ms);
+						const path = join(input.stills!.dir, `still-${String(i).padStart(5, "0")}.png`);
+						writeFileSync(path, png);
+						input.stills!.onStill(path, i);
+					} catch {
+						// a missing preview still never stops the render
+					}
+				}
+				done[k] = i - from + 1;
+				report();
+			}
+			const { code, stderr } = encoder ? await encoder.finish() : { code: 1, stderr: "no frames" };
+			if (code !== 0 || !existsSync(parts[k]!)) {
+				throw new Error(`Motion render encode failed (${encoderName}): ${stderr.slice(-600) || `exit ${code}`}`);
+			}
+			pageErrors.push(...(await src.errors()));
+			ok = true;
+		} finally {
+			if (!ok) encoder?.kill();
+			await src.close().catch(() => undefined);
+		}
+	};
+
 	try {
-		for (let i = 0; i < total; i++) {
-			if (signal?.aborted) throw abortError();
-			const png = await source.frame((i * 1000) / fps);
-			await encoder.write(png);
-			input.onProgress?.(i + 1, total);
+		const sources: FrameSource[] = [source];
+		for (let k = 1; k < workers; k++) {
+			const extra = await input.createSource!();
+			if (!extra) break;
+			sources.push(extra);
 		}
-		const { code, stderr } = await encoder.finish();
-		if (code !== 0 || !existsSync(input.outPath)) {
-			throw new Error(`Motion render encode failed (${encoderName}): ${stderr.slice(-600) || `exit ${code}`}`);
+		if (sources.length < workers) {
+			// Could not open every page: fall back to one page for everything.
+			for (const s of sources.slice(1)) await s.close().catch(() => undefined);
+			return await renderComposition({ ...input, workers: 1, createSource: undefined });
 		}
-		const pageErrors = await source.errors();
-		ok = true;
-		return { mp4Path: input.outPath, frames: total, durationSec: total / fps, fps, width, height, pageErrors };
+		const results = await Promise.allSettled(
+			sources.map((src, k) =>
+				renderSlice(k, src).catch((err) => {
+					sliceFailed = true;
+					throw err;
+				}),
+			),
+		);
+		const firstFailure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+		if (firstFailure) {
+			// Report the real failure, not the stop the other slices saw.
+			const real = results.find(
+				(r): r is PromiseRejectedResult => r.status === "rejected" && !(r.reason instanceof Error && r.reason.name === "AbortError"),
+			);
+			throw (real ?? firstFailure).reason;
+		}
+		if (workers > 1) {
+			const list = `${input.outPath}.parts.txt`;
+			writeFileSync(list, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
+			const joined = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+				const child = spawn(
+					input.ffmpegPath,
+					["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", input.outPath],
+					{ stdio: ["ignore", "ignore", "pipe"], windowsHide: true },
+				);
+				let err = "";
+				child.stderr.setEncoding("utf8");
+				child.stderr.on("data", (d: string) => {
+					err = (err + d).slice(-2000);
+				});
+				child.on("close", (code) => resolve({ code, stderr: err }));
+				child.on("error", () => resolve({ code: 1, stderr: "could not start ffmpeg" }));
+			});
+			rmSync(list, { force: true });
+			if (joined.code !== 0 || !existsSync(input.outPath)) throw new Error(`Could not join the rendered parts: ${joined.stderr}`);
+		}
+		return { mp4Path: input.outPath, frames: total, durationSec: total / fps, fps, width, height, pageErrors: [...new Set(pageErrors)].slice(0, 20) };
+	} catch (err) {
+		rmSync(input.outPath, { force: true });
+		throw err;
 	} finally {
-		if (!ok) {
-			encoder.kill();
-			rmSync(input.outPath, { force: true });
-		}
-		await source.close().catch(() => undefined);
+		if (workers > 1) for (const p of parts) rmSync(p, { force: true });
 	}
 }
 

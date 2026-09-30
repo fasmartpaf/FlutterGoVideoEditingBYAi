@@ -13,6 +13,7 @@ const PAINT_TIMEOUT_MS = 3_000;
 
 export function createElectronFrameSource(): FrameSource {
 	let win: BrowserWindow | null = null;
+	let rawSize: { width: number; height: number } | null = null;
 
 	const nextPaint = (w: BrowserWindow): Promise<NativeImage | null> =>
 		new Promise((resolve) => {
@@ -82,7 +83,24 @@ export function createElectronFrameSource(): FrameSource {
 			const image = painted && !painted.isEmpty() ? painted : await w.webContents.capturePage();
 			return image.toPNG();
 		},
-		async errors() {
+		async frameRaw(ms) {
+			const w = win;
+			if (!w) throw new Error("Motion renderer is not open.");
+			await w.webContents.executeJavaScript(
+				`window.__osSeek(${Number(ms)}).then(() => window.__osSettle ? window.__osSettle() : 0)`,
+				true,
+			);
+			const painted = await nextPaint(w);
+			const image = painted && !painted.isEmpty() ? painted : await w.webContents.capturePage();
+			// Every frame must match the first one's size (a fallback capture can differ).
+			let img = image;
+			const got = img.getSize();
+			rawSize ??= got;
+			if (got.width !== rawSize.width || got.height !== rawSize.height) img = img.resize(rawSize);
+			// Native byte order: BGRA on macOS and Windows (little-endian ARGB32).
+			return { data: img.toBitmap(), width: rawSize.width, height: rawSize.height, format: "bgra" as const };
+		},
+				async errors() {
 			if (!win) return [];
 			const list = await win.webContents.executeJavaScript("window.__osErrors || []", true);
 			return Array.isArray(list) ? list.map(String).slice(0, 20) : [];
