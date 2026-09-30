@@ -78,6 +78,9 @@ const CAPTION_TOOLS = ["generateCaptions", "setCaptionSettings", "setWordText"] 
 const GRAPHICS_TOOLS = [
 	"createMotionClip",
 	"createShowcaseVideo",
+	"addLayer",
+	"setLayer",
+	"removeLayer",
 	"placeMotionClip",
 	"addMotionOverlay",
 	"setBrandKit",

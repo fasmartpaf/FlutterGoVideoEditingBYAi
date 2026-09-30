@@ -159,8 +159,8 @@ export async function bakeLayer(
 
 	const fps = LAYER_FPS;
 	const frameCount = layerSequenceFrameCount(layer, durationSec, fps);
-	const states = Array.from({ length: frameCount }, (_, i) => layerStateAt(layer, i / fps));
 	const src = { width: layer.source.width, height: layer.source.height };
+	const states = Array.from({ length: frameCount }, (_, i) => layerStateAt(layer, i / fps, durationSec, { canvas, source: src }));
 	const borderPx = layer.borderWidth * canvas.width;
 	const pad = Math.ceil(borderPx + (layer.shadow > 0 ? 48 * layer.shadow + 16 : 2));
 	const bounds = layerBoundsPx(states, src, canvas, pad);

@@ -71,6 +71,9 @@ const OPENSCREEN_STATUS: Record<string, string> = {
 	registerCharacter: "Registering character",
 	exportProject: "Exporting",
 	createShowcaseVideo: "Making the showcase video",
+	addLayer: "Adding a layer",
+	setLayer: "Changing a layer",
+	removeLayer: "Removing a layer",
 	record: "Recording",
 	recordScreen: "Recording the screen",
 };

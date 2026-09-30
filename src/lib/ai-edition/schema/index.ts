@@ -652,6 +652,11 @@ export const layerSchema = endGteStart(
 		rotation: z.number().min(-3600).max(3600).default(0),
 		opacity: z.number().min(0).max(1).default(1),
 		keyframes: z.array(layerKeyframeSchema).default([]),
+		/** Entrance / exit moves (fade, slide-left, pop, …) — generated keyframes around the resting pose above. */
+		animateIn: z.string().default("none"),
+		animateOut: z.string().default("none"),
+		/** Length of the entrance and of the exit, seconds. */
+		animateSec: z.number().min(0.05).max(10).default(0.5),
 		/** Corner rounding as a fraction of the layer's shorter side (0.5 = pill/circle). */
 		cornerRadius: z.number().min(0).max(0.5).default(0),
 		/** Drop shadow strength 0-1. */

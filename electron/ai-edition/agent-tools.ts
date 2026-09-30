@@ -92,6 +92,8 @@ import {
 import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentToolMedia";
 import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { IMAGE_CLIP_FITS, IMAGE_CLIP_MOTIONS, isImageClipPath } from "./imageClip";
+import { applyLayerTool } from "./layers/layerTools";
+import { findLayer, layerCanvasSize, layerSpanMs, updateLayer } from "../../src/lib/ai-edition/document/layers";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
 import { brandKitPatchSchema, readBrandKit, storedBrandKit, writeBrandKit } from "./motionStudio/brandKit";
@@ -1242,6 +1244,9 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"listMotionTemplates",
 	"createMotionClip",
 	"createShowcaseVideo",
+	"addLayer",
+	"setLayer",
+	"removeLayer",
 	"placeMotionClip",
 	"addMotionOverlay",
 	"setBrandKit",
@@ -1365,6 +1370,9 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"addLayer",
+	"setLayer",
+	"removeLayer",
 	"createMotionClip",
 	"createShowcaseVideo",
 	"placeMotionClip",
@@ -3939,6 +3947,70 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "addLayer":
+		case "setLayer":
+		case "removeLayer": {
+			const prep = options?.prepared?.layer;
+			const newLayerId = prep?.layerId ?? createId("layer");
+			const layerPath = typeof (args as { path?: unknown })?.path === "string" ? (args as { path: string }).path : null;
+			if (layerPath) {
+				try {
+					const abs = assertSafeLocalMediaPath(layerPath, "layer path");
+					if (!existsSync(abs)) return failure(`Layer file not found: ${abs}`);
+					args = { ...(args as object), path: abs };
+				} catch (err) {
+					return failure(err instanceof Error ? err.message : String(err));
+				}
+			}
+			const applied = applyLayerTool(document, name, args, {
+				newLayerId,
+				canvas: layerCanvasSize(document),
+				source: prep?.source,
+			});
+			if (!applied.ok) return failure(applied.error);
+			let next = applied.document;
+			const warnings: string[] = [];
+			if (name !== "removeLayer") {
+				if (prep?.render && prep.layerId === applied.layerId) {
+					next = updateLayer(next, applied.layerId, (f) => ({
+						...f,
+						source: { ...f.source, width: prep.source?.width ?? f.source.width, height: prep.source?.height ?? f.source.height },
+						render: prep.render ?? null,
+					}));
+				} else {
+					warnings.push(
+						`The layer is placed but not drawn yet${options?.prepared?.layerError ? `: ${options.prepared.layerError}` : ""}. It will not show until it is drawn — call setLayer on it again.`,
+					);
+				}
+			}
+			const frags = findLayer(next, applied.layerId);
+			const head = frags[0];
+			const span = frags.length ? layerSpanMs(frags) : null;
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					layerId: applied.layerId,
+					changed: applied.changed,
+					...(head && span
+						? {
+								startSec: span.startMs / 1000,
+								endSec: span.endMs / 1000,
+								fragments: frags.length,
+								source: head.source.kind,
+								pose: { x: head.x, y: head.y, scale: head.scale, rotation: head.rotation, opacity: head.opacity },
+								animateIn: head.animateIn,
+								animateOut: head.animateOut,
+								keyframes: head.keyframes.length,
+								drawn: Boolean(head.render),
+							}
+						: {}),
+					...(warnings.length ? { warnings } : {}),
+				}),
+				summary: applied.summary,
 			};
 		}
 

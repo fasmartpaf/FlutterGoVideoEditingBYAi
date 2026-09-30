@@ -20,12 +20,16 @@ import {
 	loadImageFileAsDataUri,
 	renderPlatePng,
 } from "../../src/lib/ai-edition/document/graphicPlate";
-import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import type { AxcutDocument, AxcutLayerRender } from "../../src/lib/ai-edition/schema";
+import { createId as createLayerId } from "../../src/lib/ai-edition/document/ids";
+import { findLayer, layerCanvasSize } from "../../src/lib/ai-edition/document/layers";
+import { bakeLayer } from "./layers/bake";
+import { applyLayerTool, layerSourceKind } from "./layers/layerTools";
 import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from "./mediaStudio";
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
 import { type BrandKit, DEFAULT_BRAND_KIT, storedBrandKit } from "./motionStudio/brandKit";
 import { readGlobalBrandKit } from "./motionStudio/globalBrandKit";
-import { type BakedImageClip, bakeImageClip, getMediaHome, isImageClipPath, primaryVideoSize } from "./imageClip";
+import { type BakedImageClip, bakeImageClip, getMediaHome, isImageClipPath, primaryVideoSize, probeImageSize } from "./imageClip";
 import { deriveBrandKitFromVideo, paletteSourceVideo } from "./motionStudio/videoPalette";
 import type { CompositedFrameSampler } from "./compositorVerify/types";
 import { type SampleFramesResult, sampleFramesForAgent } from "./frameCheck";
@@ -59,6 +63,13 @@ import {
 
 /** Results of async media work, handed to the synchronous executor. */
 export interface PreparedToolMedia {
+	/** addLayer / setLayer: the layer drawn ahead of the edit (same id the executor uses). */
+	layer?: {
+		layerId: string;
+		render?: AxcutLayerRender;
+		source?: { width?: number; height?: number; durationSec?: number };
+	};
+	layerError?: string;
 	/** importMedia of a picture: the picture baked into a clip. */
 	imageClip?: BakedImageClip;
 	/** Why a picture could not be baked (the executor reports it). */
@@ -295,6 +306,51 @@ export async function prepareAgentToolMedia(
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;
 			}
+		}
+	}
+
+	if ((name === "addLayer" || name === "setLayer") && options.mayMutate) {
+		try {
+			const layerId = name === "addLayer" ? createLayerId("layer") : (findLayer(document, str(a.layerId) ?? "")[0]?.layerId ?? "");
+			const rawPath = str(a.path);
+			const path = rawPath ? assertSafeLocalMediaPath(rawPath, "layer path") : null;
+			let source: { width?: number; height?: number; durationSec?: number } | undefined;
+			if (path && existsSync(path) && ffmpegPath) {
+				const kind = layerSourceKind(path);
+				if (kind === "image") {
+					const size = await probeImageSize(ffmpegPath, path, signal);
+					if (size) source = size;
+				} else if (kind === "video") {
+					const { runProcess } = await import("./mediaStudio");
+					const { parseFfmpegProbe } = await import("./showcase/render");
+					const probe = await runProcess(ffmpegPath, ["-hide_banner", "-i", path], { timeoutMs: 20_000, signal }).catch(() => null);
+					const info = probe ? parseFfmpegProbe(probe.stderr) : null;
+					if (info) source = { width: info.width, height: info.height, durationSec: info.durationSec };
+				}
+			}
+			const applied = applyLayerTool(document, name, path ? { ...a, path } : a, {
+				newLayerId: layerId || createLayerId("layer"),
+				canvas: layerCanvasSize(document),
+				source,
+			});
+			prepared.layer = { layerId: applied.ok ? applied.layerId : layerId, source };
+			if (applied.ok && options.createFrameSource) {
+				const baked = await bakeLayer(applied.document, applied.layerId, {
+					ffmpegPath,
+					createFrameSource: options.createFrameSource,
+					outRoot: join(resolveGeneratedGraphicsDir(document), "layers"),
+					signal,
+					onProgress: (done, total) => {
+						if (total > 20 && (done === 1 || done % 15 === 0 || done === total)) {
+							options.onProgress?.(`Drawing the layer · ${done} / ${total} frames`);
+						}
+					},
+				});
+				prepared.layer = { layerId: applied.layerId, render: baked.render, source };
+			}
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			prepared.layerError = err instanceof Error ? err.message : String(err);
 		}
 	}
 

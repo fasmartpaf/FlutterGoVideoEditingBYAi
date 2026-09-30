@@ -72,6 +72,9 @@ const ARGS: Record<string, unknown> = {
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
 	createShowcaseVideo: { place: "none" },
+	addLayer: { path: "/tmp/logo.png", startSec: 0 },
+	setLayer: { layerId: "layer_x", opacity: 0.5 },
+	removeLayer: { layerId: "layer_x" },
 	placeMotionClip: { videoPath: "/nonexistent/clip.mp4", place: "end", durationSec: 2 },
 	addMotionOverlay: { template: "cornerBadge", params: { text: "NEW" }, x: 80, y: 5, width: 14, height: 8, startSec: 1 },
 	setBrandKit: { primary: "#112233" },
@@ -337,7 +340,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {

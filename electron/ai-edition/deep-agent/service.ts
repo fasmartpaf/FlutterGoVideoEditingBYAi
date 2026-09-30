@@ -96,6 +96,7 @@ import {
 	addMotionOverlayArgs,
 	setBrandKitArgs,
 } from "../agent-tools";
+import { addLayerArgs, removeLayerArgs, setLayerArgs } from "../layers/layerTools";
 import { overagentCookbookSection } from "../overagentEditCookbook";
 import { resolveFfmpeg } from "../../media/audioPeaks";
 import type { FrameSource } from "../motionStudio/render";
@@ -398,7 +399,7 @@ const BASE_SYSTEM_PROMPT = [
 	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
 	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim. addClip places an unused recording already in this project onto the timeline (projectQueue.unusedAssets lists them; beforeClipId works like moveClip). setClipCrop sets a clip's cropRegion in 0–1 frame fractions; pass crop: null to clear it.",
 	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen and can set textAnimation (fade, rise, pop, slide-left, typewriter, pulse) — that is a TEXT enter animation on an overlay, not a clip-to-clip transition. Clip-to-clip transitions: splitClip then setClipIncomingTransition on the right half (kind dissolve/cut or transitionId from listTransitions). addGraphic creates a title, lower third, badge, CTA, bar, arrow, or image OVERLAY on existing footage — preview and export already composite it. For a start-of-video thumbnail/cover that should be its OWN opening segment, use insertStartThumbnail (never a full-bleed addGraphic at 0s — that hides the take). addCameraFullscreen enlarges the webcam where assets[].hasCameraTrack is true.`,
-	"- Structure tools: splitClip, duplicateClip, importMedia (video/audio from disk, or a picture as a clip with an optional camera move), insertStartThumbnail (still→opening clip), moveClip, removeClip, setClipRange, setClipCrop, tightenPacing, removeFillerWords.",
+	"- Structure tools: splitClip, duplicateClip, importMedia (video/audio from disk, or a picture as a clip with an optional camera move), addLayer / setLayer / removeLayer (pictures or videos ON TOP of the video: picture-in-picture, logos, B-roll, with position, keyframes and entrance/exit moves), insertStartThumbnail (still→opening clip), moveClip, removeClip, setClipRange, setClipCrop, tightenPacing, removeFillerWords.",
 	"- addAudio lays an imported voiceover or music file over a span. It plays an asset the project already has (kind 'audio'); import with importMedia(path, kind:\"audio\") first. gainDb and fadeInSec/fadeOutSec are the official level and fades. There is no multi-band EQ field; say so if asked.",
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
 	"- Deleting is a first-class action, not a workaround: removeTrim, removeModifier, removeClip. Never fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
@@ -508,6 +509,11 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Split one timeline clip into two at a SOURCE-time instant (atSourceSec). The right half is born with a hard-cut incoming transition so the join stays a real edit boundary — then call setClipIncomingTransition on the right clip id for dissolve/wipe/etc. Use when the user wants a transition mid-recording or to split before deleting/reordering one half.",
 	duplicateClip:
 		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
+	addLayer:
+		"Put a PICTURE or VIDEO on a LAYER above the main video (picture-in-picture, a logo, B-roll over the talk, a sticker, a product shot). path = absolute file (png/jpg/webp or mp4/mov/webm — e.g. a file the user attached). startSec/endSec = when it shows on the timeline (omit endSec: 5 s for a picture, the rest of the file for a video). Place it with position = center | top-left | top | top-right | left | right | bottom-left | bottom | bottom-right | full, and scale = its width as a fraction of the frame (0.28 corner PiP default, 0.5 centre, 0.12 for a small logo); or exact x/y = its CENTRE as 0-1 of the frame. rotation (degrees), opacity 0-1. Look: cornerRadius (0-0.5 of the short side; 0.5 = pill/circle), shadow 0-1, borderWidth (fraction of frame width, e.g. 0.004) + borderColor. Motion: animateIn / animateOut = fade | slide-left | slide-right | slide-up | slide-down | pop | zoom | spin (animateSec = their length, default 0.5), and/or keyframes [{atSec (from the layer's start), x?, y?, scale?, rotation?, opacity?, ease: linear|ease-in|ease-out|ease-in-out}] — each keyframe sets only the values it names; values glide there from the previous point and hold after the last. The layer is drawn right away (preview and export match). Returns layerId, its pose and whether it was drawn.",
+	setLayer:
+		"Change a layer by layerId (from addLayer or getCurrentDocument.layers): any of the addLayer fields — position/scale/x/y/rotation/opacity, look, animateIn/animateOut/animateSec, startSec/endSec to move or resize it in time, path to swap the picture/video. keyframes replaces the layer's own keyframes, addKeyframes adds some, clearKeyframes removes them. Only what you pass changes; the layer is redrawn.",
+	removeLayer: "Delete a layer (every part of it) by layerId.",
 	importMedia:
 		"Import a video, audio or PICTURE file from an absolute path on this machine into the project assets. Optional kind (video|audio), label, durationSec (required if ffprobe cannot probe). placeOnTimeline defaults true for video (lays a clip); false for audio — then use addAudio. This is how you add B-roll or music from disk. A PICTURE (png/jpg/jpeg/webp/bmp — e.g. a file the user attached) becomes a real clip on the timeline: durationSec = how long it shows (default 4, max 60), motion = none | zoom-in | zoom-out | pan-left | pan-right | pan-up | pan-down (a slow, smooth camera move — use one for story/photo videos, vary it scene to scene), fit = auto | cover (fill, crops edges) | contain (whole picture, black bars) | blur (whole picture over a blurred copy of itself). The clip matches the video already on the timeline; in a project with only pictures, the first picture's shape decides (portrait → 9:16). To build a story from several pictures, import them in order (each lands after the last).",
 	getVideoSummary:
@@ -688,6 +694,8 @@ const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
 	"listMotionTemplates",
 	"createMotionClip",
 	"createShowcaseVideo",
+	"addLayer",
+	"setLayer",
 	"placeMotionClip",
 	"addMotionOverlay",
 	"setBrandKit",
@@ -948,6 +956,9 @@ export function buildTools(
 		build("listMotionTemplates", listMotionTemplatesArgs),
 		build("createMotionClip", createMotionClipArgs),
 		build("createShowcaseVideo", createShowcaseVideoArgs),
+		build("addLayer", addLayerArgs),
+		build("setLayer", setLayerArgs),
+		build("removeLayer", removeLayerArgs),
 		build("placeMotionClip", placeMotionClipArgs),
 		build("addMotionOverlay", addMotionOverlayArgs),
 		build("setBrandKit", setBrandKitArgs),

@@ -25,6 +25,13 @@ export const LAYER_Z_BASE = 100_000;
 const MAX_LAYER_CANVAS_LONG_SIDE = 1920;
 
 export type LayerState = { x: number; y: number; scale: number; rotation: number; opacity: number };
+/** Frame and source sizes, when known — they let a slide start exactly off-frame. */
+export type LayerGeometry = { canvas?: { width: number; height: number }; source?: { width?: number; height?: number } };
+
+export const LAYER_ENTRANCES = ["none", "fade", "slide-left", "slide-right", "slide-up", "slide-down", "pop", "zoom", "spin"] as const;
+export type LayerEntrance = (typeof LAYER_ENTRANCES)[number];
+type LayerLike = Pick<AxcutLayer, "x" | "y" | "scale" | "rotation" | "opacity" | "keyframes"> &
+	Partial<Pick<AxcutLayer, "animateIn" | "animateOut" | "animateSec">>;
 export type LayerEase = AxcutLayerKeyframe["ease"];
 const PROPS = ["x", "y", "scale", "rotation", "opacity"] as const;
 
@@ -50,13 +57,76 @@ export function sortedKeyframes(layer: Pick<AxcutLayer, "keyframes">): AxcutLaye
 	return [...(layer.keyframes ?? [])].sort((a, b) => a.atSec - b.atSec);
 }
 
-/** The layer's transform `tSec` seconds after it starts. */
-export function layerStateAt(
-	layer: Pick<AxcutLayer, "x" | "y" | "scale" | "rotation" | "opacity" | "keyframes">,
-	tSec: number,
-): LayerState {
+/** Box height as a fraction of the frame height, for off-frame slides. */
+function boxHeightFraction(scale: number, geom?: LayerGeometry): number {
+	const c = geom?.canvas;
+	const s = geom?.source;
+	const aspect = s?.width && s?.height ? s.height / s.width : 9 / 16;
+	return c ? (scale * c.width * aspect) / c.height : scale * aspect * (16 / 9);
+}
+
+/** Where an entrance starts from (or an exit ends at), relative to the resting pose. */
+function entranceFrom(kind: string, rest: LayerState, geom?: LayerGeometry): Partial<LayerState> | null {
+	const hf = boxHeightFraction(rest.scale, geom);
+	switch (kind) {
+		case "fade":
+			return { opacity: 0 };
+		case "slide-left":
+			return { x: -rest.scale / 2 - 0.02 };
+		case "slide-right":
+			return { x: 1 + rest.scale / 2 + 0.02 };
+		case "slide-up":
+			return { y: 1 + hf / 2 + 0.02 };
+		case "slide-down":
+			return { y: -hf / 2 - 0.02 };
+		case "pop":
+			return { scale: rest.scale * 0.6, opacity: 0 };
+		case "zoom":
+			return { scale: rest.scale * 0.05, opacity: 0 };
+		case "spin":
+			return { scale: rest.scale * 0.3, rotation: rest.rotation - 180, opacity: 0 };
+		default:
+			return null;
+	}
+}
+
+/**
+ * The keyframes that actually drive the layer: its entrance (from off-pose to
+ * rest over `animateSec`), its own keyframes, and its exit (rest to off-pose,
+ * ending with the layer). The plain fields are the resting pose.
+ */
+export function effectiveKeyframes(layer: LayerLike, durationSec = Number.POSITIVE_INFINITY, geom?: LayerGeometry): AxcutLayerKeyframe[] {
+	const rest = layerBaseState(layer);
+	const own = sortedKeyframes(layer);
+	const dur = Number.isFinite(durationSec) ? durationSec : Number.POSITIVE_INFINITY;
+	const sec = Math.max(0.05, Math.min(layer.animateSec ?? 0.5, Number.isFinite(dur) ? dur / 2 : 60));
+	const out: AxcutLayerKeyframe[] = [];
+	const inFrom = entranceFrom(layer.animateIn ?? "none", rest, geom);
+	if (inFrom) {
+		out.push({ atSec: 0, ...inFrom, ease: "linear" });
+		const back = Object.fromEntries(Object.keys(inFrom).map((k) => [k, rest[k as keyof LayerState]]));
+		if (layer.animateIn === "pop") {
+			// overshoot a little, then settle
+			out.push({ atSec: sec * 0.7, scale: rest.scale * 1.08, opacity: rest.opacity, ease: "ease-out" });
+			out.push({ atSec: sec, scale: rest.scale, ease: "ease-in-out" });
+		} else {
+			out.push({ atSec: sec, ...back, ease: "ease-out" });
+		}
+	}
+	out.push(...own);
+	const outTo = Number.isFinite(dur) ? entranceFrom(layer.animateOut ?? "none", rest, geom) : null;
+	if (outTo) {
+		const hold = Object.fromEntries(Object.keys(outTo).map((k) => [k, rest[k as keyof LayerState]]));
+		out.push({ atSec: Math.max(0, dur - sec), ...hold, ease: "linear" });
+		out.push({ atSec: dur, ...outTo, ease: "ease-in" });
+	}
+	return out.sort((a, b) => a.atSec - b.atSec);
+}
+
+/** The layer's transform `tSec` seconds after it starts (a layer `durationSec` long). */
+export function layerStateAt(layer: LayerLike, tSec: number, durationSec?: number, geom?: LayerGeometry): LayerState {
 	const base = layerBaseState(layer);
-	const kfs = sortedKeyframes(layer);
+	const kfs = effectiveKeyframes(layer, durationSec, geom);
 	if (kfs.length === 0) return base;
 	const out = { ...base };
 	for (const prop of PROPS) {
@@ -81,8 +151,8 @@ export function layerStateAt(
 }
 
 /** When the last keyframe lands (0 = a still layer). */
-export function layerAnimatedUntilSec(layer: Pick<AxcutLayer, "keyframes">): number {
-	return (layer.keyframes ?? []).reduce((m, k) => Math.max(m, k.atSec), 0);
+export function layerAnimatedUntilSec(layer: LayerLike, durationSec?: number): number {
+	return effectiveKeyframes(layer, durationSec).reduce((m, k) => Math.max(m, k.atSec), 0);
 }
 
 /** A layer's fragments grouped by `layerId`, each group in timeline order. */
@@ -115,13 +185,13 @@ export function layerSpanMs(fragments: Array<{ startMs: number; endMs: number }>
 
 /** Frames to bake: a video plays for its length, an animation until its last keyframe, a still is one frame. */
 export function layerSequenceFrameCount(
-	layer: Pick<AxcutLayer, "keyframes" | "source">,
+	layer: LayerLike & Pick<AxcutLayer, "source">,
 	durationSec: number,
 	fps = LAYER_FPS,
 ): number {
 	const cap = Math.round(MAX_LAYER_SEQUENCE_SEC * fps);
 	if (layer.source.kind === "video") return Math.max(1, Math.min(cap, Math.ceil(Math.max(0, durationSec) * fps)));
-	const until = Math.min(layerAnimatedUntilSec(layer), Math.max(0, durationSec));
+	const until = Math.min(layerAnimatedUntilSec(layer, durationSec), Math.max(0, durationSec));
 	if (until <= 0) return 1;
 	return Math.max(1, Math.min(cap, Math.ceil(until * fps) + 1));
 }
@@ -211,6 +281,7 @@ export function layerRenderKey(
 		t: [layer.x, layer.y, layer.scale, layer.rotation, layer.opacity],
 		k: sortedKeyframes(layer).map((k) => [k.atSec, k.x, k.y, k.scale, k.rotation, k.opacity, k.ease]),
 		l: [layer.cornerRadius, layer.shadow, layer.borderWidth, layer.borderColor],
+		a: [layer.animateIn ?? "none", layer.animateOut ?? "none", layer.animateSec ?? 0.5],
 	});
 	return `${fnv1a(payload)}${fnv1a(`${payload}#`)}`;
 }
