@@ -26,6 +26,7 @@ import { findLayer, layerCanvasSize } from "../../src/lib/ai-edition/document/la
 import { bakeLayer } from "./layers/bake";
 import { VOICE_LEVELS, type VoiceLevel, bakeCleanVoice, voiceTargets } from "./audioPro/cleanVoice";
 import { measureProgrammeLoudness } from "./audioPro/loudness";
+import { SFX_NAMES, type SfxName, ensureSfx } from "./audioPro/sfx";
 import {
 	DEFAULT_DUCK_DB,
 	bakeDuckedAudio,
@@ -90,6 +91,9 @@ export interface PreparedToolMedia {
 	/** setLoudness: the programme as it mixes now (before its programme gain). */
 	loudness?: { integratedLufs: number; truePeakDb: number; lra: number };
 	loudnessError?: string;
+	/** addSoundEffect: the effect's rendered file. */
+	sfx?: { path: string; durationSec: number; label: string };
+	sfxError?: string;
 	/** importMedia of a picture: the picture baked into a clip. */
 	imageClip?: BakedImageClip;
 	/** Why a picture could not be baked (the executor reports it). */
@@ -325,6 +329,19 @@ export async function prepareAgentToolMedia(
 				}
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;
+			}
+		}
+	}
+
+	if (name === "addSoundEffect" && options.mayMutate) {
+		const effect = str(a.effect);
+		if (!ffmpegPath) prepared.sfxError = "ffmpeg is not available";
+		else if (effect && (SFX_NAMES as string[]).includes(effect)) {
+			try {
+				prepared.sfx = await ensureSfx(ffmpegPath, effect as SfxName, join(getMediaHome() ?? join(tmpdir(), "openscreen-generated-graphics"), "sfx"), signal);
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") throw err;
+				prepared.sfxError = err instanceof Error ? err.message : String(err);
 			}
 		}
 	}

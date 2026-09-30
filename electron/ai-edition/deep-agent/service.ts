@@ -87,6 +87,7 @@ import {
 	tightenPacingArgs,
 	insertStartThumbnailArgs,
 	createMotionClipArgs,
+	addSoundEffectArgs,
 	setLoudnessArgs,
 	cleanVoiceArgs,
 	duckMusicArgs,
@@ -402,7 +403,7 @@ const BASE_SYSTEM_PROMPT = [
 	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
 	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim. addClip places an unused recording already in this project onto the timeline (projectQueue.unusedAssets lists them; beforeClipId works like moveClip). setClipCrop sets a clip's cropRegion in 0–1 frame fractions; pass crop: null to clear it.",
 	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen and can set textAnimation (fade, rise, pop, slide-left, typewriter, pulse) — that is a TEXT enter animation on an overlay, not a clip-to-clip transition. Clip-to-clip transitions: splitClip then setClipIncomingTransition on the right half (kind dissolve/cut or transitionId from listTransitions). addGraphic creates a title, lower third, badge, CTA, bar, arrow, or image OVERLAY on existing footage — preview and export already composite it. For a start-of-video thumbnail/cover that should be its OWN opening segment, use insertStartThumbnail (never a full-bleed addGraphic at 0s — that hides the take). addCameraFullscreen enlarges the webcam where assets[].hasCameraTrack is true.`,
-	"- Structure tools: splitClip, duplicateClip, importMedia (video/audio from disk, or a picture as a clip with an optional camera move), setLoudness (platform loudness: YouTube/TikTok −14 LUFS, podcast −16 — run last), cleanVoice (noise/rumble removal + gentle compression on the recording's voice; undo:true restores), duckMusic (music dips under speech; undo:true restores), addLayer / setLayer / removeLayer (pictures or videos ON TOP of the video: picture-in-picture, logos, B-roll, with position, keyframes and entrance/exit moves), insertStartThumbnail (still→opening clip), moveClip, removeClip, setClipRange, setClipCrop, tightenPacing, removeFillerWords.",
+	"- Structure tools: splitClip, duplicateClip, importMedia (video/audio from disk, or a picture as a clip with an optional camera move), addSoundEffect (whoosh/swoosh/pop/click/ding/riser/impact at moments or on every layer entrance), setLoudness (platform loudness: YouTube/TikTok −14 LUFS, podcast −16 — run last), cleanVoice (noise/rumble removal + gentle compression on the recording's voice; undo:true restores), duckMusic (music dips under speech; undo:true restores), addLayer / setLayer / removeLayer (pictures or videos ON TOP of the video: picture-in-picture, logos, B-roll, with position, keyframes and entrance/exit moves), insertStartThumbnail (still→opening clip), moveClip, removeClip, setClipRange, setClipCrop, tightenPacing, removeFillerWords.",
 	"- addAudio lays an imported voiceover or music file over a span. It plays an asset the project already has (kind 'audio'); import with importMedia(path, kind:\"audio\") first. gainDb and fadeInSec/fadeOutSec are the official level and fades. There is no multi-band EQ field; say so if asked.",
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
 	"- Deleting is a first-class action, not a workaround: removeTrim, removeModifier, removeClip. Never fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
@@ -512,6 +513,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Split one timeline clip into two at a SOURCE-time instant (atSourceSec). The right half is born with a hard-cut incoming transition so the join stays a real edit boundary — then call setClipIncomingTransition on the right clip id for dissolve/wipe/etc. Use when the user wants a transition mid-recording or to split before deleting/reordering one half.",
 	duplicateClip:
 		"Duplicate a placed clip: inserts an independent copy immediately after the original (fresh id; anchored trims copied). Use for 'duplicate this clip' / 'copy this segment'.",
+	addSoundEffect:
+		"Add a SOUND EFFECT (made here, no licence issues): effect = whoosh (a picture/card flies in) | swoosh (quick slide) | pop (something appears) | click (a UI click) | ding (success / done) | riser (build-up before a reveal) | impact (a big reveal). atSec (timeline seconds) or atSecs for several, and/or onLayers:true = one at the start of every layer. gainDb default −6 (−12 subtle). Effects may overlap each other and the music. Don't overdo it — a few well-timed sounds beat one on every cut.",
 	setLoudness:
 		"Make the whole video as loud as a platform expects: measures the finished mix (recording + music + voiceover) and sets the programme volume. platform = youtube | tiktok | instagram | reels | shorts | spotify (−14 LUFS) | podcast (−16) | broadcast (−23), or targetLufs. It never pushes peaks past −1 dBTP — when that holds it back, the result says so. Run it LAST, after music, ducking and voice clean-up.",
 	cleanVoice:
@@ -703,6 +706,7 @@ const MEDIA_PREP_TOOLS: ReadonlySet<string> = new Set([
 	"listMotionTemplates",
 	"createMotionClip",
 	"createShowcaseVideo",
+	"addSoundEffect",
 	"setLoudness",
 	"cleanVoice",
 	"duckMusic",
@@ -967,6 +971,7 @@ export function buildTools(
 		build("createMotionGraphicPreview", createMotionGraphicPreviewArgs),
 		build("listMotionTemplates", listMotionTemplatesArgs),
 		build("createMotionClip", createMotionClipArgs),
+		build("addSoundEffect", addSoundEffectArgs),
 		build("setLoudness", setLoudnessArgs),
 		build("cleanVoice", cleanVoiceArgs),
 		build("duckMusic", duckMusicArgs),

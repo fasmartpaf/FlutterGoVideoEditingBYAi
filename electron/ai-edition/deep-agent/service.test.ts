@@ -72,6 +72,7 @@ const ARGS: Record<string, unknown> = {
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
 	createShowcaseVideo: { place: "none" },
+	addSoundEffect: { effect: "whoosh", atSec: 1 },
 	setLoudness: { platform: "youtube" },
 	cleanVoice: { level: "light" },
 	duckMusic: { amountDb: 12 },
@@ -343,7 +344,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer", "duckMusic", "cleanVoice", "setLoudness"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer", "duckMusic", "cleanVoice", "setLoudness", "addSoundEffect"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {

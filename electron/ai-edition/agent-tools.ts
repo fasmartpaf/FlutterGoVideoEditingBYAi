@@ -96,6 +96,7 @@ import { applyLayerTool } from "./layers/layerTools";
 import { dropUnusedDerivedAssets, makeDuckedAsset, planDuck, swapTrackAsset } from "./audioPro/duck";
 import { VOICE_LEVELS, setVoiceSource, voiceTargets } from "./audioPro/cleanVoice";
 import { LOUDNESS_TARGETS, loudnessGainDb } from "./audioPro/loudness";
+import { SFX_NAMES, type SfxName } from "./audioPro/sfx";
 import { findLayer, layerCanvasSize, layerSpanMs, updateLayer } from "../../src/lib/ai-edition/document/layers";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
@@ -662,6 +663,18 @@ export const setLoudnessArgs = z.object({
 	platform: z.enum(["youtube", "tiktok", "instagram", "reels", "shorts", "spotify", "podcast", "broadcast"]).optional(),
 	/** Or an exact target, LUFS. */
 	targetLufs: z.number().min(-30).max(-8).optional(),
+});
+
+export const addSoundEffectArgs = z.object({
+	effect: z.enum(SFX_NAMES as [SfxName, ...SfxName[]]),
+	/** Timeline second to play it at. */
+	atSec: z.number().nonnegative().optional(),
+	/** Several moments at once. */
+	atSecs: z.array(z.number().nonnegative()).max(50).optional(),
+	/** Also one at the start of every layer (a whoosh as each picture flies in). */
+	onLayers: z.boolean().optional(),
+	/** Level, dB (default −6). */
+	gainDb: z.number().min(-30).max(6).optional(),
 });
 
 export const tightenPacingArgs = z.object({
@@ -1271,6 +1284,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"addSoundEffect",
 	"setLoudness",
 	"cleanVoice",
 	"duckMusic",
@@ -1401,6 +1415,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"addSoundEffect",
 	"setLoudness",
 	"cleanVoice",
 	"duckMusic",
@@ -3981,6 +3996,80 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "addSoundEffect": {
+			const parsed = addSoundEffectArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const sfx = options?.prepared?.sfx;
+			if (!sfx) return failure(`Could not make the sound${options?.prepared?.sfxError ? `: ${options.prepared.sfxError}` : ""}.`);
+			const times = [
+				...(parsed.data.atSec !== undefined ? [parsed.data.atSec] : []),
+				...(parsed.data.atSecs ?? []),
+				...(parsed.data.onLayers
+					? [...new Map((document.layers ?? []).map((l) => [l.layerId, l])).keys()].map(
+							(id) => Math.min(...(document.layers ?? []).filter((l) => l.layerId === id).map((l) => l.startMs)) / 1000,
+						)
+					: []),
+			];
+			if (times.length === 0) return failure("Say when: atSec, atSecs, or onLayers:true.");
+			let next = document;
+			let asset = next.assets.find((x) => x.kind === "audio" && x.originalPath === sfx.path);
+			if (!asset) {
+				asset = {
+					id: createId("asset"),
+					kind: "audio",
+					label: sfx.label,
+					originalPath: sfx.path,
+					durationSec: sfx.durationSec,
+					cameraTrack: null,
+				} as AxcutDocument["assets"][number];
+				next = { ...next, assets: [...next.assets, asset] };
+			}
+			const placedAt: number[] = [];
+			const missed: number[] = [];
+			const endSec = next.timeline.clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0);
+			for (const at of [...new Set(times.map((t) => Math.round(t * 1000) / 1000))].sort((x, y) => x - y)) {
+				if (at >= endSec) {
+					missed.push(at);
+					continue;
+				}
+				const trackId = createId("audio");
+				const withTrack = placeAudioTrackInDocument(
+					next,
+					{
+						id: trackId,
+						trackId,
+						startMs: toMs(at),
+						endMs: toMs(at + sfx.durationSec),
+						assetId: asset.id,
+						kind: "sfx",
+						durationSec: sfx.durationSec,
+						offsetMs: 0,
+						gainDb: parsed.data.gainDb ?? -6,
+						loop: false,
+						fadeInMs: 0,
+						fadeOutMs: 0,
+						muted: false,
+						label: sfx.label,
+						origin: "agent",
+					} as AxcutDocument["audioTracks"][number],
+					() => createId("audio"),
+					"create",
+				);
+				if (withTrack === next) missed.push(at);
+				else {
+					next = withTrack;
+					placedAt.push(at);
+				}
+			}
+			if (placedAt.length === 0) return failure(`No clip under ${missed.join(", ")} s, so no sound was placed.`);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ effect: parsed.data.effect, placedAt, ...(missed.length ? { missed } : {}) }),
+				summary: `added ${sfx.label.toLowerCase()} at ${placedAt.map((t) => formatSec(t)).join(", ")}`,
 			};
 		}
 

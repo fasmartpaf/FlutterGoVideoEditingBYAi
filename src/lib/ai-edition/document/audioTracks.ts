@@ -412,9 +412,11 @@ export function placeAudioTrackInDocument(
 	mode: "move" | "resize" | "create",
 ): AxcutDocument {
 	const groupId = trackGroupId(pill);
-	const others = audioLanePills(doc.audioTracks, pill.kind).filter(
-		(other) => trackGroupId(other) !== groupId,
-	);
+	// Sound effects stack freely: a whoosh over another whoosh is the point.
+	const others =
+		pill.kind === "sfx"
+			? []
+			: audioLanePills(doc.audioTracks, pill.kind).filter((other) => trackGroupId(other) !== groupId);
 	const spanMs = Math.max(0, pill.endMs - pill.startMs);
 
 	let startMs = pill.startMs;

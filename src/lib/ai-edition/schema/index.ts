@@ -590,7 +590,9 @@ export const audioTrackSchema = endGteStart(
 		endMs: z.number().nonnegative(),
 		...clipAnchorShape,
 		assetId: z.string().min(1),
-		kind: z.enum(["voiceover", "music"]).default("music"),
+		// "sfx" (Phase 2): short sound effects. Unlike voiceover/music they may overlap
+		// each other and anything else — the mixer sums them either way.
+		kind: z.enum(["voiceover", "music", "sfx"]).default("music"),
 		// Full source duration of the underlying file, cached here so the timeline
 		// can lay out the pill before the asset is re-probed on load.
 		durationSec: z.number().nonnegative().default(0),
