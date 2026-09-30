@@ -939,13 +939,14 @@ export const createMotionClipArgs = z
 export const placeMotionClipArgs = z.object({
 	videoPath: z.string().min(1),
 	place: z.union([
-		z.enum(["start", "end"]),
+		/** replace = this video becomes the whole timeline (a finished showcase), in its own shape. */
+		z.enum(["start", "end", "replace"]),
 		z.object({ beforeClipId: z.string().min(1) }),
 		z.object({ afterClipId: z.string().min(1) }),
 		z.object({ atSec: z.number().nonnegative() }),
 	]),
 	label: z.string().max(80).optional(),
-	durationSec: z.number().positive().max(120).optional(),
+	durationSec: z.number().positive().max(300).optional(),
 });
 
 export const setBrandKitArgs = brandKitPatchSchema.extend({
@@ -4161,11 +4162,19 @@ export function executeAgentTool(
 			const durationSec = typeof probed === "number" && probed > 0 ? probed : parsed.data.durationSec;
 			if (!durationSec) return failure("Could not read the clip length. Pass durationSec.");
 			try {
-				const placed = placeMotionClip(
-					document,
-					{ mp4Path: videoPath, durationSec, label: parsed.data.label ?? basename(videoPath) },
-					parsed.data.place as MotionPlacement,
-				);
+				const size = options?.prepared?.mediaSize ?? undefined;
+				const placed =
+					parsed.data.place === "replace"
+						? placeShowcase(
+								document,
+								{ mp4Path: videoPath, durationSec, label: parsed.data.label ?? basename(videoPath), width: size?.width, height: size?.height },
+								"replace",
+							)
+						: placeMotionClip(
+								document,
+								{ mp4Path: videoPath, durationSec, label: parsed.data.label ?? basename(videoPath) },
+								parsed.data.place as MotionPlacement,
+							);
 				return {
 					ok: true,
 					document: placed.document,

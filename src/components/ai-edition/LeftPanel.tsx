@@ -1771,11 +1771,7 @@ export function ChatStripPanel() {
 																className={styles.chatMediaActionBtn}
 																disabled={busy || !canChat}
 																onClick={() => {
-																	void send(
-																		item.kind === "video"
-																			? `Use this motion graphic on the video (importMedia or insertStartThumbnail):\n${item.path}`
-																			: `Use this graphic on the video (addGraphic imagePath):\n${item.path}`,
-																	);
+																	void send(useOnVideoMessage(item.kind, item.path));
 																}}
 															>
 																{t("chat.mediaUseOnVideo")}
@@ -2352,3 +2348,22 @@ function UserMessageBody({ content, label }: { content: string; label: string })
 		</>
 	);
 }
+
+/**
+ * What "Use on video" asks for. A showcase is the whole video, not a clip to
+ * add: a draft is made again at full quality with the same plan, and a
+ * finished showcase replaces the timeline in its own shape (e.g. 9:16).
+ */
+export function useOnVideoMessage(kind: string, path: string): string {
+	const name = path.split(/[/\\]/).pop() ?? "";
+	if (kind === "video" && /^showcase-draft-/i.test(name)) {
+		return `Use this showcase draft as the video: render it at full quality with the same plan (createShowcaseVideo with quality:'final' and nothing else changed) — it replaces the timeline and takes the draft's shape:\n${path}`;
+	}
+	if (kind === "video" && /^showcase-/i.test(name)) {
+		return `Use this showcase as the whole video: placeMotionClip with place:'replace' (it replaces the timeline and takes the video's shape):\n${path}`;
+	}
+	return kind === "video"
+		? `Use this motion graphic on the video (importMedia or insertStartThumbnail):\n${path}`
+		: `Use this graphic on the video (addGraphic imagePath):\n${path}`;
+}
+

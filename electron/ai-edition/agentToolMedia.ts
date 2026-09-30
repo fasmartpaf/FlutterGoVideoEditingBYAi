@@ -69,6 +69,8 @@ export interface PreparedToolMedia {
 	};
 	/** ffprobe'd duration for importMedia (null = probe failed). */
 	mediaDurationSec?: number | null;
+	/** placeMotionClip: the clip's frame size (for place "replace", which follows its shape). */
+	mediaSize?: { width: number; height: number } | null;
 	/** A render was attempted and failed — the executor reports this message. */
 	renderError?: string;
 	/** Brand colours read from the recording (used when the project has no brand kit yet). */
@@ -258,6 +260,13 @@ export async function prepareAgentToolMedia(
 				const abs = assertSafeLocalMediaPath(path, "importMedia path");
 				if (existsSync(abs)) {
 					prepared.mediaDurationSec = await probeMediaDurationSec(ffmpegPath, abs, signal);
+					if (name === "placeMotionClip") {
+						const { runProcess } = await import("./mediaStudio");
+						const { parseFfmpegProbe } = await import("./showcase/render");
+						const probe = await runProcess(ffmpegPath, ["-hide_banner", "-i", abs], { timeoutMs: 20_000, signal }).catch(() => null);
+						const info = probe ? parseFfmpegProbe(probe.stderr) : null;
+						prepared.mediaSize = info ? { width: info.width, height: info.height } : null;
+					}
 				}
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;

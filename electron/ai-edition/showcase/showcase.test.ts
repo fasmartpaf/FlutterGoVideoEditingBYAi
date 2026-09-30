@@ -565,3 +565,28 @@ describe("follow-ups change the last showcase instead of replacing it", () => {
 		expect(effectiveShowcaseArgs(null, { style: "bold" }).changed).toBeNull();
 	});
 });
+
+describe("using a finished showcase from the chat", () => {
+	it("placeMotionClip replace makes it the whole video in its own shape", async () => {
+		const { executeAgentTool } = await import("../agent-tools");
+		const { mkdtempSync, writeFileSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const dir = mkdtempSync(join(tmpdir(), "showcase-use-"));
+		const mp4 = join(dir, "showcase-abc.mp4");
+		writeFileSync(mp4, "x");
+		let doc = createEmptyDocument({ title: "t", projectId: "p", createdAt: "2026-01-01T00:00:00.000Z" });
+		doc = {
+			...doc,
+			assets: [{ id: "asset_rec", kind: "video", label: "rec.mp4", originalPath: join(dir, "rec.mp4"), durationSec: 10, cameraTrack: null } as (typeof doc.assets)[number]],
+			project: { ...doc.project, primaryAssetId: "asset_rec" },
+		};
+		doc = insertClip(doc, "asset_rec", 0, "user", "Recording");
+		const r = executeAgentTool(doc, "placeMotionClip", JSON.stringify({ videoPath: mp4, place: "replace" }), {
+			prepared: { mediaDurationSec: 17.7, mediaSize: { width: 1080, height: 1920 } },
+		});
+		expect(r.ok).toBe(true);
+		expect(r.document!.timeline.clips).toHaveLength(1);
+		expect(getEditorSettings(r.document!).aspectRatio).toBe("9:16");
+	});
+});
