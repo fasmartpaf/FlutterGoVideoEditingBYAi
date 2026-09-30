@@ -594,6 +594,79 @@ export const audioTrackSchema = endGteStart(
 	"startMs",
 );
 
+// ─── Layers (Phase 1): pictures and videos stacked ABOVE the main video ─────
+//
+// A layer is placed like an annotation (clip-anchored fragments; `layerId`
+// groups the fragments of one layer, as `trackId` does for audio) but carries
+// a transform — centre (x, y as 0-1 of the output frame), scale (its width as a
+// fraction of the frame width), rotation (degrees), opacity — and keyframes
+// that animate it. It is baked into a transparent PNG sequence (`render`) that
+// the compositor draws on top, so preview and export show exactly the same
+// thing. Additive with a default — no schemaVersion bump.
+export const layerKeyframeSchema = z.object({
+	/** Seconds from the layer's start. */
+	atSec: z.number().nonnegative(),
+	x: z.number().min(-1).max(2).optional(),
+	y: z.number().min(-1).max(2).optional(),
+	scale: z.number().min(0.01).max(4).optional(),
+	rotation: z.number().min(-3600).max(3600).optional(),
+	opacity: z.number().min(0).max(1).optional(),
+	/** How the values travel INTO this keyframe from the one before. */
+	ease: z.enum(["linear", "ease-in", "ease-out", "ease-in-out"]).default("ease-in-out"),
+});
+
+export const layerRenderSchema = z.object({
+	/** Folder of frame-00000.png … (transparent PNGs). */
+	dir: z.string().min(1),
+	fps: z.number().positive(),
+	frameCount: z.number().int().positive(),
+	posterPath: z.string().min(1),
+	/** What the frames were baked from; a layer whose key no longer matches needs a re-bake. */
+	key: z.string().min(1),
+	/** The box the frames cover, as 0-1 fractions of the output frame. */
+	x: z.number(),
+	y: z.number(),
+	w: z.number().positive(),
+	h: z.number().positive(),
+});
+
+export const layerSchema = endGteStart(
+	z.object({
+		id: z.string().min(1),
+		layerId: z.string().min(1),
+		startMs: z.number().nonnegative(),
+		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
+		label: z.string().default(""),
+		source: z.object({
+			kind: z.enum(["image", "video"]),
+			path: z.string().min(1),
+			width: z.number().int().positive().optional(),
+			height: z.number().int().positive().optional(),
+			/** Video only: where in the file the layer starts playing. */
+			startSec: z.number().nonnegative().default(0),
+		}),
+		x: z.number().min(-1).max(2).default(0.5),
+		y: z.number().min(-1).max(2).default(0.5),
+		scale: z.number().min(0.01).max(4).default(0.4),
+		rotation: z.number().min(-3600).max(3600).default(0),
+		opacity: z.number().min(0).max(1).default(1),
+		keyframes: z.array(layerKeyframeSchema).default([]),
+		/** Corner rounding as a fraction of the layer's shorter side (0.5 = pill/circle). */
+		cornerRadius: z.number().min(0).max(0.5).default(0),
+		/** Drop shadow strength 0-1. */
+		shadow: z.number().min(0).max(1).default(0),
+		/** Border thickness as a fraction of the frame width. */
+		borderWidth: z.number().min(0).max(0.05).default(0),
+		borderColor: z.string().default("#ffffff"),
+		zIndex: z.number().int().default(0),
+		render: layerRenderSchema.nullable().default(null),
+		origin: z.enum(["system", "agent", "user"]).default("agent"),
+	}),
+	"endMs",
+	"startMs",
+);
+
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
 // by the existing pipeline (see technical-documentation/architecture/document-model.md).
@@ -629,6 +702,8 @@ const documentSchemaShape = z.object({
 	// Imported audio tracks (issue #350). Defaulted so every document written
 	// before this loads unchanged; an older build simply strips the key on save.
 	audioTracks: z.array(audioTrackSchema).default([]),
+	// Layers above the main video (Phase 1). Defaulted, so older documents load unchanged.
+	layers: z.array(layerSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -1123,6 +1198,9 @@ export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
 export type AxcutAudioTrack = z.infer<typeof audioTrackSchema>;
+export type AxcutLayer = z.infer<typeof layerSchema>;
+export type AxcutLayerKeyframe = z.infer<typeof layerKeyframeSchema>;
+export type AxcutLayerRender = z.infer<typeof layerRenderSchema>;
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
 export type AxcutDocumentInput = z.input<typeof documentSchema>;
@@ -1159,6 +1237,7 @@ export function createEmptyDocument(
 		annotations: [],
 		zoomRanges: [],
 		audioTracks: [],
+		layers: [],
 		legacyEditor: null,
 	});
 }

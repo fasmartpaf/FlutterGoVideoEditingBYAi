@@ -16,6 +16,7 @@
  */
 
 import { decodeImageSequenceRef } from "@/lib/ai-edition/document/imageSequence";
+import { layersAsAnnotations } from "@/lib/ai-edition/document/layers";
 import type {
 	CameraFullscreenRegion,
 	SpeedRegion,
@@ -848,6 +849,8 @@ export function buildSceneDescription(
 		[
 			...(document.annotations ?? []),
 			...(captionRegions as unknown as NonNullable<AxcutDocument["annotations"]>),
+			// Baked layers: image sequences in output-frame space, above everything.
+			...layersAsAnnotations(document),
 		],
 		visibleClips,
 		document.timeline.clips,

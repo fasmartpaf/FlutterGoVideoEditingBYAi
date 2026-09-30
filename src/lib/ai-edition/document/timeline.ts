@@ -444,6 +444,12 @@ function mapAllRegionCollections(
 			document.annotations as unknown as StoredRegion[],
 			"ann",
 		) as unknown as AxcutDocument["annotations"],
+		// Layers ride clips exactly like annotations; a fragment split off keeps its
+		// `layerId` (copied verbatim), which is what groups it back into one layer.
+		layers: fn(
+			(document.layers ?? []) as unknown as StoredRegion[],
+			"layer",
+		) as unknown as AxcutDocument["layers"],
 		// Repaired here rather than at each of the four call sites, so no structural edit
 		// can skip it (issue #560).
 		//
@@ -710,6 +716,7 @@ function anchoredRegionsOf(document: AxcutDocument): Array<{ id: string; clipId:
 	const collections: StoredRegion[][] = [
 		document.zoomRanges as unknown as StoredRegion[],
 		document.annotations as unknown as StoredRegion[],
+		(document.layers ?? []) as unknown as StoredRegion[],
 		(legacy?.speedRegions as StoredRegion[] | undefined) ?? [],
 		(legacy?.cameraFullscreenRegions as StoredRegion[] | undefined) ?? [],
 	];
@@ -1116,6 +1123,7 @@ export function splitClip(
 		zoomRanges: both(document.zoomRanges),
 		annotations: both(document.annotations),
 		audioTracks: both(document.audioTracks),
+		layers: both(document.layers),
 	};
 	return withClipsChanged(fanned, nextClips);
 }
