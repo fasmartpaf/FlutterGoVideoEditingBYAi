@@ -94,6 +94,7 @@ import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { IMAGE_CLIP_FITS, IMAGE_CLIP_MOTIONS, isImageClipPath } from "./imageClip";
 import { applyLayerTool } from "./layers/layerTools";
 import { dropUnusedDerivedAssets, makeDuckedAsset, planDuck, swapTrackAsset } from "./audioPro/duck";
+import { VOICE_LEVELS, setVoiceSource, voiceTargets } from "./audioPro/cleanVoice";
 import { findLayer, layerCanvasSize, layerSpanMs, updateLayer } from "../../src/lib/ai-edition/document/layers";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
@@ -643,6 +644,15 @@ export const duckMusicArgs = z.object({
 	/** How far the music dips under speech, in dB (default 12). */
 	amountDb: z.number().min(3).max(30).optional(),
 	/** Put the track(s) back on the original, un-ducked music. */
+	undo: z.boolean().optional(),
+});
+
+export const cleanVoiceArgs = z.object({
+	/** How hard to clean: light (gentle), medium (default), strong (noisy rooms). */
+	level: z.enum(VOICE_LEVELS).optional(),
+	/** One recording; omit for every recording on the timeline. */
+	assetId: z.string().min(1).optional(),
+	/** Put the original, uncleaned sound back. */
 	undo: z.boolean().optional(),
 });
 
@@ -1253,6 +1263,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"cleanVoice",
 	"duckMusic",
 	"createShowcaseVideo",
 	"addLayer",
@@ -1381,6 +1392,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"cleanVoice",
 	"duckMusic",
 	"addLayer",
 	"setLayer",
@@ -3959,6 +3971,45 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "cleanVoice": {
+			const parsed = cleanVoiceArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const targets = voiceTargets(document, parsed.data.assetId);
+			if (targets.length === 0) {
+				return failure(parsed.data.assetId ? `No recording ${parsed.data.assetId} on the timeline.` : "There is no recording on the timeline to clean.");
+			}
+			let next = document;
+			const report: Array<Record<string, unknown>> = [];
+			if (parsed.data.undo) {
+				for (const t of targets) {
+					if (t.asset.derived?.kind !== "voice-clean") continue;
+					next = setVoiceSource(next, t.asset.id, null);
+					report.push({ assetId: t.asset.id, restored: true });
+				}
+				if (report.length === 0) return failure("No recording has a cleaned voice to undo.");
+				return { ok: true, document: next, resultJson: JSON.stringify({ recordings: report }), summary: "original voice restored" };
+			}
+			const level = parsed.data.level ?? "medium";
+			const baked = options?.prepared?.voice ?? [];
+			for (const t of targets) {
+				const hit = baked.find((b) => b.assetId === t.asset.id);
+				if (!hit?.path) {
+					report.push({ assetId: t.asset.id, label: t.asset.label, skipped: hit?.error ?? options?.prepared?.voiceError ?? "not processed" });
+					continue;
+				}
+				next = setVoiceSource(next, t.asset.id, { path: hit.path, level });
+				report.push({ assetId: t.asset.id, label: t.asset.label, level, filters: hit.chain });
+			}
+			const done = report.filter((r) => r.level).length;
+			if (done === 0) return failure(`No voice was cleaned: ${report.map((r) => `${r.label}: ${r.skipped}`).join("; ")}`);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ recordings: report }),
+				summary: `cleaned the voice (${level}) on ${done} recording(s)`,
 			};
 		}
 

@@ -24,6 +24,7 @@ import type { AxcutDocument, AxcutLayerRender } from "../../src/lib/ai-edition/s
 import { createId as createLayerId } from "../../src/lib/ai-edition/document/ids";
 import { findLayer, layerCanvasSize } from "../../src/lib/ai-edition/document/layers";
 import { bakeLayer } from "./layers/bake";
+import { VOICE_LEVELS, type VoiceLevel, bakeCleanVoice, voiceTargets } from "./audioPro/cleanVoice";
 import {
 	DEFAULT_DUCK_DB,
 	bakeDuckedAudio,
@@ -82,6 +83,9 @@ export interface PreparedToolMedia {
 	/** duckMusic: one ducked copy per track. */
 	duck?: Array<{ trackId: string; path?: string; amountDb: number; speechSpans: number; speechSource: string; error?: string }>;
 	duckError?: string;
+	/** cleanVoice: one cleaned copy per recording. */
+	voice?: Array<{ assetId: string; path?: string; chain?: string; error?: string }>;
+	voiceError?: string;
 	/** importMedia of a picture: the picture baked into a clip. */
 	imageClip?: BakedImageClip;
 	/** Why a picture could not be baked (the executor reports it). */
@@ -317,6 +321,32 @@ export async function prepareAgentToolMedia(
 				}
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;
+			}
+		}
+	}
+
+	if (name === "cleanVoice" && options.mayMutate && a.undo !== true) {
+		if (!ffmpegPath) prepared.voiceError = "ffmpeg is not available";
+		else {
+			const level = (VOICE_LEVELS as readonly string[]).includes(str(a.level) ?? "") ? (str(a.level) as VoiceLevel) : "medium";
+			prepared.voice = [];
+			for (const t of voiceTargets(document, str(a.assetId))) {
+				try {
+					if (!existsSync(t.sourcePath)) throw new Error("the recording file is missing");
+					options.onProgress?.(`Cleaning the voice in ${t.asset.label}`);
+					const baked = await bakeCleanVoice({
+						ffmpegPath,
+						sourcePath: t.sourcePath,
+						level,
+						outDir: join(resolveGeneratedGraphicsDir(document), "audio"),
+						signal,
+					});
+					discardOnFailure.push(baked.path);
+					prepared.voice.push({ assetId: t.asset.id, path: baked.path, chain: baked.chain });
+				} catch (err) {
+					if (err instanceof Error && err.name === "AbortError") throw err;
+					prepared.voice.push({ assetId: t.asset.id, error: err instanceof Error ? err.message : String(err) });
+				}
 			}
 		}
 	}

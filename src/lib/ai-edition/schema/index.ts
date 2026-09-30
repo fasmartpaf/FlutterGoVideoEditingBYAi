@@ -205,6 +205,8 @@ export const assetSchema = z.object({
 			kind: z.string().min(1),
 			amountDb: z.number().optional(),
 			level: z.string().optional(),
+			/** voice-clean: the untouched file the asset played before. */
+			sourcePath: z.string().optional(),
 		})
 		.optional(),
 });
