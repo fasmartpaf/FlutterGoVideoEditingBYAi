@@ -170,7 +170,7 @@ export function renderShowcasePage(input: ShowcasePageInput): string {
 			: layout === "right"
 				? { x: 80, y: 70, w: 1212, h: 940 }
 				: layout === "bottom"
-					? { x: 250, y: 46, w: 1420, h: 770 }
+					? { x: 280, y: 40, w: 1360, h: 700 }
 					: { x: 628, y: 70, w: 1212, h: 940 };
 	let vw = area.w - 2 * BEZEL;
 	let vh = vw / aspect;
@@ -380,7 +380,7 @@ const dots=[];for(let i=0;i<NDOTS;i++){const d=document.createElement('div');d.c
  $('dots').appendChild(d);dots.push({el:d,x:rnd()*C.SW,y:rnd()*C.SH,sp:14+rnd()*30,ph:rnd()*6.28,a:.15+rnd()*.5});}
 // Tags sit in the margins around the window and cards.
 const W0=C.win;const spots=C.portrait?[[620,110],[850,50],[90,1520],[640,1580],[120,1820],[700,1840],[380,1700],[820,1700]]
- :C.layout==='bottom'?[[40,260],[60,560],[1700,300],[1690,600],[W0.x+W0.w*.3,4],[W0.x+W0.w*.7,4],[40,860],[1720,880]]
+ :C.layout==='bottom'?[[40,260],[60,560],[1700,300],[1690,600],[50,120],[1720,140],[40,860],[1720,880]]
  :[[C.card.x+14,C.card.cy-250],[C.card.x+234,C.card.cy-325],[C.card.x+24,C.card.cy+260],[C.card.x+204,C.card.cy+345],[W0.x+W0.w*.7,24],[W0.x+W0.w*.85,C.SH-54],[W0.x+W0.w*.38,C.SH-54],[W0.x+W0.w*.25,24]];
 const chips=C.tags.map((txt,i)=>{const d=document.createElement('div');d.className='fchip'+(i%2?'':' g');d.innerHTML='<i></i>';d.appendChild(document.createTextNode(txt));$('chips').appendChild(d);const p=spots[i%spots.length];return {el:d,x:p[0],y:p[1],ph:i*1.3}});
 const SX=C.vw/C.fw,SY=C.vh/C.fh;const marks=$('marks');
@@ -438,7 +438,8 @@ window.render=async(T)=>{
  // step cards
  C.steps.forEach((st,k)=>{const el=$('c'+k);if(!el)return;const h=el.offsetHeight;const inn=lin(ft,st.in,st.in+.55),out=eio(lin(ft,st.out-.35,st.out));
   const vis=T>=C.t0?1:0;const e=back(inn);
-  el.style.top=(C.card.cy-h/2)+'px';
+  // Below the window, cards hang from its bottom edge (never over it); beside it they centre.
+  el.style.top=(C.layout==='bottom'?Math.min(C.SH-h-24,C.win.y+C.win.h+28):C.card.cy-h/2)+'px';
   el.style.opacity=(vis*clamp(inn*1.6)*(1-out)).toFixed(3);
   el.style.transform=(C.layout==='bottom'?'translateY('+(60*(1-e)+20*out).toFixed(1)+'px)':'translate('+(-70*SIDE*(1-e)).toFixed(1)+'px,'+(-34*out).toFixed(1)+'px)')+' scale('+(0.94+0.06*e).toFixed(4)+')';
   const l=$('l'+k);if(l){l.style.top=C.card.cy+'px';const lp=lin(ft,st.in+.3,st.in+.6);l.style.opacity=(vis*lp*(1-out)).toFixed(3);l.style.transform='scaleX('+eout(lp).toFixed(3)+')'}

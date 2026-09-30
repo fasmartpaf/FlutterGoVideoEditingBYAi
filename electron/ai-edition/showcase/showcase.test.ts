@@ -501,3 +501,17 @@ describe("follow-ups on a showcase", () => {
 		expect(requestToolScope("add captions", { hasShowcase: false }) ?? []).not.toContain("createShowcaseVideo");
 	});
 });
+
+describe("ffmpeg builds without every filter", () => {
+	it("enhances with what the build has, and skips what it lacks", () => {
+		const segs = buildSegments(0, 4);
+		const crop = { x: 0, y: 0, width: 1920, height: 1080 };
+		const lgpl = new Set(["crop", "curves", "unsharp", "split", "trim", "setpts", "fps", "concat", "format"]);
+		const f = buildFootageFilter({ segments: segs, crop, fps: 30, enhance: true, audio: false, available: lgpl });
+		expect(f).not.toContain("eq=");
+		expect(f).toContain("curves=");
+		expect(f).toContain("unsharp");
+		const bare = buildFootageFilter({ segments: segs, crop, fps: 30, enhance: true, audio: false, available: new Set(["crop"]) });
+		expect(bare).not.toMatch(/eq=|curves|unsharp/);
+	});
+});

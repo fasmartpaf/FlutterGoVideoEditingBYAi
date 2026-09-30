@@ -145,6 +145,27 @@ export function renderProgress(
 	};
 }
 
+const filterCache = new Map<string, Promise<ReadonlySet<string> | undefined>>();
+
+/** The filters this ffmpeg build has (undefined when it cannot be asked). Asked once per binary. */
+export function ffmpegFilters(ffmpegPath: string, signal?: AbortSignal): Promise<ReadonlySet<string> | undefined> {
+	let hit = filterCache.get(ffmpegPath);
+	if (!hit) {
+		hit = runProcess(ffmpegPath, ["-hide_banner", "-filters"], { timeoutMs: 20_000, signal })
+			.then((r) => {
+				const names = new Set<string>();
+				for (const line of r.stdout.split("\n")) {
+					const m = /^\s*[TSC.|]{2,3}\s+(\w+)\s/.exec(line);
+					if (m) names.add(m[1]!);
+				}
+				return names.size > 20 ? names : undefined;
+			})
+			.catch(() => undefined);
+		filterCache.set(ffmpegPath, hit);
+	}
+	return hit;
+}
+
 const LOGO_EXTS = new Set([".png", ".svg", ".jpg", ".jpeg", ".webp"]);
 
 export async function renderShowcase(
@@ -247,7 +268,14 @@ export async function renderShowcase(
 	try {
 		// 1. Footage frames (and audio) — cropped, enhanced, retimed.
 		options.onProgress?.("Preparing the recording");
-		const filter = buildFootageFilter({ segments, crop, fps, enhance: args.enhance, audio: withAudio });
+		const filter = buildFootageFilter({
+			segments,
+			crop,
+			fps,
+			enhance: args.enhance,
+			audio: withAudio,
+			available: await ffmpegFilters(ffmpegPath, signal),
+		});
 		const extract = await runProcess(
 			ffmpegPath,
 			[

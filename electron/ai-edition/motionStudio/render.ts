@@ -155,6 +155,28 @@ function startEncoder(input: {
 	};
 }
 
+/** A raw frame → a small JPEG for the chat (via a temp file; returns "" on failure). */
+async function rawStillToJpeg(
+	ffmpegPath: string,
+	raw: { data: Buffer; width: number; height: number; format: "bgra" | "rgba" },
+	stem: string,
+): Promise<string> {
+	const rawPath = `${stem}.raw`;
+	const out = `${stem}.jpg`;
+	writeFileSync(rawPath, raw.data);
+	const code = await new Promise<number | null>((resolve) => {
+		const child = spawn(
+			ffmpegPath,
+			["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", raw.format, "-s", `${raw.width}x${raw.height}`, "-i", rawPath, "-vf", "scale=640:-2", "-q:v", "4", out],
+			{ stdio: "ignore", windowsHide: true },
+		);
+		child.on("close", resolve);
+		child.on("error", () => resolve(1));
+	});
+	rmSync(rawPath, { force: true });
+	return code === 0 && existsSync(out) ? out : "";
+}
+
 export async function renderComposition(input: RenderCompositionInput): Promise<RenderCompositionResult> {
 	const { source, signal } = input;
 	if (signal?.aborted) throw abortError();
@@ -196,8 +218,10 @@ export async function renderComposition(input: RenderCompositionInput): Promise<
 			for (let i = from; i < to; i++) {
 				if (signal?.aborted || sliceFailed) throw abortError();
 				const ms = (i * 1000) / fps;
+				let rawForStill: { data: Buffer; width: number; height: number; format: "bgra" | "rgba" } | null = null;
 				if (src.frameRaw) {
 					const raw = await src.frameRaw(ms);
+					rawForStill = raw;
 					encoder ??= startEncoder({
 						ffmpegPath: input.ffmpegPath,
 						encoder: encoderName,
@@ -214,10 +238,12 @@ export async function renderComposition(input: RenderCompositionInput): Promise<
 				}
 				if (stillFrames.has(i)) {
 					try {
-						const png = await src.frame(ms);
-						const path = join(input.stills!.dir, `still-${String(i).padStart(5, "0")}.png`);
-						writeFileSync(path, png);
-						input.stills!.onStill(path, i);
+						// The still is the very frame that went into the video (not a second capture).
+						const path = rawForStill
+							? await rawStillToJpeg(input.ffmpegPath, rawForStill, join(input.stills!.dir, `still-${String(i).padStart(5, "0")}`))
+							: join(input.stills!.dir, `still-${String(i).padStart(5, "0")}.png`);
+						if (!rawForStill) writeFileSync(path, await src.frame(ms));
+						if (path) input.stills!.onStill(path, i);
 					} catch {
 						// a missing preview still never stops the render
 					}

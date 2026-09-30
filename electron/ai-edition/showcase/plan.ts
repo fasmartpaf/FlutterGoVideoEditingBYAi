@@ -457,11 +457,19 @@ export function buildFootageFilter(input: {
 	fps: number;
 	enhance: boolean;
 	audio: boolean;
+	/** Filters this ffmpeg has (the app's bundled build leaves some out). Unknown = assume all. */
+	available?: ReadonlySet<string>;
 }): string {
-	const { segments, crop, fps, enhance, audio } = input;
+	const { segments, crop, fps, enhance, audio, available } = input;
+	const has = (f: string) => !available || available.has(f);
 	const n = segments.length;
 	const pre = [`crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`];
-	if (enhance) pre.push("eq=contrast=1.05:gamma=0.9", "unsharp=5:5:0.5:5:5:0");
+	if (enhance) {
+		// A touch more contrast and darker mid-greys (light UI text reads better), then sharpen.
+		if (has("eq")) pre.push("eq=contrast=1.05:gamma=0.9");
+		else if (has("curves")) pre.push("curves=all='0/0 0.5/0.45 1/1'");
+		if (has("unsharp")) pre.push("unsharp=5:5:0.5:5:5:0");
+	}
 	const parts: string[] = [`[0:v]${pre.join(",")},split=${n}${segments.map((_, i) => `[s${i}]`).join("")}`];
 	segments.forEach((s, i) => {
 		const pts = s.rate === 1 ? "PTS-STARTPTS" : `(PTS-STARTPTS)/${s.rate.toFixed(4)}`;
