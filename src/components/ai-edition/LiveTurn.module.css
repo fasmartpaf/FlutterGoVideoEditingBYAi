@@ -166,6 +166,7 @@
 /* Actions (tool calls) nested under the running step, or on their own. */
 .actions {
 	grid-column: 2;
+	min-width: 0;
 	display: flex;
 	flex-direction: column;
 	gap: 3px;
@@ -173,17 +174,66 @@
 }
 .action {
 	display: flex;
-	align-items: center;
-	gap: 7px;
+	flex-direction: column;
+	gap: 4px;
 	font: 400 12px/1.4 var(--font-body);
 	color: var(--muted);
 	min-width: 0;
 	animation: fadeIn 180ms ease-out both;
 }
-.action > span {
+.actionLine {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	min-width: 0;
+}
+.actionLabel {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* A long action's progress: the words wrap, a thin bar, and a still of the video being made. */
+.progress {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	margin-left: 19px;
+	min-width: 0;
+}
+.progressText {
+	font: 400 11.5px/1.35 var(--font-body);
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+.progressBar {
+	display: block;
+	height: 4px;
+	border-radius: 2px;
+	background: var(--surface-3, rgba(255, 255, 255, 0.08));
+	overflow: hidden;
+}
+.progressBar > span {
+	display: block;
+	height: 100%;
+	border-radius: 2px;
+	background: var(--accent, #34d399);
+	transition: width 300ms ease-out;
+}
+.progressStill {
+	width: 100%;
+	max-width: 280px;
+	aspect-ratio: 16 / 9;
+	object-fit: cover;
+	border-radius: 8px;
+	border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+	background: #000;
+}
+.failReason {
+	margin-left: 19px;
+	font: 400 11px/1.35 var(--font-body);
+	color: var(--muted);
+	overflow-wrap: anywhere;
 }
 .action[data-ok="pending"] {
 	color: var(--fg-2);

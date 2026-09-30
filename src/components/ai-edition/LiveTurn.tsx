@@ -1,6 +1,7 @@
 import { Check, ChevronRight, Loader2, Minus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AiEditionPlanItem } from "@/native/contracts";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { toolActivityStatus } from "../../../electron/ai-edition/toolActivityLabels";
 import styles from "./LiveTurn.module.css";
 
@@ -11,6 +12,16 @@ export interface LiveToolCall {
 	summary?: string;
 	ok?: boolean;
 	step?: number;
+	/** A still of the video being made, shown while it renders. */
+	preview?: string;
+}
+
+/** "Rendering 191 / 492 frames · ~40s left" → 0.39; null when the detail has no count. */
+export function progressFraction(detail: string | undefined): number | null {
+	const m = detail ? /(\d+)\s*\/\s*(\d+)/.exec(detail) : null;
+	if (!m) return null;
+	const total = Number(m[2]);
+	return total > 0 ? Math.min(1, Number(m[1]) / total) : null;
 }
 
 export interface LiveTurnLabels {
@@ -48,20 +59,37 @@ function StepDot({ status, live }: { status: AiEditionPlanItem["status"]; live: 
 function ActionRow({ tool }: { tool: LiveToolCall }) {
 	const label = toolActivityStatus(tool.name);
 	const state = tool.ok === undefined ? "pending" : tool.ok ? "true" : "false";
+	const running = tool.ok === undefined;
+	const fraction = running ? progressFraction(tool.detail) : null;
+	const reason = tool.ok === false && tool.summary ? tool.summary.replace(/\s+/g, " ").slice(0, 140) : null;
 	return (
 		<div className={styles.action} data-ok={state}>
-			<span className={styles.actionIcon}>
-				{tool.ok === undefined ? (
-					<Loader2 size={11} className="animate-spin" />
-				) : tool.ok ? (
-					<Check size={11} strokeWidth={2.5} />
-				) : (
-					<X size={11} strokeWidth={2.5} />
-				)}
-			</span>
-			<span title={tool.summary ?? tool.detail}>
-				{tool.ok === undefined && tool.detail ? `${label} — ${tool.detail}` : tool.ok === false ? `${label} — failed` : label}
-			</span>
+			<div className={styles.actionLine}>
+				<span className={styles.actionIcon}>
+					{running ? (
+						<Loader2 size={11} className="animate-spin" />
+					) : tool.ok ? (
+						<Check size={11} strokeWidth={2.5} />
+					) : (
+						<X size={11} strokeWidth={2.5} />
+					)}
+				</span>
+				<span className={styles.actionLabel} title={tool.summary ?? tool.detail}>
+					{tool.ok === false ? `${label} — failed` : label}
+				</span>
+			</div>
+			{running && tool.detail ? (
+				<div className={styles.progress}>
+					<span className={styles.progressText}>{tool.detail}</span>
+					{fraction !== null ? (
+						<span className={styles.progressBar} aria-hidden="true">
+							<span style={{ width: `${Math.round(fraction * 100)}%` }} />
+						</span>
+					) : null}
+					{tool.preview ? <img className={styles.progressStill} src={toFileUrl(tool.preview)} alt="" /> : null}
+				</div>
+			) : null}
+			{reason ? <div className={styles.failReason}>{reason}</div> : null}
 		</div>
 	);
 }

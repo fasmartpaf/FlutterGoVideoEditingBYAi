@@ -733,13 +733,17 @@ export function ChatStripPanel() {
 				if (event.phase === "tool_progress") {
 					// A long render reporting in: show it on the running action ("Rendering 420 / 930 frames").
 					try {
-						const { name, detail } = JSON.parse(event.detail ?? "{}") as { name?: string; detail?: string };
-						if (name && detail) {
+						const { name, detail, preview } = JSON.parse(event.detail ?? "{}") as {
+							name?: string;
+							detail?: string;
+							preview?: string;
+						};
+						if (name && (detail || preview)) {
 							setLiveTools((prev) => {
 								const i = prev.map((t) => t.name === name && t.ok === undefined).lastIndexOf(true);
 								if (i < 0) return prev;
 								const next = [...prev];
-								next[i] = { ...next[i]!, detail };
+								next[i] = { ...next[i]!, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}) };
 								return next;
 							});
 						}

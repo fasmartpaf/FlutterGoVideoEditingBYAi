@@ -68,3 +68,12 @@ describe("liveHeadline", () => {
 		expect(liveHeadline([], "thinking", "Working")).toBe("Working");
 	});
 });
+
+describe("render progress in the live card", () => {
+	it("reads the frame count as a fraction", async () => {
+		const { progressFraction } = await import("./LiveTurn");
+		expect(progressFraction("Rendering 191 / 492 frames · ~40s left")).toBeCloseTo(191 / 492);
+		expect(progressFraction("Adding the sound")).toBeNull();
+		expect(progressFraction(undefined)).toBeNull();
+	});
+});
