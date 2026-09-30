@@ -75,6 +75,8 @@ const ARGS: Record<string, unknown> = {
 	generateVoiceover: { text: "Hello there", atSec: 0 },
 	addSoundEffect: { effect: "whoosh", atSec: 1 },
 	setLoudness: { platform: "youtube" },
+	gradeClip: { look: "cinematic" },
+	stabilizeClip: {},
 	cleanVoice: { level: "light" },
 	duckMusic: { amountDb: 12 },
 	addLayer: { path: "/tmp/logo.png", startSec: 0 },
@@ -345,7 +347,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer", "duckMusic", "cleanVoice", "setLoudness", "addSoundEffect", "generateVoiceover"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer", "duckMusic", "cleanVoice", "setLoudness", "addSoundEffect", "generateVoiceover", "gradeClip", "stabilizeClip"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {

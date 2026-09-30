@@ -53,12 +53,13 @@ describe("voice clean-up", () => {
 
 	it("cleanVoice tool swaps in the copy and undo puts the original back", () => {
 		const r = executeAgentTool(doc(), "cleanVoice", JSON.stringify({ level: "strong" }), {
-			prepared: { voice: [{ assetId: "asset_v", path: "/g/clean.mp4", chain: "highpass=f=100" }] },
+			prepared: { processed: [{ assetId: "asset_v", path: "/g/clean.mp4", audioChain: "highpass=f=100" }] },
 		});
 		expect(r.ok).toBe(true);
 		expect(() => documentSchema.parse(r.document)).not.toThrow();
 		expect(r.document!.assets[0]!.originalPath).toBe("/g/clean.mp4");
-		expect(JSON.parse(r.resultJson!).recordings[0]).toMatchObject({ level: "strong" });
+		expect(r.document!.assets[0]!.derived).toMatchObject({ kind: "processed", sourcePath: REC });
+		expect(JSON.parse(r.resultJson!).recordings[0].now).toBe("voice clean-up strong");
 		const back = executeAgentTool(r.document!, "cleanVoice", JSON.stringify({ undo: true }));
 		expect(back.document!.assets[0]!.originalPath).toBe(REC);
 		expect(executeAgentTool(back.document!, "cleanVoice", JSON.stringify({ undo: true })).ok).toBe(false);

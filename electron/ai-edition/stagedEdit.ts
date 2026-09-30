@@ -315,6 +315,10 @@ const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
 		match: /\b(music|audio|sound|volume|voice|duck|ducking|loud|loudness|noise|noisy|clean|sfx|whoosh|voiceover|narrat\w*)\b/i,
 		tools: ["addAudio", "setAudio", "importMedia", "removeModifier", "duckMusic", "cleanVoice", "setLoudness", "addSoundEffect", "generateVoiceover"],
 	},
+	{
+		match: /\b(colou?rs?|grade|grading|look|cinematic|warm(?:er|th)?|cool(?:er)?|vivid|matte|faded|black\s*and\s*white|b&w|teal|orange|lut|exposure|contrast|saturation|vignette|sharpen|sharper|stabili[sz]\w*|shaky|shake)\b/i,
+		tools: ["gradeClip", "stabilizeClip", "removeModifier"],
+	},
 	{ match: /\b(blur|hide|privacy|redact|email|password)\b/i, tools: ["addPrivacyCover", "addAnnotation", "setAnnotation", "removeModifier"] },
 ];
 

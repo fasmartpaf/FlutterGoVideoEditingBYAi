@@ -179,6 +179,8 @@ describe("the mutating-tool table", () => {
 				"addCursorHighlight",
 				"registerCharacter",
 				"addBeatGraphics",
+				"gradeClip",
+				"stabilizeClip",
 				"generateVoiceover",
 				"addSoundEffect",
 				"setLoudness",

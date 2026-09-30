@@ -24,7 +24,8 @@ import type { AxcutDocument, AxcutLayerRender } from "../../src/lib/ai-edition/s
 import { createId as createLayerId } from "../../src/lib/ai-edition/document/ids";
 import { findLayer, layerCanvasSize } from "../../src/lib/ai-edition/document/layers";
 import { bakeLayer } from "./layers/bake";
-import { VOICE_LEVELS, type VoiceLevel, bakeCleanVoice, voiceTargets } from "./audioPro/cleanVoice";
+import { bakeProcessed } from "./videoPro/process";
+import { planProcess } from "./videoPro/plan";
 import { measureProgrammeLoudness } from "./audioPro/loudness";
 import { SFX_NAMES, type SfxName, ensureSfx } from "./audioPro/sfx";
 import { guessLanguage, listSystemVoices, pickVoice, synthesizeVoiceover } from "./audioPro/tts";
@@ -86,9 +87,9 @@ export interface PreparedToolMedia {
 	/** duckMusic: one ducked copy per track. */
 	duck?: Array<{ trackId: string; path?: string; amountDb: number; speechSpans: number; speechSource: string; error?: string }>;
 	duckError?: string;
-	/** cleanVoice: one cleaned copy per recording. */
-	voice?: Array<{ assetId: string; path?: string; chain?: string; error?: string }>;
-	voiceError?: string;
+	/** gradeClip / stabilizeClip / cleanVoice: one treated copy per recording. */
+	processed?: Array<{ assetId: string; path?: string; videoChain?: string; audioChain?: string; error?: string }>;
+	processedError?: string;
 	/** setLoudness: the programme as it mixes now (before its programme gain). */
 	loudness?: { integratedLufs: number; truePeakDb: number; lra: number };
 	loudnessError?: string;
@@ -398,29 +399,32 @@ export async function prepareAgentToolMedia(
 		}
 	}
 
-	if (name === "cleanVoice" && options.mayMutate && a.undo !== true) {
-		if (!ffmpegPath) prepared.voiceError = "ffmpeg is not available";
+	if ((name === "gradeClip" || name === "stabilizeClip" || name === "cleanVoice") && options.mayMutate) {
+		if (!ffmpegPath) prepared.processedError = "ffmpeg is not available";
 		else {
-			const level = (VOICE_LEVELS as readonly string[]).includes(str(a.level) ?? "") ? (str(a.level) as VoiceLevel) : "medium";
-			prepared.voice = [];
-			for (const t of voiceTargets(document, str(a.assetId))) {
-				try {
-					if (!existsSync(t.sourcePath)) throw new Error("the recording file is missing");
-					options.onProgress?.(`Cleaning the voice in ${t.asset.label}`);
-					const baked = await bakeCleanVoice({
-						ffmpegPath,
-						sourcePath: t.sourcePath,
-						level,
-						outDir: join(resolveGeneratedGraphicsDir(document), "audio"),
-						signal,
-					});
-					discardOnFailure.push(baked.path);
-					prepared.voice.push({ assetId: t.asset.id, path: baked.path, chain: baked.chain });
-				} catch (err) {
-					if (err instanceof Error && err.name === "AbortError") throw err;
-					prepared.voice.push({ assetId: t.asset.id, error: err instanceof Error ? err.message : String(err) });
+			const lutPath = str(a.lutPath);
+			const plan = planProcess(name, lutPath ? { ...a, lutPath: assertSafeLocalMediaPath(lutPath, "lutPath") } : a, document);
+			if (plan.ok) {
+				prepared.processed = [];
+				for (const t of plan.targets) {
+					if (t.unchanged || !t.nextOps) continue;
+					try {
+						const baked = await bakeProcessed({
+							ffmpegPath,
+							sourcePath: t.sourcePath,
+							ops: t.nextOps,
+							outDir: join(resolveGeneratedGraphicsDir(document), "processed"),
+							signal,
+							onProgress: (detail) => options.onProgress?.(`${t.asset.label}: ${detail}`),
+						});
+						discardOnFailure.push(baked.path);
+						prepared.processed.push({ assetId: t.asset.id, ...baked });
+					} catch (err) {
+						if (err instanceof Error && err.name === "AbortError") throw err;
+						prepared.processed.push({ assetId: t.asset.id, error: err instanceof Error ? err.message : String(err) });
+					}
 				}
-			}
+			} else prepared.processedError = plan.error;
 		}
 	}
 

@@ -74,6 +74,8 @@ const OPENSCREEN_STATUS: Record<string, string> = {
 	generateVoiceover: "Making the voiceover",
 	addSoundEffect: "Adding a sound effect",
 	setLoudness: "Setting the loudness",
+	gradeClip: "Grading the colour",
+	stabilizeClip: "Stabilising the footage",
 	cleanVoice: "Cleaning the voice",
 	duckMusic: "Ducking the music under speech",
 	addLayer: "Adding a layer",

@@ -205,8 +205,10 @@ export const assetSchema = z.object({
 			kind: z.string().min(1),
 			amountDb: z.number().optional(),
 			level: z.string().optional(),
-			/** voice-clean: the untouched file the asset played before. */
+			/** processed / voice-clean: the untouched file the asset played before. */
 			sourcePath: z.string().optional(),
+			/** processed: the treatments applied to the original (JSON ProcessOps). */
+			ops: z.string().optional(),
 		})
 		.optional(),
 });

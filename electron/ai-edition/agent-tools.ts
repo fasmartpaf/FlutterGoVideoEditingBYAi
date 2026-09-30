@@ -94,7 +94,9 @@ import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { IMAGE_CLIP_FITS, IMAGE_CLIP_MOTIONS, isImageClipPath } from "./imageClip";
 import { applyLayerTool } from "./layers/layerTools";
 import { dropUnusedDerivedAssets, makeDuckedAsset, planDuck, swapTrackAsset } from "./audioPro/duck";
-import { VOICE_LEVELS, setVoiceSource, voiceTargets } from "./audioPro/cleanVoice";
+import { VOICE_LEVELS } from "./audioPro/cleanVoice";
+import { LOOKS, describeOps, setProcessed } from "./videoPro/process";
+import { planProcess } from "./videoPro/plan";
 import { LOUDNESS_TARGETS, loudnessGainDb } from "./audioPro/loudness";
 import { SFX_NAMES, type SfxName } from "./audioPro/sfx";
 import { findLayer, layerCanvasSize, layerSpanMs, updateLayer } from "../../src/lib/ai-edition/document/layers";
@@ -646,6 +648,33 @@ export const duckMusicArgs = z.object({
 	/** How far the music dips under speech, in dB (default 12). */
 	amountDb: z.number().min(3).max(30).optional(),
 	/** Put the track(s) back on the original, un-ducked music. */
+	undo: z.boolean().optional(),
+});
+
+const gradeNumber = z.number().min(-1).max(1).optional();
+export const gradeClipArgs = z.object({
+	/** One recording (asset id); omit for every recording on the timeline. */
+	assetId: z.string().min(1).optional(),
+	/** A ready-made look; explicit values below adjust on top of it. */
+	look: z.enum(LOOKS).optional(),
+	exposure: gradeNumber,
+	contrast: gradeNumber,
+	saturation: gradeNumber,
+	/** + warmer (orange), − cooler (blue). */
+	warmth: gradeNumber,
+	/** + magenta, − green. */
+	tint: gradeNumber,
+	vignette: z.number().min(0).max(1).optional(),
+	sharpen: z.number().min(0).max(1).optional(),
+	/** Absolute path to a .cube LUT (e.g. a file the user attached). */
+	lutPath: z.string().min(1).optional(),
+	/** Remove the grade (other treatments stay). */
+	undo: z.boolean().optional(),
+});
+
+export const stabilizeClipArgs = z.object({
+	assetId: z.string().min(1).optional(),
+	/** Remove the stabilisation. */
 	undo: z.boolean().optional(),
 });
 
@@ -1298,6 +1327,8 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"gradeClip",
+	"stabilizeClip",
 	"generateVoiceover",
 	"addSoundEffect",
 	"setLoudness",
@@ -1430,6 +1461,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"gradeClip",
+	"stabilizeClip",
 	"generateVoiceover",
 	"addSoundEffect",
 	"setLoudness",
@@ -4172,42 +4205,42 @@ export function executeAgentTool(
 			};
 		}
 
+		case "gradeClip":
+		case "stabilizeClip":
 		case "cleanVoice": {
-			const parsed = cleanVoiceArgs.safeParse(args);
-			if (!parsed.success) return failure(parsed.error.message);
-			const targets = voiceTargets(document, parsed.data.assetId);
-			if (targets.length === 0) {
-				return failure(parsed.data.assetId ? `No recording ${parsed.data.assetId} on the timeline.` : "There is no recording on the timeline to clean.");
+			const plan = planProcess(name, args, document);
+			if (!plan.ok) return failure(plan.error);
+			if (plan.targets.length === 0) {
+				return failure(plan.assetId ? `No recording ${plan.assetId} on the timeline.` : "There is no recording on the timeline to treat.");
 			}
+			const baked = options?.prepared?.processed ?? [];
 			let next = document;
 			const report: Array<Record<string, unknown>> = [];
-			if (parsed.data.undo) {
-				for (const t of targets) {
-					if (t.asset.derived?.kind !== "voice-clean") continue;
-					next = setVoiceSource(next, t.asset.id, null);
-					report.push({ assetId: t.asset.id, restored: true });
-				}
-				if (report.length === 0) return failure("No recording has a cleaned voice to undo.");
-				return { ok: true, document: next, resultJson: JSON.stringify({ recordings: report }), summary: "original voice restored" };
-			}
-			const level = parsed.data.level ?? "medium";
-			const baked = options?.prepared?.voice ?? [];
-			for (const t of targets) {
-				const hit = baked.find((b) => b.assetId === t.asset.id);
-				if (!hit?.path) {
-					report.push({ assetId: t.asset.id, label: t.asset.label, skipped: hit?.error ?? options?.prepared?.voiceError ?? "not processed" });
+			for (const t of plan.targets) {
+				if (t.unchanged) {
+					report.push({ assetId: t.asset.id, label: t.asset.label, skipped: "nothing to change" });
 					continue;
 				}
-				next = setVoiceSource(next, t.asset.id, { path: hit.path, level });
-				report.push({ assetId: t.asset.id, label: t.asset.label, level, filters: hit.chain });
+				if (!t.nextOps) {
+					next = setProcessed(next, t.asset.id, null);
+					report.push({ assetId: t.asset.id, label: t.asset.label, now: "original" });
+					continue;
+				}
+				const hit = baked.find((b) => b.assetId === t.asset.id);
+				if (!hit?.path) {
+					report.push({ assetId: t.asset.id, label: t.asset.label, skipped: hit?.error ?? options?.prepared?.processedError ?? "not processed" });
+					continue;
+				}
+				next = setProcessed(next, t.asset.id, { path: hit.path, ops: t.nextOps });
+				report.push({ assetId: t.asset.id, label: t.asset.label, now: describeOps(t.nextOps), filters: hit.videoChain || hit.audioChain });
 			}
-			const done = report.filter((r) => r.level).length;
-			if (done === 0) return failure(`No voice was cleaned: ${report.map((r) => `${r.label}: ${r.skipped}`).join("; ")}`);
+			const done = report.filter((r) => r.now !== undefined).length;
+			if (done === 0) return failure(`Nothing changed: ${report.map((r) => `${r.label}: ${r.skipped}`).join("; ")}`);
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({ recordings: report }),
-				summary: `cleaned the voice (${level}) on ${done} recording(s)`,
+				summary: `${plan.verb} on ${done} recording(s)`,
 			};
 		}
 
