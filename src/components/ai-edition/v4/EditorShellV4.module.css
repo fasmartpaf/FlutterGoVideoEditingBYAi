@@ -1685,6 +1685,11 @@
 	border-color: #a855f7;
 	background: rgba(168, 85, 247, 0.14);
 }
+/* Layers (pictures / videos above the video): amber, apart from every effect pill. */
+.laneLayer {
+	border-color: #f59e0b;
+	background: rgba(245, 158, 11, 0.16);
+}
 /* Imported audio tracks (issue #350). A distinct teal so a BGM/voiceover track
    reads apart from the effect pills, and taller than a lane pill so the waveform
    inside it is legible. */
@@ -2276,4 +2281,30 @@
 	height: 10px;
 	border-radius: 999px;
 	background: var(--danger);
+}
+
+/* Timeline markers: a small flag on the ruler (click = jump, Alt-click = remove). */
+.tlMarker {
+	position: absolute;
+	top: 0;
+	width: 0;
+	height: 0;
+	padding: 0;
+	margin-left: -6px;
+	border: none;
+	border-left: 6px solid transparent;
+	border-right: 6px solid transparent;
+	border-top: 9px solid #f59e0b;
+	background: none;
+	cursor: pointer;
+	z-index: 3;
+}
+.tlMarker::after {
+	content: "";
+	position: absolute;
+	left: -0.5px;
+	top: -1px;
+	width: 1px;
+	height: 14px;
+	background: rgba(245, 158, 11, 0.7);
 }

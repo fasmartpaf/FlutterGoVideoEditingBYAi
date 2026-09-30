@@ -12,9 +12,10 @@ import {
 	layerSequenceFrameCount,
 	layerStateAt,
 	removeLayer,
+	retimeLayer,
 	updateLayer,
 } from "./layers";
-import { insertClip, splitClip } from "./timeline";
+import { insertClip, removeRegion, splitClip } from "./timeline";
 import { patchEditorSettings } from "../store/editorSettings";
 
 function layer(over: Partial<AxcutLayer> = {}): AxcutLayer {
@@ -198,5 +199,16 @@ describe("layers in the document", () => {
 		doc = updateLayer(doc, "layer_a", (f) => ({ ...f, opacity: 0.5 }));
 		expect(doc.layers.every((l) => l.opacity === 0.5)).toBe(true);
 		expect(removeLayer(doc, doc.layers[1]!.id).layers).toEqual([]);
+	});
+
+	it("moves a layer in time from the timeline and deletes it as one region", () => {
+		let doc = docWithClip();
+		const clip = doc.timeline.clips[0]!;
+		doc = { ...doc, layers: [layer({ clipId: clip.id, sourceStartSec: 1, sourceEndSec: 5 })] };
+		const moved = retimeLayer(doc, "layer_a", 2000, 9000);
+		expect(moved.layers[0]).toMatchObject({ layerId: "layer_a", startMs: 2000, endMs: 9000 });
+		expect(retimeLayer(doc, "layer_a", 20_000, 30_000)).toBe(doc);
+		expect(removeRegion(moved, "layer", "layer_a").layers).toEqual([]);
+		expect(docWithClip().markers).toEqual([]);
 	});
 });

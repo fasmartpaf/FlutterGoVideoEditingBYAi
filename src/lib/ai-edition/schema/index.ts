@@ -709,6 +709,17 @@ const documentSchemaShape = z.object({
 	audioTracks: z.array(audioTrackSchema).default([]),
 	// Layers above the main video (Phase 1). Defaulted, so older documents load unchanged.
 	layers: z.array(layerSchema).default([]),
+	// Timeline markers (Phase 1): named points on the ruler, in raw timeline seconds.
+	markers: z
+		.array(
+			z.object({
+				id: z.string().min(1),
+				atSec: z.number().nonnegative(),
+				label: z.string().default(""),
+				color: z.string().default("#f59e0b"),
+			}),
+		)
+		.default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -1243,6 +1254,7 @@ export function createEmptyDocument(
 		zoomRanges: [],
 		audioTracks: [],
 		layers: [],
+		markers: [],
 		legacyEditor: null,
 	});
 }

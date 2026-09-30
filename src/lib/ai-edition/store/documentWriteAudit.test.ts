@@ -279,6 +279,12 @@ const DECLARED: WritePath[] = [
 	// The live halves of the two drags.
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationLive", "set", "automatic"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationSpan", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "addMarkerAt", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "removeMarker", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "updateLayerSpan", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "updateLayerLive", "set", "automatic"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "commitLayerChange", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "redrawLayer", "save", "automatic"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateCameraFullscreenSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedValue", "save", "gesture"),

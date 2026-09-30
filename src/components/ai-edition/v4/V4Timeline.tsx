@@ -3,6 +3,8 @@ import {
 	Clock,
 	Crosshair,
 	EyeOff,
+	Flag,
+	Layers,
 	Loader2,
 	Maximize2,
 	MessageSquare,
@@ -534,7 +536,7 @@ const AudioLanePill = memo(function AudioLanePill({
 
 interface LanePill {
 	id: string;
-	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen";
+	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen" | "layer";
 	start: number;
 	end: number;
 	label: string;
@@ -708,6 +710,21 @@ export function V4Timeline({
 			sourceIds: p.ids,
 		}),
 	);
+	// Layers: one pill per layer (its fragments share a layerId), in stacking order.
+	const layerPills: LanePill[] = useMemo(() => {
+		const groups = new Map<string, typeof tl.layers>();
+		for (const f of tl.layers ?? []) groups.set(f.layerId, [...(groups.get(f.layerId) ?? []), f]);
+		return [...groups.values()]
+			.sort((a, b) => a[0]!.zIndex - b[0]!.zIndex)
+			.map((frags) => ({
+				id: frags[0]!.layerId,
+				kind: "layer" as const,
+				start: Math.min(...frags.map((f) => f.startMs)) / 1000,
+				end: Math.max(...frags.map((f) => f.endMs)) / 1000,
+				label: `${frags[0]!.render ? "" : "… "}${frags[0]!.label || (frags[0]!.source.kind === "video" ? "Video" : "Picture")}`,
+				sourceIds: frags.map((f) => f.id),
+			}));
+	}, [tl.layers]);
 	const zoomPills: LanePill[] = coalesceRegionsForRuler(tl.zoomRegions).map((p) => ({
 		id: p.ids[0],
 		kind: "zoom",
@@ -908,6 +925,7 @@ export function V4Timeline({
 				total,
 				...clips.map((c) => c.timelineStartSec),
 				...clips.map((c) => c.timelineEndSec),
+				...(tl.markers ?? []).map((m) => m.atSec),
 			];
 			// 0 = no snapping at all while the panel is unmeasured (first paint):
 			// better to drop the edge exactly where it was released than to move it
@@ -935,6 +953,7 @@ export function V4Timeline({
 					await tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "cameraFullscreen")
 					await tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
+				else if (pill.kind === "layer") await tl.updateLayerSpan(pill.id, s * 1000, en * 1000);
 				else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
@@ -1115,6 +1134,7 @@ export function V4Timeline({
 				total,
 				...clips.map((c) => c.timelineStartSec),
 				...clips.map((c) => c.timelineEndSec),
+				...(tl.markers ?? []).map((m) => m.atSec),
 			];
 			const snapThresh = pxPerSec > 0 ? PILL_SNAP_PX / pxPerSec : 0;
 			const snap = (v: number): number => {
@@ -1364,7 +1384,9 @@ export function V4Timeline({
 					? styles.laneTrim
 					: kind === "cameraFullscreen"
 						? styles.laneCameraFullscreen
-						: styles.laneZoom;
+						: kind === "layer"
+							? styles.laneLayer
+							: styles.laneZoom;
 	const pillIcon = (kind: LanePill["kind"]) =>
 		kind === "annotation" ? (
 			<MessageSquare size={11} />
@@ -1374,6 +1396,8 @@ export function V4Timeline({
 			<Scissors size={11} />
 		) : kind === "cameraFullscreen" ? (
 			<Maximize2 size={11} />
+		) : kind === "layer" ? (
+			<Layers size={11} />
 		) : (
 			<ZoomIn size={11} />
 		);
@@ -1972,6 +1996,16 @@ export function V4Timeline({
 									<Crosshair size={15} />
 								</button>
 							</Tooltip>
+							<Tooltip content="Add a marker at the playhead (Alt-click a marker to remove it)">
+								<button
+									type="button"
+									className={styles.tlToolBtn}
+									aria-label="Add marker"
+									onClick={() => void tl.addMarkerAt(useProjectStore.getState().currentTimeSec)}
+								>
+									<Flag size={15} />
+								</button>
+							</Tooltip>
 							<Tooltip content={t("buttons.addCameraFullscreen")}>
 								<button
 									type="button"
@@ -2053,6 +2087,21 @@ export function V4Timeline({
 									) : null}
 								</div>
 							))}
+							{(tl.markers ?? []).map((m) => (
+								<button
+									type="button"
+									key={m.id}
+									className={styles.tlMarker}
+									style={{ left: `${pctAt(m.atSec)}%`, borderTopColor: m.color }}
+									title={`${m.label} · ${formatSec(m.atSec)} (Alt-click to remove)`}
+									aria-label={m.label}
+									onPointerDown={(e) => {
+										e.stopPropagation();
+										if (e.altKey) void tl.removeMarker(m.id);
+										else setCurrentTime(m.atSec);
+									}}
+								/>
+							))}
 						</div>
 					</div>
 				</div>
@@ -2068,6 +2117,12 @@ export function V4Timeline({
 								{/* An empty lane advertises the shortcut that fills it ("Press A to add
 								    annotation") rather than restating that it is empty — the same hint
 								    strings the pre-v4 timeline used, so the keys stay translated. */}
+								{/* Layers (pictures / videos above the video) — only once there is one. */}
+								{layerPills.length > 0 ? (
+									<div className={styles.tlLane} data-lane="layers">
+										{renderPills(layerPills, "")}
+									</div>
+								) : null}
 								<div className={styles.tlLane}>
 									{renderPills(annPills, t("hints.pressAnnotation"))}
 								</div>

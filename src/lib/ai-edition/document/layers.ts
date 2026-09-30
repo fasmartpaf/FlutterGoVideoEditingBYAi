@@ -14,6 +14,8 @@
 
 import { getEditorSettings } from "../store/editorSettings";
 import type { AxcutDocument, AxcutLayer, AxcutLayerKeyframe } from "../schema";
+import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
+import { createId } from "./ids";
 import { encodeImageSequenceRef } from "./imageSequence";
 import { pickOutputDims } from "./outputFormat";
 
@@ -341,4 +343,27 @@ export function updateLayer(
 	const ids = new Set(findLayer(document, idOrLayerId).map((f) => f.id));
 	if (ids.size === 0) return document;
 	return { ...document, layers: (document.layers ?? []).map((f) => (ids.has(f.id) ? patch(f) : f)) };
+}
+
+/**
+ * Lay a layer over a raw-timeline span: one fragment per clip it covers, all
+ * sharing its `layerId`. Null when the span covers no clip (it could never play).
+ */
+export function anchorLayerSpan(document: AxcutDocument, layer: AxcutLayer, startMs: number, endMs: number): AxcutLayer[] | null {
+	const { clipId: _c, sourceStartSec: _s, sourceEndSec: _e, ...rest } = layer;
+	const region = { ...rest, id: layer.layerId, startMs, endMs };
+	const frags = anchorRegionsWithDerivedMs([region], document.timeline.clips, () => createId("layer")) as AxcutLayer[];
+	if (frags.length === 0 || frags.some((f) => typeof f.clipId !== "string")) return null;
+	return frags.map((f) => ({ ...f, layerId: layer.layerId }));
+}
+
+/** Move/resize a layer in time. Unchanged document when the new span covers no clip. */
+export function retimeLayer(document: AxcutDocument, idOrLayerId: string, startMs: number, endMs: number): AxcutDocument {
+	const frags = findLayer(document, idOrLayerId);
+	const head = frags[0];
+	if (!head || endMs <= startMs) return document;
+	const without = removeLayer(document, head.layerId);
+	const placed = anchorLayerSpan(without, head, Math.max(0, Math.round(startMs)), Math.round(endMs));
+	if (!placed) return document;
+	return { ...without, layers: [...(without.layers ?? []), ...placed] };
 }

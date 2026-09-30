@@ -27,7 +27,8 @@ import {
 	setClipSourceRange,
 	withClipsChanged,
 } from "../document/timeline";
-import type { AxcutAudioTrack, AxcutClipCropRegion, AxcutDocument } from "../schema";
+import type { AxcutAudioTrack, AxcutClipCropRegion, AxcutDocument, AxcutLayer } from "../schema";
+import { findLayer, layerSpanMs, retimeLayer, updateLayer as updateLayerFragments } from "../document/layers";
 import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeAudioDuration, probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
@@ -849,6 +850,132 @@ export function useTimeline() {
 		}
 	}, [saveDocument]);
 
+	// ── Layers (Phase 1) ────────────────────────────────────────────
+	// A layer is drawn (baked to frames) in the main process. Any edit here marks
+	// it for a redraw a moment later; a redraw result is only kept if the layer
+	// still looks the way it was drawn from (a newer edit redraws it again).
+	const layerRollbackRef = useRef<AxcutDocument | null>(null);
+	const layerLiveRef = useRef<AxcutDocument | null>(null);
+	const layerBakeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+	const drawnFrom = (doc: AxcutDocument, layerId: string): string => {
+		const head = findLayer(doc, layerId)[0];
+		if (!head) return "";
+		const { render: _r, id: _i, clipId: _c, sourceStartSec: _s, sourceEndSec: _e, startMs: _a, endMs: _b, ...look } = head;
+		const span = layerSpanMs(findLayer(doc, layerId));
+		return JSON.stringify([look, span.endMs - span.startMs]);
+	};
+	const redrawLayer = useCallback(
+		async (layerId: string) => {
+			const api = window.electronAPI;
+			const doc = useProjectStore.getState().document;
+			if (!doc || !api?.bakeLayer) return;
+			const wanted = drawnFrom(doc, layerId);
+			if (!wanted) return;
+			const res = await api.bakeLayer(doc, layerId);
+			const latest = useProjectStore.getState().document;
+			if (!latest || drawnFrom(latest, layerId) !== wanted) return;
+			if (!res.success || !res.render) {
+				toast.error(res.message ?? "Could not draw the layer");
+				return;
+			}
+			const render = res.render;
+			await saveDocument(
+				updateLayerFragments(latest, layerId, (f) => ({
+					...f,
+					render,
+					source: { ...f.source, width: res.source?.width ?? f.source.width, height: res.source?.height ?? f.source.height },
+				})),
+				{ history: false },
+			);
+		},
+		[saveDocument],
+	);
+	const scheduleLayerRedraw = useCallback(
+		(layerId: string) => {
+			const timers = layerBakeTimers.current;
+			const prev = timers.get(layerId);
+			if (prev) clearTimeout(prev);
+			timers.set(
+				layerId,
+				setTimeout(() => {
+					timers.delete(layerId);
+					void redrawLayer(layerId);
+				}, 250),
+			);
+		},
+		[redrawLayer],
+	);
+
+	/** Drop a marker at a moment (raw timeline seconds). One marker per spot. */
+	const addMarkerAt = useCallback(
+		async (atSec: number, label = "") => {
+			if (!document) return;
+			const at = Math.max(0, Math.round(atSec * 1000) / 1000);
+			const markers = document.markers ?? [];
+			if (markers.some((m) => Math.abs(m.atSec - at) < 0.05)) return;
+			const next: AxcutDocument = {
+				...document,
+				markers: [...markers, { id: createId("marker"), atSec: at, label: label || `Marker ${markers.length + 1}`, color: "#f59e0b" }].sort(
+					(a, b) => a.atSec - b.atSec,
+				),
+			};
+			await saveDocument(next, { history: true });
+		},
+		[document, saveDocument],
+	);
+	const removeMarker = useCallback(
+		async (id: string) => {
+			if (!document) return;
+			const markers = document.markers ?? [];
+			if (!markers.some((m) => m.id === id)) return;
+			await saveDocument({ ...document, markers: markers.filter((m) => m.id !== id) }, { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	/** Move / resize a layer in time (timeline drag). */
+	const updateLayerSpan = useCallback(
+		async (id: string, startMs: number, endMs: number) => {
+			if (!document) return;
+			const head = findLayer(document, id)[0];
+			if (!head) return;
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
+			const next = retimeLayer(document, head.layerId, Math.min(s, e), Math.max(s, e));
+			if (next === document) return;
+			await saveDocument(next, { history: true });
+			scheduleLayerRedraw(head.layerId);
+		},
+		[document, saveDocument, scheduleLayerRedraw],
+	);
+
+	/** Inspector slider moving: local only, one undo step recorded on commit. */
+	const updateLayerLive = useCallback(
+		(id: string, patch: Partial<AxcutLayer>) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			if (layerLiveRef.current !== doc) layerRollbackRef.current = doc;
+			const next = updateLayerFragments(doc, id, (f) => ({ ...f, ...patch }));
+			setDocument(next, { history: false });
+			layerLiveRef.current = next;
+		},
+		[setDocument],
+	);
+
+	const commitLayerChange = useCallback(
+		async (id: string) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const rollback = layerLiveRef.current === doc ? layerRollbackRef.current : null;
+			layerRollbackRef.current = null;
+			layerLiveRef.current = null;
+			await saveDocument(doc, { history: true, historyBase: rollback });
+			const head = findLayer(doc, id)[0];
+			if (head) scheduleLayerRedraw(head.layerId);
+		},
+		[saveDocument, scheduleLayerRedraw],
+	);
+
 	const updateSpeedSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
@@ -1516,6 +1643,14 @@ export function useTimeline() {
 		// The pauses added words created. The ruler counts them; nothing else in the
 		// timeline store writes them (see `document/transcript.ts`).
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
+		layers: document?.layers ?? [],
+		markers: document?.markers ?? [],
+		addMarkerAt,
+		removeMarker,
+		updateLayerSpan,
+		updateLayerLive,
+		commitLayerChange,
+		redrawLayer,
 		speedRegions,
 		cameraFullscreenRegions,
 		clips: document?.timeline.clips ?? [],

@@ -309,6 +309,17 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
+		// Redraw one layer (after a timeline/inspector edit) into its PNG sequence.
+		bakeLayer: (
+			document: unknown,
+			layerId: string,
+		) => Promise<{
+			success: boolean;
+			layerId?: string;
+			render?: import("../src/lib/ai-edition/schema").AxcutLayerRender;
+			source?: { width?: number; height?: number };
+			message?: string;
+		}>;
 		saveRecordedVoiceover: (data: ArrayBuffer) => Promise<{
 			success: boolean;
 			path?: string;

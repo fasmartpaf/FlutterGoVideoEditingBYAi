@@ -5,15 +5,14 @@
  */
 
 import { z } from "zod";
-import { createId } from "../../../src/lib/ai-edition/document/ids";
 import {
 	LAYER_ENTRANCES,
+	anchorLayerSpan,
 	findLayer,
 	layerSpanMs,
 	removeLayer,
 } from "../../../src/lib/ai-edition/document/layers";
 import type { AxcutDocument, AxcutLayer } from "../../../src/lib/ai-edition/schema";
-import { anchorRegionsWithDerivedMs } from "../../../src/lib/ai-edition/timeline/timelineMap";
 
 export const LAYER_POSITIONS = [
 	"center",
@@ -128,16 +127,6 @@ export type LayerToolResult =
 	| { ok: true; document: AxcutDocument; layerId: string; changed: string[]; summary: string }
 	| { ok: false; error: string };
 
-function anchorLayer(document: AxcutDocument, layer: AxcutLayer, startMs: number, endMs: number): AxcutLayer[] | null {
-	const region = { ...layer, id: layer.layerId, startMs, endMs };
-	delete (region as Partial<AxcutLayer>).clipId;
-	delete (region as Partial<AxcutLayer>).sourceStartSec;
-	delete (region as Partial<AxcutLayer>).sourceEndSec;
-	const frags = anchorRegionsWithDerivedMs([region], document.timeline.clips, () => createId("layer")) as AxcutLayer[];
-	if (frags.length === 0 || frags.some((f) => typeof f.clipId !== "string")) return null;
-	return frags.map((f) => ({ ...f, layerId: layer.layerId }));
-}
-
 function editedEndSec(document: AxcutDocument): number {
 	return document.timeline.clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0);
 }
@@ -233,7 +222,7 @@ export function applyLayerTool(document: AxcutDocument, name: string, args: unkn
 			changed,
 			false,
 		);
-		const frags = anchorLayer(document, looked, Math.round(a.startSec * 1000), Math.round(endSec * 1000));
+		const frags = anchorLayerSpan(document, looked, Math.round(a.startSec * 1000), Math.round(endSec * 1000));
 		if (!frags) {
 			return {
 				ok: false,
@@ -287,7 +276,7 @@ export function applyLayerTool(document: AxcutDocument, name: string, args: unkn
 		const endMs = a.endSec !== undefined ? Math.round(a.endSec * 1000) : span.endMs;
 		if (endMs <= startMs) return { ok: false, error: "endSec must be after startSec." };
 		const without = removeLayer(document, head.layerId);
-		const placed = anchorLayer(without, { ...next, render: null }, startMs, endMs);
+		const placed = anchorLayerSpan(without, { ...next, render: null }, startMs, endMs);
 		if (!placed) return { ok: false, error: "That span covers no clip, so the layer was left as it was." };
 		if (a.startSec !== undefined || a.endSec !== undefined) changed.push("timing");
 		return {

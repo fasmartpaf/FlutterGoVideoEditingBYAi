@@ -3,6 +3,7 @@ import {
 	Camera,
 	ChevronRight,
 	FileText,
+	Layers,
 	Maximize2,
 	MousePointer2,
 	Pencil,
@@ -32,7 +33,7 @@ import {
 	type AnnotationTextAnimation,
 	TEXT_ANIMATION_VALUES,
 } from "@/lib/ai-edition/annotations/textAnimation";
-import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutAnnotationRegion, AxcutClip, AxcutLayer } from "@/lib/ai-edition/schema";
 import { rafCoalesce } from "@/lib/ai-edition/store/rafCoalesce";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -955,6 +956,85 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("annotation.deleteAnnotation")}
+					</button>
+				</div>
+			</div>
+		);
+	}
+
+	if (selection.kind === "layer") {
+		const frags = tl.layers.filter((l) => l.layerId === selection.id || l.id === selection.id);
+		const layer = frags[0];
+		if (!layer) return null;
+		const live = (patch: Partial<AxcutLayer>) => tl.updateLayerLive(layer.layerId, patch);
+		const commit = () => void tl.commitLayerChange(layer.layerId);
+		const moves = ["none", "fade", "slide-left", "slide-right", "slide-up", "slide-down", "pop", "zoom", "spin"];
+		const slider = (label: string, key: "x" | "y" | "scale" | "rotation" | "opacity" | "cornerRadius" | "shadow", min: number, max: number, step: number, decimals: number, suffix = "") => (
+			<SliderCell
+				label={label}
+				value={layer[key]}
+				min={min}
+				max={max}
+				step={step}
+				decimals={decimals}
+				suffix={suffix}
+				onChange={(next) => live({ [key]: next } as Partial<AxcutLayer>)}
+				onCommit={commit}
+			/>
+		);
+		return (
+			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+				{paneHeader(<Layers size={15} />, layer.label || "Layer", onClose, tc("actions.close"))}
+				<div style={bodyStyle}>
+					<p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
+						{layer.source.kind === "video" ? "Video" : "Picture"} above the video
+						{layer.render ? "" : " · drawing…"}
+						{layer.keyframes.length ? ` · ${layer.keyframes.length} keyframes` : ""}
+					</p>
+					{slider("Left ↔ right", "x", 0, 1, 0.005, 2)}
+					{slider("Top ↕ bottom", "y", 0, 1, 0.005, 2)}
+					{slider("Size", "scale", 0.05, 1.5, 0.01, 2)}
+					{slider("Rotation", "rotation", -180, 180, 1, 0, "°")}
+					{slider("Opacity", "opacity", 0, 1, 0.01, 2)}
+					{slider("Rounded corners", "cornerRadius", 0, 0.5, 0.01, 2)}
+					{slider("Shadow", "shadow", 0, 1, 0.01, 2)}
+					{paneRow(
+						"Comes in",
+						<select
+							value={layer.animateIn}
+							onChange={(e) => {
+								live({ animateIn: e.target.value });
+								commit();
+							}}
+							style={selectStyle}
+						>
+							{moves.map((m) => (
+								<option key={m} value={m}>
+									{m}
+								</option>
+							))}
+						</select>,
+					)}
+					{paneRow(
+						"Goes out",
+						<select
+							value={layer.animateOut}
+							onChange={(e) => {
+								live({ animateOut: e.target.value });
+								commit();
+							}}
+							style={selectStyle}
+						>
+							{moves.map((m) => (
+								<option key={m} value={m}>
+									{m}
+								</option>
+							))}
+						</select>,
+					)}
+					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
+						<Trash2 size={14} />
+						Delete layer
 					</button>
 				</div>
 			</div>

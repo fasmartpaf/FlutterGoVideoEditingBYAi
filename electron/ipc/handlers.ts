@@ -3862,6 +3862,41 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// Redraw a layer after an edit in the timeline or inspector (the agent's layer
+	// tools bake in their own media step). Returns the baked frames' description.
+	ipcMain.handle("bake-layer", async (_event, rawDocument: unknown, layerId: string) => {
+		try {
+			const { documentSchema } = await import("../../src/lib/ai-edition/schema");
+			const { findLayer } = await import("../../src/lib/ai-edition/document/layers");
+			const { bakeLayer } = await import("../ai-edition/layers/bake");
+			const { layerSourceKind } = await import("../ai-edition/layers/layerTools");
+			const { resolveGeneratedGraphicsDir } = await import("../ai-edition/agentToolMedia");
+			const { createElectronFrameSource } = await import("../ai-edition/motionStudio/electronFrameSource");
+			const document = documentSchema.parse(rawDocument);
+			const head = findLayer(document, String(layerId))[0];
+			if (!head) return { success: false, message: "No such layer" };
+			// Only a real local picture/video — never a URL or a random file type.
+			if (!path.isAbsolute(head.source.path) || !layerSourceKind(head.source.path)) {
+				return { success: false, message: "A layer shows a local picture or video file" };
+			}
+			const baked = await bakeLayer(document, head.layerId, {
+				ffmpegPath: resolveFfmpeg()?.trim() || null,
+				createFrameSource: async () => createElectronFrameSource(),
+				outRoot: path.join(resolveGeneratedGraphicsDir(document), "layers"),
+			});
+			const layer = findLayer(baked.document, head.layerId)[0]!;
+			return {
+				success: true,
+				layerId: head.layerId,
+				render: baked.render,
+				source: { width: layer.source.width, height: layer.source.height },
+			};
+		} catch (error) {
+			console.error("Failed to draw layer:", error);
+			return { success: false, message: error instanceof Error ? error.message : String(error) };
+		}
+	});
+
 	ipcMain.handle("reveal-in-folder", async (_, filePath: string) => {
 		try {
 			// showItemInFolder returns nothing, it throws on error

@@ -285,6 +285,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	saveChatAttachment: (data: ArrayBuffer, fileName: string) => {
 		return ipcRenderer.invoke("save-chat-attachment", data, fileName);
 	},
+	bakeLayer: (document: unknown, layerId: string) => {
+		return ipcRenderer.invoke("bake-layer", document, layerId);
+	},
 	setCurrentVideoPath: (path: string) => {
 		return ipcRenderer.invoke("set-current-video-path", path);
 	},

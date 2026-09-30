@@ -182,9 +182,11 @@ export function NewEditorShell() {
 		[document?.audioTracks],
 	);
 	const extraAudioHeightPx = Math.max(0, audioRowCount - 1) * AUDIO_ROW_EXPANSION_PX;
+	// The Layers lane appears with the first layer; grow by one lane so nothing below it is pushed out of view.
+	const extraLayerHeightPx = (document?.layers?.length ?? 0) > 0 ? AUDIO_ROW_EXPANSION_PX : 0;
 	const timelineHeightPx = Math.min(
 		MAX_TIMELINE_HEIGHT_PX,
-		Math.max(MIN_TIMELINE_HEIGHT_PX, timelineBaseHeightPx + extraAudioHeightPx),
+		Math.max(MIN_TIMELINE_HEIGHT_PX, timelineBaseHeightPx + extraAudioHeightPx + extraLayerHeightPx),
 	);
 	const [inspectorOpen, setInspectorOpen] = useState(true);
 	const [facet, setFacet] = useState<Facet>("effects");
@@ -1158,6 +1160,11 @@ export function NewEditorShell() {
 			copyRegion({ kind: "trim", region: { durationSec: group.end - group.start } });
 			setCopiedClipId(null);
 			toast.success("Region copied");
+			return;
+		}
+
+		if (sel.kind === "layer") {
+			toast.message("Layers can't be copied yet — ask the assistant to add another one.");
 			return;
 		}
 
