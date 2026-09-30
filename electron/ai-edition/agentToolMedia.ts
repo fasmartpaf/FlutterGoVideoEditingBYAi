@@ -25,6 +25,7 @@ import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
 import { type BrandKit, DEFAULT_BRAND_KIT, storedBrandKit } from "./motionStudio/brandKit";
 import { readGlobalBrandKit } from "./motionStudio/globalBrandKit";
+import { type BakedImageClip, bakeImageClip, getMediaHome, isImageClipPath, primaryVideoSize } from "./imageClip";
 import { deriveBrandKitFromVideo, paletteSourceVideo } from "./motionStudio/videoPalette";
 import type { CompositedFrameSampler } from "./compositorVerify/types";
 import { type SampleFramesResult, sampleFramesForAgent } from "./frameCheck";
@@ -58,6 +59,10 @@ import {
 
 /** Results of async media work, handed to the synchronous executor. */
 export interface PreparedToolMedia {
+	/** importMedia of a picture: the picture baked into a clip. */
+	imageClip?: BakedImageClip;
+	/** Why a picture could not be baked (the executor reports it). */
+	imageClipError?: string;
 	startThumbnail?: { mp4Path: string; durationSec: number; width: number; height: number };
 	motionGraphic?: {
 		mp4Path: string;
@@ -137,7 +142,7 @@ export function resolveGeneratedGraphicsDir(document: AxcutDocument): string {
 		const root = basename(mediaDir).toLowerCase() === "recordings" ? dirname(mediaDir) : mediaDir;
 		return join(root, "generated-graphics", projectId);
 	}
-	return join(tmpdir(), "openscreen-generated-graphics", projectId);
+	return join(getMediaHome() ?? join(tmpdir(), "openscreen-generated-graphics"), projectId);
 }
 
 /** Persistent cache for downscaled copies of oversized stills. */
@@ -258,7 +263,26 @@ export async function prepareAgentToolMedia(
 		if (path && ffmpegPath) {
 			try {
 				const abs = assertSafeLocalMediaPath(path, "importMedia path");
-				if (existsSync(abs)) {
+				if (existsSync(abs) && name === "importMedia" && isImageClipPath(abs)) {
+					if (options.mayMutate) {
+						try {
+							prepared.imageClip = await bakeImageClip({
+								ffmpegPath,
+								imagePath: abs,
+								durationSec: typeof a.durationSec === "number" ? a.durationSec : undefined,
+								motion: str(a.motion) as never,
+								fit: str(a.fit) as never,
+								primary: primaryVideoSize(document),
+								outDir: join(resolveGeneratedGraphicsDir(document), "image-clips"),
+								signal,
+							});
+							discardOnFailure.push(prepared.imageClip.mp4Path);
+						} catch (err) {
+							if (err instanceof Error && err.name === "AbortError") throw err;
+							prepared.imageClipError = err instanceof Error ? err.message : String(err);
+						}
+					}
+				} else if (existsSync(abs)) {
 					prepared.mediaDurationSec = await probeMediaDurationSec(ffmpegPath, abs, signal);
 					if (name === "placeMotionClip") {
 						const { runProcess } = await import("./mediaStudio");

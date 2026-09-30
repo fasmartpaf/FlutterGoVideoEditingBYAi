@@ -87,6 +87,7 @@
 		"videoFiles": "影片檔案",
 		"audioFiles": "音訊檔案",
 		"openscreenProject": "OpenScreen 專案",
-		"allFiles": "所有檔案"
+		"allFiles": "所有檔案",
+		"pictureFiles": "Pictures"
 	}
 }

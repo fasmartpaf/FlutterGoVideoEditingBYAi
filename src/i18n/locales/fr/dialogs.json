@@ -87,6 +87,7 @@
 		"videoFiles": "Fichiers vidéo",
 		"audioFiles": "Fichiers audio",
 		"openscreenProject": "Projet OpenScreen",
-		"allFiles": "Tous les fichiers"
+		"allFiles": "Tous les fichiers",
+		"pictureFiles": "Pictures"
 	}
 }

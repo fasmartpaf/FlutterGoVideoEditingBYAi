@@ -91,6 +91,7 @@ import {
 } from "./mediaEvidence";
 import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentToolMedia";
 import { assertSafeLocalMediaPath } from "./mediaStudio";
+import { IMAGE_CLIP_FITS, IMAGE_CLIP_MOTIONS, isImageClipPath } from "./imageClip";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
 import { brandKitPatchSchema, readBrandKit, storedBrandKit, writeBrandKit } from "./motionStudio/brandKit";
@@ -618,12 +619,16 @@ export const duplicateClipArgs = z.object({
 });
 
 export const importMediaArgs = z.object({
-	/** Absolute path to a video or audio file on this machine. */
+	/** Absolute path to a video, audio or picture (PNG/JPG/WEBP) file on this machine. */
 	path: z.string().min(1),
 	kind: z.enum(["video", "audio"]).optional(),
 	label: z.string().optional(),
-	/** Required when ffprobe cannot read duration; seconds. */
+	/** Required when ffprobe cannot read duration; seconds. For a picture: how long it shows (default 4). */
 	durationSec: z.number().positive().optional(),
+	/** Picture only: a slow camera move over it. */
+	motion: z.enum(IMAGE_CLIP_MOTIONS).optional(),
+	/** Picture only: fill the frame (cover), show all of it (contain), all of it over a blurred copy (blur), or pick (auto). */
+	fit: z.enum(IMAGE_CLIP_FITS).optional(),
 	/** When true (default for video), place a clip on the timeline. */
 	placeOnTimeline: z.boolean().optional(),
 	beforeClipId: z.string().min(1).nullish(),
@@ -2750,6 +2755,15 @@ export function executeAgentTool(
 			if (!existsSync(abs)) {
 				return failure(`importMedia path not found: ${abs}`);
 			}
+			// A picture becomes a clip: prep baked it into a short video.
+			const picturePath = isImageClipPath(abs) ? abs : null;
+			const baked = picturePath ? (options?.prepared?.imageClip ?? null) : null;
+			if (picturePath && !baked) {
+				return failure(
+					`Could not turn the picture into a clip${options?.prepared?.imageClipError ? `: ${options.prepared.imageClipError}` : " (ffmpeg is not available)"}.`,
+				);
+			}
+			if (baked) abs = baked.mp4Path;
 			const ext = extname(abs).toLowerCase();
 			const videoExt = new Set([
 				".mp4",
@@ -2778,7 +2792,7 @@ export function executeAgentTool(
 			}
 			// The probed duration (async media step) wins over a model-supplied
 			// guess; the model's value is only a fallback when ffprobe is missing.
-			const probed = options?.prepared?.mediaDurationSec;
+			const probed = baked ? baked.durationSec : options?.prepared?.mediaDurationSec;
 			const durationSec =
 				typeof probed === "number" && probed > 0 ? probed : parsed.data.durationSec;
 			if (durationSec == null || !(durationSec > 0)) {
@@ -2793,7 +2807,7 @@ export function executeAgentTool(
 				sizeBytes = undefined;
 			}
 			const assetId = createId("asset");
-			const label = parsed.data.label?.trim() || basename(abs);
+			const label = parsed.data.label?.trim() || basename(picturePath ?? abs);
 			const asset = {
 				id: assetId,
 				kind,
@@ -2802,6 +2816,12 @@ export function executeAgentTool(
 				durationSec,
 				sizeBytes,
 				cameraTrack: null,
+				...(baked
+					? {
+							video: { codec: "h264", width: baked.width, height: baked.height, fps: 30 },
+							still: { sourcePath: baked.sourcePath, motion: baked.motion, fit: baked.fit },
+						}
+					: {}),
 			} as AxcutDocument["assets"][number];
 			const claimsPrimary = kind !== "audio" && !document.project.primaryAssetId;
 			let next: AxcutDocument = {
@@ -2842,8 +2862,12 @@ export function executeAgentTool(
 					durationSec,
 					placedClipId: clipId,
 					placeOnTimeline: place && kind === "video",
-					note:
-						kind === "audio"
+					...(baked
+						? { picture: { sourcePath: baked.sourcePath, motion: baked.motion, fit: baked.fit, width: baked.width, height: baked.height } }
+						: {}),
+					note: baked
+						? `Picture turned into a ${Math.round(durationSec * 10) / 10}s clip (${baked.width}x${baked.height}, move: ${baked.motion}, fit: ${baked.fit})${clipId ? " and placed on the timeline" : ""}.`
+						: kind === "audio"
 							? "Audio asset imported — use addAudio to lay it on a voiceover/music lane."
 							: clipId
 								? "Video placed on the timeline."

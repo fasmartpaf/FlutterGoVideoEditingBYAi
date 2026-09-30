@@ -186,6 +186,16 @@ export const assetSchema = z.object({
 	// no schema-version bump (an older build simply drops the key on save).
 	transcriptionFailure: assetTranscriptionFailureSchema.nullish(),
 	cameraTrack: cameraTrackSchema,
+	// A picture used as a clip. The timeline plays `originalPath` (the picture
+	// baked into a short silent video); this remembers the picture and how it
+	// was baked so it can be re-baked. Additive — no schemaVersion bump.
+	still: z
+		.object({
+			sourcePath: z.string().min(1),
+			motion: z.string().default("none"),
+			fit: z.string().default("cover"),
+		})
+		.optional(),
 });
 
 // A crop is a sub-rectangle of the source video, expressed as fractions

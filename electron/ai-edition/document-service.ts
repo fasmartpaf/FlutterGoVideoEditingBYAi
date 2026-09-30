@@ -72,6 +72,29 @@ const SUPPORTED_VIDEO_EXTENSIONS = new Set([
 	".wmv",
 ]);
 
+// Pictures become clips (baked into a short video by `imageClip.ts`, injected
+// as `bakePicture` so this module stays free of ffmpeg and electron imports).
+const SUPPORTED_PICTURE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
+
+export function isSupportedPicturePath(filePath: string): boolean {
+	return SUPPORTED_PICTURE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+export type PictureBaker = (input: {
+	projectId: string;
+	imagePath: string;
+	/** The video the timeline is built around, or null in a project without one. */
+	primary: { width: number; height: number } | null;
+}) => Promise<{
+	mp4Path: string;
+	durationSec: number;
+	width: number;
+	height: number;
+	motion: string;
+	fit: string;
+	sourcePath: string;
+}>;
+
 function isSupportedVideoPath(filePath: string): boolean {
 	const ext = path.extname(filePath).toLowerCase();
 	return SUPPORTED_VIDEO_EXTENSIONS.has(ext);
@@ -167,14 +190,19 @@ export class DocumentService {
 	 */
 	private readonly onProjectRead?: (document: AxcutDocument) => void;
 
+	/** Turns a picture into a clip; absent in tests and the CLI (pictures are refused there). */
+	private readonly bakePicture?: PictureBaker;
+
 	constructor(
 		projectsRoot: string,
 		mediaRegistryDir: string,
 		onProjectRead?: (document: AxcutDocument) => void,
+		bakePicture?: PictureBaker,
 	) {
 		this.projectsRoot = projectsRoot;
 		this.mediaRegistryDir = mediaRegistryDir;
 		this.onProjectRead = onProjectRead;
+		this.bakePicture = bakePicture;
 	}
 
 	async ensureProjectsDir(): Promise<void> {
@@ -347,6 +375,9 @@ export class DocumentService {
 			throw new ProjectFileError("Asset path is required.", projectId);
 		}
 		const kind = input.kind ?? "video";
+		if (kind === "video" && isSupportedPicturePath(input.path)) {
+			return this.addPictureAsset(doc, input);
+		}
 		if (kind === "audio") {
 			if (!isSupportedAudioPath(input.path)) {
 				throw new ProjectFileError(
@@ -393,6 +424,59 @@ export class DocumentService {
 			},
 		};
 		return this.saveProject(next);
+	}
+
+	/**
+	 * A picture imported as a clip: baked into a short silent video that matches
+	 * the project's frame, and added as a video asset that remembers the picture.
+	 */
+	private async addPictureAsset(doc: AxcutDocument, input: AddAssetInput): Promise<AxcutDocument> {
+		const projectId = doc.project.id;
+		if (!this.bakePicture) {
+			throw new ProjectFileError("Pictures can't be imported here (no ffmpeg).", projectId);
+		}
+		const absolutePath = path.isAbsolute(input.path) ? input.path : path.resolve(input.path);
+		const primaryAsset =
+			doc.assets.find((a) => a.id === doc.project.primaryAssetId && a.kind !== "audio") ??
+			doc.assets.find((a) => a.kind === "video" && (a.video?.width ?? 0) > 0);
+		const pw = primaryAsset?.video?.width ?? 0;
+		const ph = primaryAsset?.video?.height ?? 0;
+		const baked = await this.bakePicture({
+			projectId,
+			imagePath: absolutePath,
+			primary: pw > 0 && ph > 0 ? { width: pw, height: ph } : null,
+		});
+		let sizeBytes: number | undefined;
+		try {
+			sizeBytes = (await fs.stat(baked.mp4Path)).size;
+		} catch {
+			sizeBytes = undefined;
+		}
+		const asset: AxcutAsset = {
+			id: createId("asset"),
+			kind: "video",
+			label: input.label?.trim() || path.basename(absolutePath),
+			originalPath: baked.mp4Path,
+			durationSec: baked.durationSec,
+			sizeBytes,
+			video: { codec: "h264", width: baked.width, height: baked.height, fps: 30 },
+			still: { sourcePath: baked.sourcePath, motion: baked.motion, fit: baked.fit },
+			cameraTrack: null,
+		};
+		const next: AxcutDocument = {
+			...doc,
+			assets: [...doc.assets, asset],
+			project: {
+				...doc.project,
+				...(!doc.project.primaryAssetId ? { primaryAssetId: asset.id } : {}),
+				updatedAt: new Date().toISOString(),
+			},
+		};
+		const saved = await this.saveProject(next);
+		// The baked clip lives in generated media, outside the recordings folder:
+		// grant it the way a loaded project's media is granted.
+		this.onProjectRead?.(saved);
+		return saved;
 	}
 
 	async removeAsset(projectId: string, assetId: string): Promise<AxcutDocument> {

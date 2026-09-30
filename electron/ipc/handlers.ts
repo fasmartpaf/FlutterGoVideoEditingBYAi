@@ -66,7 +66,8 @@ import {
 	screenRecordingPermissionDetail,
 } from "../macosPermissionAppName";
 import { RECORDINGS_DIR } from "../main";
-import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
+import { type AudioPeaksResult, getAudioPeaks, resolveFfmpeg } from "../media/audioPeaks";
+import { bakeImageClip } from "../ai-edition/imageClip";
 import {
 	readCursorRecordingFile as readCursorRecordingFileFrom,
 	readCursorSidecar,
@@ -116,6 +117,8 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 	".flv",
 	".ts",
 ]);
+// Pictures the media picker accepts: they become clips (`imageClip.ts`).
+const ALLOWED_IMPORT_PICTURE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
 /** Largest pasted file the chat saves to disk (images, short clips). */
 const MAX_CHAT_ATTACHMENT_BYTES = 200 * 1024 * 1024;
@@ -195,6 +198,10 @@ function buildDialogOptions<T extends Electron.OpenDialogOptions | Electron.Save
 		return { ...baseOptions, parent: mainWindow };
 	}
 	return baseOptions;
+}
+
+function hasAllowedImportPictureExtension(filePath: string): boolean {
+	return ALLOWED_IMPORT_PICTURE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
 function hasAllowedImportVideoExtension(filePath: string): boolean {
@@ -3706,6 +3713,10 @@ export function registerIpcHandlers(
 							name: mainT("dialogs", "fileDialogs.videoFiles"),
 							extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"],
 						},
+						{
+							name: mainT("dialogs", "fileDialogs.pictureFiles"),
+							extensions: ["png", "jpg", "jpeg", "webp", "bmp"],
+						},
 						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
 					],
 					properties: ["openFile"],
@@ -3718,7 +3729,11 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true };
 			}
 
-			const normalizedPath = await approveReadableVideoPath(result.filePaths[0]);
+			// A picture is imported as a clip (baked to video by the document service).
+			const picked = result.filePaths[0];
+			const normalizedPath = hasAllowedImportPictureExtension(picked)
+				? await approveReadableMediaPath(picked, hasAllowedImportPictureExtension)
+				: await approveReadableVideoPath(picked);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -4392,6 +4407,21 @@ export function registerIpcHandlers(
 		path.join(app.getPath("userData"), "projects"),
 		RECORDINGS_DIR,
 		approveDocumentMedia,
+		async ({ projectId, imagePath, primary }) => {
+			const ffmpegPath = resolveFfmpeg()?.trim();
+			if (!ffmpegPath) throw new Error("ffmpeg is not available to turn the picture into a clip.");
+			return bakeImageClip({
+				ffmpegPath,
+				imagePath,
+				primary,
+				outDir: path.join(
+					app.getPath("userData"),
+					"generated-graphics",
+					projectId.replace(/[^a-zA-Z0-9_-]/g, "_"),
+					"image-clips",
+				),
+			});
+		},
 	);
 	configureChatPersistence(path.join(app.getPath("userData"), "chat-sessions"));
 
