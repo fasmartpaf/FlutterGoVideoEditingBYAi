@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { useScopedT } from "@/contexts/I18nContext";
 import { noteUiProbeClipSwitch } from "@/lib/ai-edition/perf/uiFrameProbe";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
@@ -45,6 +46,21 @@ import {
  * calques interactifs (zoom gimbal, annotations, drag webcam) qui restent des
  * éléments DOM cliquables au-dessus.
  */
+/**
+ * The asset the native view opens on: what the timeline actually starts with.
+ * The primary asset is usually that clip, but not always — a project whose first
+ * import never made it onto the timeline (a picture-only story) opened on that
+ * unused file, and the preview showed it instead of the real first clip.
+ */
+function previewSourceAsset(document: AxcutDocument): AxcutDocument["assets"][number] | undefined {
+	const first = [...document.timeline.clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec)[0];
+	return (
+		(first ? document.assets.find((a) => a.id === first.assetId) : undefined) ??
+		document.assets.find((a) => a.id === document.project.primaryAssetId) ??
+		document.assets[0]
+	);
+}
+
 export function NativeCompositorOverlay() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const previousActiveClipIdRef = useRef<string | null>(null);
@@ -87,8 +103,7 @@ export function NativeCompositorOverlay() {
 	// still needs it to look up the probed webcam size, which shapes the PiP box.
 	const cameraPath = useMemo(() => {
 		if (!document) return undefined;
-		const primary =
-			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+		const primary = previewSourceAsset(document);
 		return primary ? assetCameraSource(primary).path || undefined : undefined;
 	}, [document]);
 
@@ -96,8 +111,7 @@ export function NativeCompositorOverlay() {
 		if (!document) {
 			return null;
 		}
-		const primary =
-			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+		const primary = previewSourceAsset(document);
 		if (!primary?.originalPath) {
 			return {};
 		}

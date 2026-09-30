@@ -191,7 +191,16 @@ export function parseProfessionalEditIntent(userMessage: string): ProfessionalEd
 	};
 }
 
+/**
+ * Requests the orchestrator can't carry out: pictures and layers, attached files,
+ * and the pro-audio tools. They belong to the tool agent (importMedia, addLayer,
+ * duckMusic, …) — the orchestrator would only "review the cut" and change nothing.
+ */
+const AGENT_TOOL_REQUEST =
+	/\b(pictures?|images?|photos?|png|jpe?g|webp|logos?|layers?|picture[\s-]*in[\s-]*picture|pip|stickers?|voice\s*-?\s*overs?|narrat\w*|sound\s*effects?|sfx|whoosh|swoosh|ding|riser|duck\w*|loudness|lufs|clean\s+(?:up\s+)?(?:my\s+|the\s+)?voice|noise|hiss)\b/i;
+
 export function isProfessionalEditRequest(userMessage: string): boolean {
+	if (userMessage.includes("Attached files (absolute paths") || AGENT_TOOL_REQUEST.test(userMessage)) return false;
 	const intent = parseProfessionalEditIntent(userMessage);
 	const t = userMessage.trim().toLowerCase();
 	return (
