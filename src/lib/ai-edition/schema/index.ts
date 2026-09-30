@@ -196,6 +196,17 @@ export const assetSchema = z.object({
 			fit: z.string().default("cover"),
 		})
 		.optional(),
+	// A processed copy of another asset (Phase 2 audio): music ducked under speech,
+	// or a recording with its voice cleaned. `fromAssetId` is the untouched original
+	// that "undo" goes back to. Additive — no schemaVersion bump.
+	derived: z
+		.object({
+			fromAssetId: z.string().min(1),
+			kind: z.string().min(1),
+			amountDb: z.number().optional(),
+			level: z.string().optional(),
+		})
+		.optional(),
 });
 
 // A crop is a sub-rectangle of the source video, expressed as fractions

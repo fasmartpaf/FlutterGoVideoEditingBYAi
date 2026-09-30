@@ -93,6 +93,7 @@ import { type PreparedToolMedia, resolveGeneratedGraphicsDir } from "./agentTool
 import { assertSafeLocalMediaPath } from "./mediaStudio";
 import { IMAGE_CLIP_FITS, IMAGE_CLIP_MOTIONS, isImageClipPath } from "./imageClip";
 import { applyLayerTool } from "./layers/layerTools";
+import { dropUnusedDerivedAssets, makeDuckedAsset, planDuck, swapTrackAsset } from "./audioPro/duck";
 import { findLayer, layerCanvasSize, layerSpanMs, updateLayer } from "../../src/lib/ai-edition/document/layers";
 import { findStartThumbnailClip, insertStartThumbnailClip } from "./startThumbnail";
 import { CURSOR_THEME_IDS, CURSOR_THEMES } from "../../src/lib/cursor/cursorThemes";
@@ -634,6 +635,15 @@ export const importMediaArgs = z.object({
 	/** When true (default for video), place a clip on the timeline. */
 	placeOnTimeline: z.boolean().optional(),
 	beforeClipId: z.string().min(1).nullish(),
+});
+
+export const duckMusicArgs = z.object({
+	/** One music track (its id from getCurrentDocument.audioTracks); omit for every music/sfx track. */
+	trackId: z.string().min(1).optional(),
+	/** How far the music dips under speech, in dB (default 12). */
+	amountDb: z.number().min(3).max(30).optional(),
+	/** Put the track(s) back on the original, un-ducked music. */
+	undo: z.boolean().optional(),
 });
 
 export const tightenPacingArgs = z.object({
@@ -1243,6 +1253,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"duckMusic",
 	"createShowcaseVideo",
 	"addLayer",
 	"setLayer",
@@ -1370,6 +1381,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"duckMusic",
 	"addLayer",
 	"setLayer",
 	"removeLayer",
@@ -3947,6 +3959,58 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "duckMusic": {
+			const parsed = duckMusicArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const plan = planDuck(document, parsed.data.trackId);
+			if (plan.length === 0) {
+				return failure(
+					parsed.data.trackId
+						? `No music track ${parsed.data.trackId}. Music tracks: ${collapseTracksToPills(document.audioTracks).filter((p) => p.kind !== "voiceover").map((p) => trackGroupId(p)).join(", ") || "none"}.`
+						: "There is no music track to duck. Import music (importMedia kind:audio) and lay it with addAudio first.",
+				);
+			}
+			let next = document;
+			const report: Array<Record<string, unknown>> = [];
+			if (parsed.data.undo) {
+				for (const item of plan) {
+					next = swapTrackAsset(next, item.trackId, item.sourceAsset.id);
+					report.push({ trackId: item.trackId, restored: item.sourceAsset.label });
+				}
+				next = dropUnusedDerivedAssets(next);
+				return {
+					ok: true,
+					document: next,
+					resultJson: JSON.stringify({ tracks: report }),
+					summary: `music back to the original on ${report.length} track(s)`,
+				};
+			}
+			const baked = options?.prepared?.duck ?? [];
+			for (const item of plan) {
+				if (item.skipped) {
+					report.push({ trackId: item.trackId, skipped: item.skipped });
+					continue;
+				}
+				const hit = baked.find((b) => b.trackId === item.trackId);
+				if (!hit?.path) {
+					report.push({ trackId: item.trackId, skipped: hit?.error ?? options?.prepared?.duckError ?? "the ducked copy was not made" });
+					continue;
+				}
+				const asset = makeDuckedAsset(item.sourceAsset, hit.path, hit.amountDb);
+				next = swapTrackAsset({ ...next, assets: [...next.assets, asset] }, item.trackId, asset.id);
+				report.push({ trackId: item.trackId, duckedDb: hit.amountDb, speechSpans: hit.speechSpans, speechSource: hit.speechSource });
+			}
+			next = dropUnusedDerivedAssets(next);
+			const done = report.filter((r) => r.duckedDb !== undefined).length;
+			if (done === 0) return failure(`Nothing was ducked: ${report.map((r) => `${r.trackId}: ${r.skipped}`).join("; ")}`);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ tracks: report }),
+				summary: `ducked the music under speech on ${done} track(s)`,
 			};
 		}
 

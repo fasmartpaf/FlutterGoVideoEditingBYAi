@@ -72,6 +72,7 @@ const ARGS: Record<string, unknown> = {
 	listMotionTemplates: {},
 	createMotionClip: { template: "titleCard", params: { title: "Demo" } },
 	createShowcaseVideo: { place: "none" },
+	duckMusic: { amountDb: 12 },
 	addLayer: { path: "/tmp/logo.png", startSec: 0 },
 	setLayer: { layerId: "layer_x", opacity: 0.5 },
 	removeLayer: { layerId: "layer_x" },
@@ -340,7 +341,7 @@ describe("textFromChatModelEnd", () => {
 	});
 });
 
-const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer"]);
+const RENDER_TOOLS = new Set(["createMotionClip", "createShowcaseVideo", "addMotionOverlay", "sampleFrames", "getVideoSummary", "addLayer", "setLayer", "duckMusic"]);
 
 describe("the sink announces each call exactly once, with the real verdict", () => {
 	for (const name of OPENSCREEN_TOOLS) {

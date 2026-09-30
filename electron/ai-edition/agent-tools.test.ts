@@ -179,6 +179,7 @@ describe("the mutating-tool table", () => {
 				"addCursorHighlight",
 				"registerCharacter",
 				"addBeatGraphics",
+				"duckMusic",
 				"createMotionClip",
 				"createShowcaseVideo",
 				"addLayer",

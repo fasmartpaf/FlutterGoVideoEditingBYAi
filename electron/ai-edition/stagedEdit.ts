@@ -306,7 +306,10 @@ const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
 		match: /\b(cut\w*|trim\w*|shorter|shorten|silences?|dead\s*air|pauses?|filler|tighten|pacing|remove\s+the\s+part|length)\b/i,
 		tools: PACING_TOOLS,
 	},
-	{ match: /\b(music|audio|sound|volume|voice)\b/i, tools: ["addAudio", "setAudio", "importMedia", "removeModifier"] },
+	{
+		match: /\b(music|audio|sound|volume|voice|duck|ducking|loud|loudness|noise|noisy|clean|sfx|whoosh|voiceover|narrat\w*)\b/i,
+		tools: ["addAudio", "setAudio", "importMedia", "removeModifier", "duckMusic"],
+	},
 	{ match: /\b(blur|hide|privacy|redact|email|password)\b/i, tools: ["addPrivacyCover", "addAnnotation", "setAnnotation", "removeModifier"] },
 ];
 

@@ -24,6 +24,15 @@ import type { AxcutDocument, AxcutLayerRender } from "../../src/lib/ai-edition/s
 import { createId as createLayerId } from "../../src/lib/ai-edition/document/ids";
 import { findLayer, layerCanvasSize } from "../../src/lib/ai-edition/document/layers";
 import { bakeLayer } from "./layers/bake";
+import {
+	DEFAULT_DUCK_DB,
+	bakeDuckedAudio,
+	planDuck,
+	speechBySilence,
+	speechInFileTime,
+	speechPlaybackIntervals,
+	transcriptSpeech,
+} from "./audioPro/duck";
 import { applyLayerTool, layerSourceKind } from "./layers/layerTools";
 import { assertSafeLocalMediaPath, probeMediaDurationSec, shrinkImageFile } from "./mediaStudio";
 import { bakeMotionGraphicMp4 } from "./motionGraphicPreview";
@@ -70,6 +79,9 @@ export interface PreparedToolMedia {
 		source?: { width?: number; height?: number; durationSec?: number };
 	};
 	layerError?: string;
+	/** duckMusic: one ducked copy per track. */
+	duck?: Array<{ trackId: string; path?: string; amountDb: number; speechSpans: number; speechSource: string; error?: string }>;
+	duckError?: string;
 	/** importMedia of a picture: the picture baked into a clip. */
 	imageClip?: BakedImageClip;
 	/** Why a picture could not be baked (the executor reports it). */
@@ -305,6 +317,55 @@ export async function prepareAgentToolMedia(
 				}
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;
+			}
+		}
+	}
+
+	if (name === "duckMusic" && options.mayMutate && a.undo !== true) {
+		if (!ffmpegPath) prepared.duckError = "ffmpeg is not available";
+		else {
+			try {
+				const amountDb = typeof a.amountDb === "number" ? Math.min(30, Math.max(3, a.amountDb)) : DEFAULT_DUCK_DB;
+				const plan = planDuck(document, str(a.trackId));
+				// Speech per recording: the transcript, else the level (silence detection).
+				const speech = transcriptSpeech(document);
+				let speechSource = "transcript";
+				for (const clip of document.timeline.clips) {
+					if ((speech.get(clip.assetId) ?? []).length > 0) continue;
+					const asset = document.assets.find((x) => x.id === clip.assetId);
+					if (!asset?.originalPath || !existsSync(asset.originalPath) || asset.still) continue;
+					speech.set(clip.assetId, await speechBySilence(ffmpegPath, asset.originalPath, asset.durationSec ?? 3600, signal));
+					speechSource = "audio level";
+				}
+				const onProgramme = speechPlaybackIntervals(document, speech);
+				prepared.duck = [];
+				for (const item of plan) {
+					if (item.skipped) continue;
+					try {
+						// Map through the placement the track plays with NOW (it may be on an older ducked copy).
+						const current = document.assets.find(
+							(x) => x.id === (document.audioTracks.find((t) => (t.trackId ?? t.id) === item.trackId)?.assetId ?? ""),
+						);
+						const playingPath = current?.originalPath ?? item.sourceAsset.originalPath;
+						const inFile = speechInFileTime(document, playingPath, onProgramme) ?? [];
+						const path = await bakeDuckedAudio({
+							ffmpegPath,
+							sourcePath: item.sourceAsset.originalPath,
+							speechInFile: inFile,
+							amountDb,
+							outDir: join(resolveGeneratedGraphicsDir(document), "audio"),
+							signal,
+						});
+						discardOnFailure.push(path);
+						prepared.duck.push({ trackId: item.trackId, path, amountDb, speechSpans: inFile.length, speechSource });
+					} catch (err) {
+						if (err instanceof Error && err.name === "AbortError") throw err;
+						prepared.duck.push({ trackId: item.trackId, amountDb, speechSpans: 0, speechSource, error: err instanceof Error ? err.message : String(err) });
+					}
+				}
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") throw err;
+				prepared.duckError = err instanceof Error ? err.message : String(err);
 			}
 		}
 	}
