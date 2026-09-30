@@ -16,13 +16,14 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import { extname, isAbsolute, join } from "node:path";
 import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
 import { getEditorSettings } from "../../../src/lib/ai-edition/store/editorSettings";
-import { runProcess } from "../mediaStudio";
+import { runProcess, runProcessBuffer } from "../mediaStudio";
 import type { BrandKit } from "../motionStudio/brandKit";
 import { writeComposition } from "../motionStudio/composition";
 import { type FrameSource, renderComposition } from "../motionStudio/render";
 import { paletteSourceVideo } from "../motionStudio/videoPalette";
 import { type MotionClipCheck, verifyMotionClip } from "../motionStudio/verify";
 import {
+	activeColumnSpan,
 	autoPlan,
 	buildFootageFilter,
 	buildMixFilter,
@@ -145,6 +146,38 @@ export function renderProgress(
 	};
 }
 
+/** How much each column of the recording changes (sampled small and gray), as the busy band. */
+async function busyColumns(
+	ffmpegPath: string,
+	path: string,
+	startSec: number,
+	endSec: number,
+	signal?: AbortSignal,
+): Promise<{ x0: number; x1: number } | null> {
+	const W = 192;
+	const H = 108;
+	const span = Math.max(1, endSec - startSec);
+	const rate = Math.min(3, 90 / span);
+	const buf = await runProcessBuffer(
+		ffmpegPath,
+		["-v", "error", "-ss", startSec.toFixed(3), "-t", span.toFixed(3), "-i", path, "-vf", `fps=${rate.toFixed(3)},scale=${W}:${H},format=gray`, "-f", "rawvideo", "-"],
+		{ timeoutMs: 120_000, signal },
+	);
+	const frames = Math.floor(buf.length / (W * H));
+	if (frames < 4) return null;
+	const activity = new Array<number>(W).fill(0);
+	for (let f = 1; f < frames; f++) {
+		const a = (f - 1) * W * H;
+		const b = f * W * H;
+		for (let y = 0; y < H; y++) {
+			for (let x = 0; x < W; x++) {
+				if (Math.abs(buf[b + y * W + x]! - buf[a + y * W + x]!) > 12) activity[x]!++;
+			}
+		}
+	}
+	return activeColumnSpan(activity);
+}
+
 const filterCache = new Map<string, Promise<ReadonlySet<string> | undefined>>();
 
 /** The filters this ffmpeg build has (undefined when it cannot be asked). Asked once per binary. */
@@ -204,6 +237,17 @@ export async function renderShowcase(
 	const trimEnd = Math.max(trimStart + 0.5, Math.min(srcDuration, args.trim?.endSec ?? srcDuration));
 	const auto = autoPlan(args, options.signals ?? {}, { startSec: trimStart, endSec: trimEnd });
 	args = auto.args;
+	// No crop planned: show the part of the screen that changes (drop still sidebars and panels).
+	if (args.auto && !args.crop) {
+		const span = await busyColumns(ffmpegPath, source.path, trimStart, trimEnd, signal).catch((err) => {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			return null;
+		});
+		if (span) {
+			args = { ...args, crop: { x: span.x0, y: 0, width: span.x1 - span.x0, height: 1 } };
+			auto.filled.push(`cropped to the part of the screen that changes (${Math.round(span.x0 * 100)}–${Math.round(span.x1 * 100)}% of the width; still side panels dropped)`);
+		}
+	}
 	const segments = buildSegments(trimStart, trimEnd, args.speed);
 	const footageSec = footageDuration(segments);
 	if (footageSec > 180) {

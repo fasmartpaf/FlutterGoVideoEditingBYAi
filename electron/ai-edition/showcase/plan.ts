@@ -633,3 +633,51 @@ export function buildMixFilter(input: {
 	return parts.join(";");
 }
 
+/**
+ * The part of the screen worth showing, from how much each column changes
+ * over the recording: sidebars and side panels barely change while the page
+ * being worked in scrolls and types. Returns the busiest contiguous band of
+ * columns (small gaps bridged), widened by a margin, as fractions of the
+ * width — or null when the whole width is busy or the band is too narrow to
+ * trust.
+ */
+export function activeColumnSpan(
+	activity: readonly number[],
+	opts: { threshold?: number; gap?: number; margin?: number; minWidth?: number; maxWidth?: number } = {},
+): { x0: number; x1: number } | null {
+	const n = activity.length;
+	if (n < 16) return null;
+	const { threshold = 0.04, gap = 4, margin = 0.03, minWidth = 0.4, maxWidth = 0.93 } = opts;
+	const smooth = activity.map((_, i) => {
+		let acc = 0;
+		let k = 0;
+		for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) {
+			acc += activity[j]!;
+			k++;
+		}
+		return acc / k;
+	});
+	const peak = Math.max(...smooth);
+	if (!(peak > 0)) return null;
+	const on = smooth.map((v) => v >= peak * threshold);
+	let best: [number, number] | null = null;
+	let start = -1;
+	let lastOn = -1;
+	for (let i = 0; i <= n; i++) {
+		if (i < n && on[i]) {
+			if (start < 0) start = i;
+			lastOn = i;
+		} else if (start >= 0 && (i === n || i - lastOn > gap)) {
+			const weight = smooth.slice(start, lastOn + 1).reduce((a, b) => a + b, 0);
+			const bestWeight = best ? smooth.slice(best[0], best[1] + 1).reduce((a, b) => a + b, 0) : -1;
+			if (weight > bestWeight) best = [start, lastOn];
+			start = -1;
+		}
+	}
+	if (!best) return null;
+	const x0 = Math.max(0, best[0] / n - margin);
+	const x1 = Math.min(1, (best[1] + 1) / n + margin);
+	const w = x1 - x0;
+	return w >= minWidth && w <= maxWidth ? { x0, x1 } : null;
+}
+

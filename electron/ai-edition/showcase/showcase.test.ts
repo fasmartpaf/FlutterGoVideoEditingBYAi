@@ -515,3 +515,26 @@ describe("ffmpeg builds without every filter", () => {
 		expect(bare).not.toMatch(/eq=|curves|unsharp/);
 	});
 });
+
+describe("auto crop", () => {
+	it("keeps the busy band of a chat app and drops the still sidebars", async () => {
+		const { activeColumnSpan } = await import("./plan");
+		// Column activity measured on the FlutterGo recording (192 columns): quiet
+		// sidebar, a busy chat column, a quiet right panel with a scrollbar blip.
+		const cols = [
+			...Array(30).fill(8),
+			...Array(25).fill(200),
+			...Array(105).fill(900),
+			...Array(12).fill(20),
+			...Array(5).fill(170),
+			...Array(15).fill(10),
+		];
+		const span = activeColumnSpan(cols)!;
+		expect(span.x0).toBeGreaterThan(0.1);
+		expect(span.x0).toBeLessThan(0.2);
+		expect(span.x1).toBeGreaterThan(0.8);
+		expect(span.x1).toBeLessThan(0.9);
+		expect(activeColumnSpan(Array(192).fill(500))).toBeNull();
+		expect(activeColumnSpan([...Array(160).fill(0), ...Array(32).fill(500)])).toBeNull();
+	});
+});
