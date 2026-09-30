@@ -24,6 +24,7 @@ import { type MotionClipCheck, verifyMotionClip } from "../motionStudio/verify";
 import {
 	autoPlan,
 	buildFootageFilter,
+	buildMixFilter,
 	buildSegments,
 	footageDuration,
 	resolveCrop,
@@ -33,6 +34,7 @@ import {
 	type ShowcaseTimeline,
 } from "./plan";
 import { renderShowcasePage, showcaseTiming } from "./template";
+import { type BeatGrid, detectBeats, snapToBeat } from "./beats";
 import { trackBands } from "./track";
 
 export interface ShowcaseClip {
@@ -53,6 +55,8 @@ export interface ShowcaseClip {
 	/** Parts of the plan that were outside the trim / crop and were left out. */
 	dropped: string[];
 	hasAudio: boolean;
+	/** The music's tempo when it was beat-synced. */
+	musicBpm: number | null;
 	/** What was filled in from the recording's clicks and still stretches. */
 	autoFilled: string[];
 	cached?: boolean;
@@ -203,6 +207,9 @@ export async function renderShowcase(
 	const size = draft ? { width: Math.round(full.width / 4) * 2, height: Math.round(full.height / 4) * 2 } : full;
 	const fps = draft ? 30 : args.fps;
 	const withAudio = args.keepAudio && probe.hasAudio;
+	const music = args.music && isAbsolute(args.music.path) && existsSync(args.music.path) ? args.music : null;
+	if (args.music && !music) dropped.push(`music not found: ${args.music.path}`);
+	const withSound = withAudio || Boolean(music);
 
 	const outDir = outDirFor(options.generatedDir);
 	mkdirSync(outDir, { recursive: true });
@@ -300,6 +307,20 @@ export async function renderShowcase(
 				c.track = all.length ? all.slice(a, b + 1).map((v) => Math.round((v - all[r]!) * 10) / 10) : null;
 			});
 		}
+		// Music: find its beat and land the cards and highlights on it.
+		let beatGrid: BeatGrid | null = null;
+		if (music?.beatSync) {
+			options.onProgress?.("Finding the beat");
+			beatGrid = await detectBeats(ffmpegPath, music.path, music.startAtSec, timing.totalSec, signal);
+			if (beatGrid) {
+				const onBeat = (inSec: number, outSec: number) => {
+					const t = snapToBeat(timing.footageStart + inSec, beatGrid!.beats) - timing.footageStart;
+					return t >= 0 && t < outSec - 0.6 ? t : inSec;
+				};
+				for (const st of timeline.steps) st.in = onBeat(st.in, st.out);
+				for (const h of timeline.highlights) h.in = onBeat(h.in, h.out);
+			}
+		}
 		const html = renderShowcasePage({
 			width: size.width,
 			height: size.height,
@@ -316,6 +337,7 @@ export async function renderShowcase(
 			url: args.url ?? "",
 			tags: args.tags ?? [],
 			theme: args.theme,
+			beats: beatGrid?.beats ?? [],
 		});
 		const htmlPath = join(work, "showcase.html");
 		writeFileSync(htmlPath, html);
@@ -333,7 +355,7 @@ export async function renderShowcase(
 				height: size.height,
 				fps,
 				durationSec: timing.totalSec,
-				outPath: withAudio ? silentPath : mp4Path,
+				outPath: withSound ? silentPath : mp4Path,
 				ffmpegPath,
 				signal,
 				maxDurationSec: 300,
@@ -343,11 +365,15 @@ export async function renderShowcase(
 			composition.dispose();
 		}
 
-		// 4. Sound: the retimed recording audio, starting with the footage, faded at the end.
-		if (withAudio) {
+		// 4. Sound: the retimed recording audio from the footage on, and the music under it.
+		if (withSound) {
 			options.onProgress?.("Adding the sound");
-			const delayMs = Math.round(timing.footageStart * 1000);
-			const fadeAt = Math.max(0, timing.totalSec - 0.6);
+			const mix = buildMixFilter({
+				totalSec: timing.totalSec,
+				footageStartSec: timing.footageStart,
+				voice: withAudio,
+				music: music ? { volume: music.volume, startAtSec: music.startAtSec } : null,
+			})!;
 			const mux = await runProcess(
 				ffmpegPath,
 				[
@@ -356,10 +382,10 @@ export async function renderShowcase(
 					"-y",
 					"-i",
 					silentPath,
-					"-i",
-					audioPath,
+					...(withAudio ? ["-i", audioPath] : []),
+					...(music ? ["-i", music.path] : []),
 					"-filter_complex",
-					`[1:a]adelay=${delayMs}:all=1,apad,atrim=0:${timing.totalSec.toFixed(3)},afade=t=out:st=${fadeAt.toFixed(3)}:d=0.6[a]`,
+					mix,
 					"-map",
 					"0:v",
 					"-map",
@@ -417,7 +443,8 @@ export async function renderShowcase(
 			footageSec,
 			footageStartSec: timing.footageStart,
 			dropped,
-			hasAudio: withAudio,
+			hasAudio: withSound,
+			musicBpm: beatGrid?.bpm ?? null,
 			autoFilled: auto.filled,
 		};
 		if (check.ok) writeCache(outDir, cacheKey, result);

@@ -89,6 +89,20 @@ export const showcaseArgsSchema = z.object({
 		)
 		.max(12)
 		.optional(),
+	/**
+	 * Background music under the video: a track the user gave (absolute path).
+	 * It fades in and out, ducks under speech, and with beatSync the step cards,
+	 * highlights and a soft background pulse land on its beat.
+	 */
+	music: z
+		.object({
+			path: z.string().trim().min(1),
+			volume: z.number().min(0.05).max(1).default(0.35),
+			/** Where in the song to start (seconds). */
+			startAtSec: sec.default(0),
+			beatSync: z.boolean().default(true),
+		})
+		.optional(),
 	/** Floating tags in the background (product words: "Dart", "iOS", "AI agent"). */
 	tags: z.array(z.string().trim().min(1).max(24)).max(8).optional(),
 	/** Line under the logo at the end, e.g. "From brief to build plan." */
@@ -482,5 +496,43 @@ export function autoPlan(args: ShowcaseArgs, signals: RecordingSignals, trim: { 
 		}
 	}
 	return { args: next, filled };
+}
+
+/**
+ * The audio graph for the finished showcase. Inputs: 0 = the silent picture,
+ * then the retimed recording sound (when there is any), then the music (when
+ * given). The recording starts with the footage; the music fades in and out
+ * and ducks under the recording's sound.
+ */
+export function buildMixFilter(input: {
+	totalSec: number;
+	footageStartSec: number;
+	voice: boolean;
+	music: { volume: number; startAtSec: number } | null;
+}): string | null {
+	const { totalSec, footageStartSec, voice, music } = input;
+	if (!voice && !music) return null;
+	const T = totalSec.toFixed(3);
+	const parts: string[] = [];
+	const voiceIn = 1;
+	const musicIn = voice ? 2 : 1;
+	if (voice) parts.push(`[${voiceIn}:a]adelay=${Math.round(footageStartSec * 1000)}:all=1,apad,atrim=0:${T}[vo]`);
+	if (music) {
+		const fadeOut = Math.max(0, totalSec - 1.6).toFixed(3);
+		parts.push(
+			`[${musicIn}:a]atrim=start=${music.startAtSec.toFixed(3)},asetpts=PTS-STARTPTS,volume=${music.volume.toFixed(3)},apad,atrim=0:${T},afade=t=in:st=0:d=0.8,afade=t=out:st=${fadeOut}:d=1.5[mu]`,
+		);
+	}
+	const fade = `afade=t=out:st=${Math.max(0, totalSec - 0.6).toFixed(3)}:d=0.6`;
+	if (voice && music) {
+		parts.push("[vo]asplit=2[vk][vm]");
+		parts.push("[mu][vk]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=400[md]");
+		parts.push(`[md][vm]amix=inputs=2:duration=first:normalize=0,${fade}[a]`);
+	} else if (voice) {
+		parts.push(`[vo]${fade}[a]`);
+	} else {
+		parts.push(`[mu]anull[a]`);
+	}
+	return parts.join(";");
 }
 

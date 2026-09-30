@@ -351,3 +351,31 @@ describe("following a cover as the page scrolls", () => {
 		expect(html).toContain("cvs.forEach");
 	});
 });
+
+describe("music", () => {
+	it("finds the beat of a steady click track", async () => {
+		const { BEAT_SAMPLE_RATE, beatGridFromEnvelope, onsetEnvelope, snapToBeat } = await import("./beats");
+		const sr = BEAT_SAMPLE_RATE;
+		const samples = new Float32Array(sr * 8);
+		// 120 BPM: a short burst every 0.5 s, starting at 0.25 s.
+		for (let t = 0.25; t < 8; t += 0.5) for (let j = 0; j < 400; j++) samples[Math.floor(t * sr) + j] = Math.sin(j) * 0.8;
+		const grid = beatGridFromEnvelope(onsetEnvelope(samples), sr / 256)!;
+		expect(Math.abs(grid.bpm - 120)).toBeLessThan(4);
+		expect(Math.abs(grid.beats[0]! - 0.25)).toBeLessThan(0.05);
+		expect(snapToBeat(1.2, [0.25, 0.75, 1.25, 1.75])).toBe(1.25);
+		expect(snapToBeat(1.0, [0.25, 1.75])).toBe(1.0);
+	});
+
+	it("mixes the recording and the music, ducking the music under speech", async () => {
+		const { buildMixFilter } = await import("./plan");
+		expect(buildMixFilter({ totalSec: 10, footageStartSec: 1.45, voice: false, music: null })).toBeNull();
+		const both = buildMixFilter({ totalSec: 10, footageStartSec: 1.45, voice: true, music: { volume: 0.35, startAtSec: 12 } })!;
+		expect(both).toContain("[1:a]adelay=1450");
+		expect(both).toContain("[2:a]atrim=start=12.000");
+		expect(both).toContain("sidechaincompress");
+		expect(both.endsWith("[a]")).toBe(true);
+		const musicOnly = buildMixFilter({ totalSec: 10, footageStartSec: 1.45, voice: false, music: { volume: 0.5, startAtSec: 0 } })!;
+		expect(musicOnly).toContain("[1:a]atrim");
+		expect(musicOnly).not.toContain("sidechain");
+	});
+});

@@ -37,6 +37,8 @@ export interface ShowcasePageInput {
 	url: string;
 	tags: string[];
 	theme: "dark" | "light";
+	/** Music beats (video seconds): the background pulses on them. */
+	beats?: number[];
 }
 
 export interface ShowcaseTiming {
@@ -191,6 +193,7 @@ export function renderShowcasePage(input: ShowcasePageInput): string {
 			track: c.track,
 		})),
 		tags: input.tags.slice(0, 8),
+		beats: (input.beats ?? []).filter((b) => b >= 0).slice(0, 2000),
 	};
 
 	const steps = input.timeline.steps
@@ -332,6 +335,11 @@ window.render=async(T)=>{
  if(i!==cur){cur=i;const nx=new Image();nx.src='f/'+pad(i)+'.jpg';try{await nx.decode()}catch(e){}img.src=nx.src;try{await img.decode()}catch(e){}}
  // background
  const bx=C.SW,by=C.SH;
+ // Beat pulse: a soft swell of the light and the halo on every beat of the music.
+ let pulse=0;for(const b of C.beats){if(b>T)break;const d=T-b;if(d<.45)pulse=Math.max(pulse,Math.exp(-d/.16));}
+ const hl=$('halo');if(hl)hl.style.opacity=(0.75+0.25*pulse).toFixed(3);
+ const bmk=$('bigmark');if(bmk)bmk.style.filter=pulse>0.01?'brightness('+(1+0.5*pulse).toFixed(3)+')':'none';
+ $('b1').style.opacity=(0.85+0.15*pulse).toFixed(3);$('b2').style.opacity=(0.85+0.15*pulse).toFixed(3);
  $('b1').style.transform='translate('+(bx*.16+Math.sin(T*.35)*160)+'px,'+(by*.82+Math.cos(T*.3)*90)+'px)';
  $('b2').style.transform='translate('+(bx*.78+Math.cos(T*.27)*180)+'px,'+(by*.2+Math.sin(T*.33)*120)+'px)';
  $('b3').style.transform='translate('+(bx*.5+Math.sin(T*.22+1)*260)+'px,'+(by*.52+Math.cos(T*.25)*140)+'px)';
