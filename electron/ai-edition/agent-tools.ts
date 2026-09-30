@@ -677,6 +677,20 @@ export const addSoundEffectArgs = z.object({
 	gainDb: z.number().min(-30).max(6).optional(),
 });
 
+export const generateVoiceoverArgs = z.object({
+	/** What to say, exactly as it should be spoken. */
+	text: z.string().min(1).max(5000),
+	/** Timeline second it starts at (default 0). */
+	atSec: z.number().nonnegative().optional(),
+	/** Language code (en, ur, hi, ar, en_GB…); default guessed from the script. */
+	language: z.string().min(2).max(12).optional(),
+	/** A specific installed voice by name. */
+	voice: z.string().max(60).optional(),
+	/** Speaking rate (macOS: words per minute, ~140-220). */
+	rate: z.number().min(60).max(400).optional(),
+	gainDb: z.number().min(-30).max(12).optional(),
+});
+
 export const tightenPacingArgs = z.object({
 	assetId: z.string().min(1).optional(),
 	/** Only cut silence segments at least this long (default 0.45s). */
@@ -1284,6 +1298,7 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"createMotionGraphicPreview",
 	"listMotionTemplates",
 	"createMotionClip",
+	"generateVoiceover",
 	"addSoundEffect",
 	"setLoudness",
 	"cleanVoice",
@@ -1415,6 +1430,7 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addCursorHighlight",
 	"registerCharacter",
 	"addBeatGraphics",
+	"generateVoiceover",
 	"addSoundEffect",
 	"setLoudness",
 	"cleanVoice",
@@ -3996,6 +4012,62 @@ export function executeAgentTool(
 				summary: placed
 					? `motion graphic "${clip.label}" (${clip.durationSec.toFixed(1)}s) ${placed.where}`
 					: `motion graphic "${clip.label}" rendered (${clip.durationSec.toFixed(1)}s) for preview`,
+			};
+		}
+
+		case "generateVoiceover": {
+			const parsed = generateVoiceoverArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const vo = options?.prepared?.voiceover;
+			if (!vo) return failure(options?.prepared?.voiceoverError ?? "The voiceover could not be made.");
+			const asset = {
+				id: createId("asset"),
+				kind: "audio",
+				label: `Voiceover: ${parsed.data.text.slice(0, 32)}${parsed.data.text.length > 32 ? "…" : ""}`,
+				originalPath: vo.path,
+				durationSec: vo.durationSec,
+				cameraTrack: null,
+			} as AxcutDocument["assets"][number];
+			const at = parsed.data.atSec ?? 0;
+			const trackId = createId("audio");
+			const withAsset: AxcutDocument = { ...document, assets: [...document.assets, asset] };
+			const next = placeAudioTrackInDocument(
+				withAsset,
+				{
+					id: trackId,
+					trackId,
+					startMs: toMs(at),
+					endMs: toMs(at + vo.durationSec),
+					assetId: asset.id,
+					kind: "voiceover",
+					durationSec: vo.durationSec,
+					offsetMs: 0,
+					gainDb: parsed.data.gainDb ?? 0,
+					loop: false,
+					fadeInMs: 0,
+					fadeOutMs: 0,
+					muted: false,
+					label: asset.label,
+					origin: "agent",
+				} as AxcutDocument["audioTracks"][number],
+				() => createId("audio"),
+				"create",
+			);
+			if (next === withAsset) return coversNoClip("voiceover", at, at + vo.durationSec, document);
+			const placed = next.audioTracks.filter((t) => trackGroupId(t) === trackId);
+			const startSec = Math.min(...placed.map((t) => t.startMs)) / 1000;
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					audioId: trackId,
+					voice: vo.voice,
+					language: vo.language,
+					startSec,
+					durationSec: Math.round(vo.durationSec * 10) / 10,
+					...(Math.abs(startSec - at) > 0.01 ? { note: `Starts at ${formatSec(startSec)} — another voiceover was already at ${formatSec(at)}.` } : {}),
+				}),
+				summary: `added a ${Math.round(vo.durationSec)}s voiceover (${vo.voice}) at ${formatSec(startSec)}`,
 			};
 		}
 

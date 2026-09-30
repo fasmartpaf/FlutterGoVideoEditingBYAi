@@ -27,6 +27,7 @@ import { bakeLayer } from "./layers/bake";
 import { VOICE_LEVELS, type VoiceLevel, bakeCleanVoice, voiceTargets } from "./audioPro/cleanVoice";
 import { measureProgrammeLoudness } from "./audioPro/loudness";
 import { SFX_NAMES, type SfxName, ensureSfx } from "./audioPro/sfx";
+import { guessLanguage, listSystemVoices, pickVoice, synthesizeVoiceover } from "./audioPro/tts";
 import {
 	DEFAULT_DUCK_DB,
 	bakeDuckedAudio,
@@ -94,6 +95,9 @@ export interface PreparedToolMedia {
 	/** addSoundEffect: the effect's rendered file. */
 	sfx?: { path: string; durationSec: number; label: string };
 	sfxError?: string;
+	/** generateVoiceover: the spoken file. */
+	voiceover?: { path: string; durationSec: number; voice: string; language: string };
+	voiceoverError?: string;
 	/** importMedia of a picture: the picture baked into a clip. */
 	imageClip?: BakedImageClip;
 	/** Why a picture could not be baked (the executor reports it). */
@@ -329,6 +333,40 @@ export async function prepareAgentToolMedia(
 				}
 			} catch (err) {
 				if (err instanceof Error && err.name === "AbortError") throw err;
+			}
+		}
+	}
+
+	if (name === "generateVoiceover" && options.mayMutate) {
+		const text = str(a.text) ?? "";
+		if (!ffmpegPath) prepared.voiceoverError = "ffmpeg is not available";
+		else if (text.trim()) {
+			try {
+				const language = str(a.language) ?? guessLanguage(text);
+				const voices = await listSystemVoices(process.platform, signal);
+				const voice = pickVoice(voices, language, str(a.voice));
+				if (!voice) {
+					const langs = [...new Set(voices.map((v) => v.language.split("_")[0]))].sort();
+					prepared.voiceoverError =
+						voices.length === 0
+							? "This computer has no text-to-speech voices the app can use (macOS: System Settings › Accessibility › Spoken Content › System Voice › Manage Voices)."
+							: `No installed voice speaks "${language}". Installed languages: ${langs.join(", ")}. On a Mac, add one in System Settings › Accessibility › Spoken Content › System Voice › Manage Voices, or record the voiceover instead.`;
+				} else {
+					options.onProgress?.(`Speaking with ${voice.name}`);
+					const made = await synthesizeVoiceover({
+						ffmpegPath,
+						voice,
+						text,
+						rate: typeof a.rate === "number" ? a.rate : undefined,
+						outDir: join(resolveGeneratedGraphicsDir(document), "audio"),
+						signal,
+					});
+					discardOnFailure.push(made.path);
+					prepared.voiceover = { ...made, voice: voice.name, language: voice.language };
+				}
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") throw err;
+				prepared.voiceoverError = err instanceof Error ? err.message : String(err);
 			}
 		}
 	}
