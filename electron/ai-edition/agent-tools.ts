@@ -101,7 +101,14 @@ function withVideoBrandKit(document: AxcutDocument, prepared: PreparedToolMedia 
 	return writeBrandKit(document, prepared.videoBrandKit).document;
 }
 import { type MotionPlacement, placeMotionClip } from "./motionStudio/placement";
-import { sanitizeShowcaseArgs, showcaseArgsSchema, showcaseToolSchema } from "./showcase/plan";
+import {
+	effectiveShowcaseArgs,
+	sanitizeShowcaseArgs,
+	showcaseArgsSchema,
+	showcaseToolSchema,
+	storedShowcasePlan,
+	withStoredShowcasePlan,
+} from "./showcase/plan";
 import { placeShowcase } from "./showcase/placement";
 import {
 	MOTION_TEMPLATE_IDS,
@@ -3911,7 +3918,9 @@ export function executeAgentTool(
 		}
 
 		case "createShowcaseVideo": {
-			const parsed = showcaseArgsSchema.safeParse(sanitizeShowcaseArgs(args));
+			// A follow-up changes the project's last showcase plan instead of starting over.
+			const effective = effectiveShowcaseArgs(storedShowcasePlan(document), args);
+			const parsed = showcaseArgsSchema.safeParse(sanitizeShowcaseArgs(effective.args));
 			if (!parsed.success) return failure(parsed.error.message);
 			const clip = options?.prepared?.showcaseClip;
 			if (!clip) {
@@ -3938,10 +3947,16 @@ export function executeAgentTool(
 			} catch (err) {
 				return failure(err instanceof Error ? err.message : String(err));
 			}
+			// Remember the plan (draft or final) so the next request can change just part of it.
+			const nextDocument = withStoredShowcasePlan(
+				placed ? withVideoBrandKit(placed.document, options?.prepared) : document,
+				parsed.data as unknown as Record<string, unknown>,
+			);
 			return {
 				ok: true,
-				...(placed ? { document: withVideoBrandKit(placed.document, options?.prepared) } : {}),
+				document: nextDocument,
 				resultJson: JSON.stringify({
+					keptFromLastShowcase: effective.changed ? { changedOnly: effective.changed } : null,
 					videoPath: clip.mp4Path,
 					exportedPaths: [clip.mp4Path],
 					durationSec: clip.durationSec,

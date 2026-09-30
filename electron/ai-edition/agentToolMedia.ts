@@ -41,7 +41,13 @@ import {
 	TEMPLATE_DEFAULT_SEC,
 } from "./motionStudio/templates";
 import { type MotionClipCheck, verifyMotionClip } from "./motionStudio/verify";
-import { type RecordingSignals, sanitizeShowcaseArgs, showcaseArgsSchema } from "./showcase/plan";
+import {
+	effectiveShowcaseArgs,
+	type RecordingSignals,
+	sanitizeShowcaseArgs,
+	showcaseArgsSchema,
+	storedShowcasePlan,
+} from "./showcase/plan";
 import { renderProgress, renderShowcase, type ShowcaseClip } from "./showcase/render";
 import {
 	bakeStillToMp4,
@@ -381,7 +387,10 @@ export async function prepareAgentToolMedia(
 
 	if (name === "createShowcaseVideo" && ffmpegPath) {
 		try {
-			const parsed = showcaseArgsSchema.safeParse(sanitizeShowcaseArgs(a));
+			// A follow-up changes the project's last showcase plan instead of starting over.
+			const parsed = showcaseArgsSchema.safeParse(
+				sanitizeShowcaseArgs(effectiveShowcaseArgs(storedShowcasePlan(document), a).args),
+			);
 			if (parsed.success) {
 				const { ensureVideoSummary } = await import("./videoSummary");
 				const summary = parsed.data.auto

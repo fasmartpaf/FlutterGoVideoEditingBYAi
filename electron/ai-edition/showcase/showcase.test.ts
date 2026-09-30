@@ -538,3 +538,30 @@ describe("auto crop", () => {
 		expect(activeColumnSpan([...Array(160).fill(0), ...Array(32).fill(500)])).toBeNull();
 	});
 });
+
+describe("follow-ups change the last showcase instead of replacing it", () => {
+	it("keeps everything the request does not mention", async () => {
+		const { effectiveShowcaseArgs, storedShowcasePlan, withStoredShowcasePlan } = await import("./plan");
+		const first = showcaseArgsSchema.parse({
+			steps: [{ startSec: 0, endSec: 2, title: "The brief" }],
+			theme: "dark",
+			design: { layout: "side", background: "aurora" },
+			covers: [{ startSec: 0, endSec: 1, x: 0.7, y: 0.8, width: 0.06, height: 0.1, mode: "image", useBrandLogo: true }],
+			quality: "draft",
+		});
+		const doc = withStoredShowcasePlan(createEmptyDocument({ title: "t", projectId: "p", createdAt: "2026-01-01T00:00:00.000Z" }), first as never);
+		const stored = storedShowcasePlan(doc)!;
+		expect(stored.quality).toBeUndefined();
+		const calmer = effectiveShowcaseArgs(stored, { design: { motion: "calm", cards: "minimal" } });
+		const next = showcaseArgsSchema.parse(calmer.args);
+		expect(calmer.changed).toEqual(["design"]);
+		expect(next.theme).toBe("dark");
+		expect(next.steps?.[0]?.title).toBe("The brief");
+		expect(next.covers).toHaveLength(1);
+		expect(next.design).toEqual({ layout: "side", background: "aurora", motion: "calm", cards: "minimal" });
+		expect(next.quality).toBe("final");
+		const fresh = effectiveShowcaseArgs(stored, { fresh: true, style: "clean" });
+		expect(showcaseArgsSchema.parse(fresh.args).steps).toBeUndefined();
+		expect(effectiveShowcaseArgs(null, { style: "bold" }).changed).toBeNull();
+	});
+});

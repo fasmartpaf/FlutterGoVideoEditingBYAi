@@ -154,6 +154,12 @@ export const showcaseArgsSchema = z.object({
 	 */
 	place: z.enum(["replace", "none", "start", "end"]).default("replace"),
 	label: z.string().trim().max(80).optional(),
+	/**
+	 * Start from scratch instead of from the last showcase of this project.
+	 * By default a new call only CHANGES the last plan: fields you leave out
+	 * (cards, timings, zooms, ticks, covers, crop, theme, design…) are kept.
+	 */
+	fresh: z.boolean().optional(),
 });
 
 export type ShowcaseArgs = z.infer<typeof showcaseArgsSchema>;
@@ -679,5 +685,46 @@ export function activeColumnSpan(
 	const x1 = Math.min(1, (best[1] + 1) / n + margin);
 	const w = x1 - x0;
 	return w >= minWidth && w <= maxWidth ? { x0, x1 } : null;
+}
+
+/** Fields that belong to one call, never carried into the next one. */
+const PER_CALL_KEYS = new Set(["quality", "place", "label", "fresh"]);
+
+/** The plan of the project's last showcase (draft or final), or null. */
+export function storedShowcasePlan(document: { legacyEditor?: unknown }): Record<string, unknown> | null {
+	const legacy = document.legacyEditor as Record<string, unknown> | null | undefined;
+	const plan = legacy?.showcasePlan;
+	return plan && typeof plan === "object" && !Array.isArray(plan) ? (plan as Record<string, unknown>) : null;
+}
+
+/** Remember a plan on the project so the next request can change it instead of starting over. */
+export function withStoredShowcasePlan<D extends { legacyEditor?: unknown }>(document: D, plan: Record<string, unknown>): D {
+	const legacy =
+		document.legacyEditor && typeof document.legacyEditor === "object" ? { ...(document.legacyEditor as Record<string, unknown>) } : {};
+	const kept = Object.fromEntries(Object.entries(plan).filter(([k, v]) => !PER_CALL_KEYS.has(k) && v !== undefined));
+	return { ...document, legacyEditor: { ...legacy, showcasePlan: kept } };
+}
+
+/**
+ * The plan a call really means: the last plan with this call's changes on top
+ * (design merged key by key; any other field given replaces the old one).
+ * `fresh: true` or no earlier plan = the call as it is.
+ */
+export function effectiveShowcaseArgs(previous: Record<string, unknown> | null, raw: unknown): { args: unknown; changed: string[] | null } {
+	if (!raw || typeof raw !== "object") return { args: raw, changed: null };
+	const next = raw as Record<string, unknown>;
+	if (!previous || next.fresh === true) return { args: raw, changed: null };
+	const merged: Record<string, unknown> = { ...previous };
+	const changed: string[] = [];
+	for (const [k, v] of Object.entries(next)) {
+		if (v === undefined) continue;
+		if (k === "design" && v && typeof v === "object" && previous.design && typeof previous.design === "object") {
+			merged.design = { ...(previous.design as Record<string, unknown>), ...(v as Record<string, unknown>) };
+		} else {
+			merged[k] = v;
+		}
+		if (!PER_CALL_KEYS.has(k)) changed.push(k);
+	}
+	return { args: merged, changed };
 }
 
