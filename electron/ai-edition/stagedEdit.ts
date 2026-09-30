@@ -299,7 +299,7 @@ const SCOPES: Array<{ match: RegExp; tools: readonly string[] }> = [
 	},
 	{
 		// Pictures (as clips or layers), picture-in-picture, attached files.
-		match: /\b(pictures?|images?|photos?|png|jpe?g|webp|logos?|layers?|picture[\s-]*in[\s-]*picture|pip|stickers?|attached)\b/i,
+		match: /\b(pictures?|images?|photos?|png|jpe?g|webp|logos?|layers?|picture[\s-]*in[\s-]*picture|pip|stickers?|attached|green\s*screen|chroma\s*key|remove\s+(?:the\s+)?background)\b/i,
 		tools: ["importMedia", "addLayer", "setLayer", "removeLayer", "addClip", "moveClip", "removeClip", "removeModifier"],
 	},
 	{ match: /\b(captions?|subtitles?|transcript)\b/i, tools: CAPTION_TOOLS },

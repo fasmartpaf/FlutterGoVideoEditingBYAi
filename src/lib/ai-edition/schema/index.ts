@@ -662,6 +662,16 @@ export const layerSchema = endGteStart(
 			height: z.number().int().positive().optional(),
 			/** Video only: where in the file the layer starts playing. */
 			startSec: z.number().nonnegative().default(0),
+			/** Green-screen removal: the key colour (#rrggbb) made transparent when the frames are baked. */
+			chromaKey: z
+				.object({
+					color: z.string().default("#00ff00"),
+					/** How far from the colour still counts (0.01–1). */
+					similarity: z.number().min(0.01).max(1).default(0.3),
+					/** Edge softness (0–1). */
+					blend: z.number().min(0).max(1).default(0.1),
+				})
+				.optional(),
 		}),
 		x: z.number().min(-1).max(2).default(0.5),
 		y: z.number().min(-1).max(2).default(0.5),

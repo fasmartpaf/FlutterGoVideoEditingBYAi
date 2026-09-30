@@ -172,7 +172,19 @@ export async function bakeLayer(
 	// Sources the page loads must sit next to it.
 	let imageFile: string | null = null;
 	let videoFrames: string[] | null = null;
-	if (layer.source.kind === "image") {
+	const chroma = layer.source.chromaKey;
+	// Green-screen: the key colour is made transparent as frames are extracted
+	// (PNG keeps the alpha); the page then draws only what is left.
+	const keyFilter = chroma ? `,format=rgba,chromakey=color=${chroma.color.replace("#", "0x")}:similarity=${chroma.similarity}:blend=${chroma.blend}` : "";
+	if (layer.source.kind === "image" && chroma && options.ffmpegPath) {
+		imageFile = "src.png";
+		const res = await runProcess(
+			options.ffmpegPath,
+			["-y", "-nostdin", "-hide_banner", "-i", layer.source.path, "-vf", `format=rgba${keyFilter.replace(",format=rgba", "")}`, "-frames:v", "1", join(dir, imageFile)],
+			{ timeoutMs: 60_000, signal },
+		);
+		if (res.code !== 0) throw new Error(`Could not key the picture: ${(res.stderr || "").slice(-300)}`);
+	} else if (layer.source.kind === "image") {
 		imageFile = `src${extname(layer.source.path).toLowerCase() || ".png"}`;
 		copyFileSync(layer.source.path, join(dir, imageFile));
 	} else {
@@ -192,16 +204,15 @@ export async function bakeLayer(
 				"-t",
 				String(frameCount / fps),
 				"-vf",
-				`fps=${fps},scale=${scaleW}:-2`,
-				"-q:v",
-				"3",
-				join(dir, "v-%05d.jpg"),
+				`fps=${fps},scale=${scaleW}:-2${keyFilter}`,
+				...(chroma ? [] : ["-q:v", "3"]),
+				join(dir, chroma ? "v-%05d.png" : "v-%05d.jpg"),
 			],
 			{ timeoutMs: 300_000, signal },
 		);
 		videoFrames = existsSync(dir)
 			? readdirSync(dir)
-					.filter((n) => /^v-\d{5}\.jpg$/.test(n))
+					.filter((n) => /^v-\d{5}\.(jpg|png)$/.test(n))
 					.sort()
 			: [];
 		if (res.code !== 0 || videoFrames.length === 0) {

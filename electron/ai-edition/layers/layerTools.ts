@@ -38,8 +38,22 @@ const keyframeArg = z.object({
 	ease: z.enum(["linear", "ease-in", "ease-out", "ease-in-out"]).optional(),
 });
 
+const chromaKeyArg = z
+	.union([
+		z.boolean(),
+		z.enum(["green", "blue", "white", "black"]),
+		z.object({
+			color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+			similarity: z.number().min(0.01).max(1).optional(),
+			blend: z.number().min(0).max(1).optional(),
+		}),
+	])
+	.optional();
+
 const lookArgs = {
 	label: z.string().max(80).optional(),
+	/** Remove a green (or other flat) screen behind the picture/video: true | "green" | "blue" | {color, similarity, blend}; false removes the key. */
+	chromaKey: chromaKeyArg,
 	position: z.enum(LAYER_POSITIONS).optional(),
 	x: z.number().min(-1).max(2).optional(),
 	y: z.number().min(-1).max(2).optional(),
@@ -115,6 +129,15 @@ export function placeLayerBox(
 	return { x, y, scale: s };
 }
 
+const KEY_COLORS = { green: "#00ff00", blue: "#0000ff", white: "#ffffff", black: "#000000" } as const;
+
+export function resolveChromaKey(v: z.infer<typeof chromaKeyArg>): { color: string; similarity: number; blend: number } | null {
+	if (v === undefined || v === false) return null;
+	if (v === true) return { color: KEY_COLORS.green, similarity: 0.3, blend: 0.1 };
+	if (typeof v === "string") return { color: KEY_COLORS[v], similarity: 0.3, blend: 0.1 };
+	return { color: (v.color ?? KEY_COLORS.green).toLowerCase(), similarity: v.similarity ?? 0.3, blend: v.blend ?? 0.1 };
+}
+
 export type LayerToolContext = {
 	/** Id for a new layer (prep and executor must agree). */
 	newLayerId: string;
@@ -156,6 +179,12 @@ function applyLook(
 		if (typeof v !== "string") continue;
 		(next as Record<string, unknown>)[key] = v;
 		changed.push(key);
+	}
+	if (a.chromaKey !== undefined) {
+		const chromaKey = resolveChromaKey(a.chromaKey);
+		next.source = { ...next.source, ...(chromaKey ? { chromaKey } : {}) };
+		if (!chromaKey) delete (next.source as { chromaKey?: unknown }).chromaKey;
+		changed.push(chromaKey ? `green screen ${chromaKey.color}` : "green screen off");
 	}
 	return next;
 }
@@ -250,7 +279,17 @@ export function applyLayerTool(document: AxcutDocument, name: string, args: unkn
 		if (a.path) {
 			const kind = layerSourceKind(a.path);
 			if (!kind) return { ok: false, error: "A layer shows a picture (png/jpg/webp) or a video (mp4/mov/webm)." };
-			next = { ...next, source: { kind, path: a.path, width: ctx.source?.width, height: ctx.source?.height, startSec: a.sourceStartSec ?? 0 } };
+			next = {
+				...next,
+				source: {
+					kind,
+					path: a.path,
+					width: ctx.source?.width,
+					height: ctx.source?.height,
+					startSec: a.sourceStartSec ?? 0,
+					...(next.source.chromaKey ? { chromaKey: next.source.chromaKey } : {}),
+				},
+			};
 			changed.push("source");
 		} else if (typeof a.sourceStartSec === "number") {
 			next = { ...next, source: { ...next.source, startSec: a.sourceStartSec } };

@@ -284,6 +284,7 @@ export function layerRenderKey(
 		k: sortedKeyframes(layer).map((k) => [k.atSec, k.x, k.y, k.scale, k.rotation, k.opacity, k.ease]),
 		l: [layer.cornerRadius, layer.shadow, layer.borderWidth, layer.borderColor],
 		a: [layer.animateIn ?? "none", layer.animateOut ?? "none", layer.animateSec ?? 0.5],
+		g: layer.source.chromaKey ? [layer.source.chromaKey.color, layer.source.chromaKey.similarity, layer.source.chromaKey.blend] : null,
 	});
 	return `${fnv1a(payload)}${fnv1a(`${payload}#`)}`;
 }

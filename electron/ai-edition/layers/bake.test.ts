@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -158,4 +158,53 @@ describe.skipIf(!FFMPEG)("bakeLayer", () => {
 			bakeLayer(doc, "layer_a", { ffmpegPath: FFMPEG, createFrameSource: fakeSource({ opened: [], frames: 0 }), outRoot: dir }),
 		).rejects.toThrow(/nothing to draw/);
 	});
+
+	it("green screen: keys the colour out of a picture and of every video frame", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "layer-key-"));
+		// a green frame with a red square in the middle
+		execFileSync(FFMPEG!, [
+			"-v", "error", "-y",
+			"-f", "lavfi", "-i", "color=c=0x00ff00:size=200x100:rate=30",
+			"-f", "lavfi", "-i", "color=c=red:size=60x60:rate=30",
+			"-filter_complex", "[0][1]overlay=70:20", "-frames:v", "1", join(dir, "logo.png"),
+		]);
+		execFileSync(FFMPEG!, [
+			"-v", "error", "-y",
+			"-f", "lavfi", "-i", "color=c=0x00ff00:size=200x100:rate=30",
+			"-f", "lavfi", "-i", "color=c=red:size=60x60:rate=30",
+			"-filter_complex", "[0][1]overlay=70:20", "-t", "1", "-pix_fmt", "yuv420p", join(dir, "pip.mp4"),
+		]);
+		const key = { color: "#00ff00", similarity: 0.3, blend: 0.05 };
+		const log = { opened: [] as Array<{ path: string; size: { width: number; height: number } }>, frames: 0 };
+		const pic = await bakeLayer(
+			docWithLayer(dir, { keyframes: [], opacity: 1, rotation: 0, x: 0.5, y: 0.5, source: { kind: "image", path: join(dir, "logo.png"), startSec: 0, chromaKey: key } }),
+			"layer_a",
+			{ ffmpegPath: FFMPEG, createFrameSource: fakeSource(log), outRoot: join(dir, "l") },
+		);
+		const alpha = (png: string) => {
+			// count fully transparent pixels via ffmpeg's alphaextract + signalstats mean
+			const r = spawnSync(FFMPEG!, ["-hide_banner", "-i", png, "-vf", "alphaextract,signalstats,metadata=print", "-f", "null", "-"], { encoding: "utf8" });
+			return Number(/YAVG=([\d.]+)/.exec(r.stderr)?.[1] ?? 255);
+		};
+		// mostly transparent (only the red square keeps alpha)
+		expect(alpha(join(pic.render.dir, "src.png"))).toBeLessThan(80);
+
+		const vid = await bakeLayer(
+			docWithLayer(dir, {
+				keyframes: [],
+				opacity: 1,
+				rotation: 0,
+				x: 0.5,
+				y: 0.5,
+				endMs: 500,
+				sourceEndSec: 0.5,
+				source: { kind: "video", path: join(dir, "pip.mp4"), startSec: 0, chromaKey: key },
+			}),
+			"layer_a",
+			{ ffmpegPath: FFMPEG, createFrameSource: fakeSource(log), outRoot: join(dir, "l") },
+		);
+		const html = readFileSync(join(vid.render.dir, "layer.html"), "utf8");
+		expect(html).toContain("v-00001.png");
+		expect(vid.render.key).not.toBe(pic.render.key);
+	}, 60_000);
 });
