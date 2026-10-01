@@ -16,16 +16,16 @@ import {
 	localCliSpawnEnv,
 	printArgvForAgent,
 } from "../local-agents";
+import { acquireLiveSession, closeLiveSession } from "./claudeLiveSession";
 import {
 	consumeClaudeStreamJsonLine,
+	HEARTBEAT_MS,
 	killProcessTree,
 	LOCAL_CLI_HARD_TIMEOUT_MS,
 	LOCAL_CLI_IDLE_TIMEOUT_MS,
 	type LocalCliProgressEvent,
 	MAX_STDOUT_CHARS,
-	HEARTBEAT_MS,
 } from "./claudeStream";
-import { acquireLiveSession, closeLiveSession } from "./claudeLiveSession";
 import { ReplyStreamer } from "./replyStreamer";
 
 export interface PlanItem {
@@ -40,7 +40,9 @@ export function normalizePlan(value: unknown): PlanItem[] | null {
 	const items: PlanItem[] = [];
 	for (const raw of value.slice(0, 8)) {
 		if (!raw || typeof raw !== "object") continue;
-		const text = String((raw as { text?: unknown }).text ?? "").trim().slice(0, 120);
+		const text = String((raw as { text?: unknown }).text ?? "")
+			.trim()
+			.slice(0, 120);
 		if (!text) continue;
 		const status = String((raw as { status?: unknown }).status ?? "pending");
 		items.push({ text, status: (statuses.has(status) ? status : "pending") as PlanItem["status"] });
@@ -54,7 +56,6 @@ interface BoundTool {
 	schema?: unknown;
 }
 
-
 /** How many replies this chat turn has used, and since when. */
 export interface TurnBudget {
 	steps: number;
@@ -62,7 +63,13 @@ export interface TurnBudget {
 }
 
 /** Soft limits: past these the agent is told to wrap up; past HARD it must stop. */
-export const TURN_BUDGET = { softSteps: 8, softMs: 4 * 60_000, finishSteps: 13, finishMs: 8 * 60_000, hardSteps: 16 };
+export const TURN_BUDGET = {
+	softSteps: 8,
+	softMs: 4 * 60_000,
+	finishSteps: 13,
+	finishMs: 8 * 60_000,
+	hardSteps: 16,
+};
 export type TurnBudgetLimits = typeof TURN_BUDGET;
 
 /** The line added to this reply's prompt, or null while within budget. */
@@ -97,7 +104,7 @@ export interface LocalCliChatModelFields {
 	tools?: BoundTool[];
 	/** Parent folders of open recordings — Claude may Read those videos. */
 	mediaDirs?: string[];
-	/** Absolute JPEG paths OpenScreen already sampled for this turn. */
+	/** Absolute JPEG paths FlutterGo already sampled for this turn. */
 	framePaths?: string[];
 	/** Claude `--model` (fable / opus / sonnet / full id). */
 	cliModel?: string;
@@ -108,11 +115,11 @@ export interface LocalCliChatModelFields {
 	onProgress?: (event: LocalCliProgressEvent) => void;
 	/** Stop button / chat.cancel — kills the spawned CLI child. */
 	abortSignal?: AbortSignal;
-	/** Persistent Claude `--session-id` for this OpenScreen chat conversation. */
+	/** Persistent Claude `--session-id` for this FlutterGo chat conversation. */
 	cliSessionId?: string;
 	/** Resume prior Claude session memory across tool rounds / follow-ups. */
 	resumeCliSession?: boolean;
-	/** Preferred cwd for Cursor/Codex (openscreen userData or media folder). */
+	/** Preferred cwd for Cursor/Codex (fluttergo userData or media folder). */
 	workspaceRoot?: string;
 	/** Called after a CLI spawn finishes so the host can mark the session started. */
 	onCliSpawnComplete?: () => void;
@@ -167,13 +174,13 @@ function flattenTools(tools: BindToolsInput[]): BoundTool[] {
 function framePathSection(framePaths: string[]): string {
 	if (framePaths.length === 0) return "";
 	const lines = [
-		"OPENSCREEN SAMPLED FRAMES — JPEG files already extracted for this turn.",
+		"FLUTTERGO SAMPLED FRAMES — JPEG files already extracted for this turn.",
 		"Read these paths (do not re-extract unless the user asks). They are chronological samples, not every frame.",
 		"After watching, you may author motion graphics (SVG/HTML/canvas/ffmpeg → PNG), then place them with addGraphic.",
 		"Prefer addGraphic with imagePath (absolute path to a PNG/JPEG/WebP you rendered) over huge data URIs.",
-		"Keep stills under ~1280px wide / ~1MB — OpenScreen downscales larger files when possible.",
+		"Keep stills under ~1280px wide / ~1MB — FlutterGo downscales larger files when possible.",
 		"For titles/CTAs prefer kind title/cta/lowerThird with textAnimation (fade|rise|pop|slide-left|typewriter|pulse).",
-		"Analyze → decide edits/graphics → call OpenScreen tools → finish with a short receipt of what landed.",
+		"Analyze → decide edits/graphics → call FlutterGo tools → finish with a short receipt of what landed.",
 		"",
 	];
 	for (let i = 0; i < framePaths.length; i++) {
@@ -182,23 +189,94 @@ function framePathSection(framePaths: string[]): string {
 	return `${lines.join("\n")}\n`;
 }
 
+// ─── Prompt size budget ────────────────────────────────────────────────────
+//
+// The CLI has a hard context limit, and a long chat (dozens of tool results,
+// a big document, six staged-edit stages) blew past it: "Prompt is too long"
+// came back as the assistant's reply and the turn did nothing. Every message
+// is clamped on its own, and the whole conversation is trimmed from the oldest
+// end until it fits; the current objective and the current project state are
+// never dropped.
+const PROMPT_BUDGET_CHARS = 480_000;
+const MAX_SYSTEM_CHARS = 200_000;
+const MAX_HUMAN_CHARS = 24_000;
+const MAX_AI_CHARS = 12_000;
+const MAX_TOOL_RESULT_CHARS = 16_000;
+const OMITTED_NOTE = "[earlier turns omitted to fit the model's context — the project state above is current]";
+
+/** Keep the head and the tail of an oversize text, with a marker in between. */
+export function clampText(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const head = Math.floor(max * 0.7);
+	const tail = max - head;
+	return `${text.slice(0, head)}
+…[${text.length - max} characters omitted]…
+${text.slice(-tail)}`;
+}
+
+function clampedMessageText(message: BaseMessage): string {
+	const text = messageText(message);
+	if (ToolMessage.isInstance(message) || message.getType() === "tool") return clampText(text, MAX_TOOL_RESULT_CHARS);
+	if (message.getType() === "human") return clampText(text, MAX_HUMAN_CHARS);
+	if (message.getType() === "ai") return clampText(text, MAX_AI_CHARS);
+	return clampText(text, MAX_SYSTEM_CHARS);
+}
+
+/**
+ * The conversation that fits the budget: the latest system message, the last
+ * human message and everything after it always stay; older turns are dropped
+ * from the front until the total fits.
+ */
+export function budgetMessages(messages: BaseMessage[], budgetChars = PROMPT_BUDGET_CHARS): { messages: BaseMessage[]; omitted: number } {
+	const size = (m: BaseMessage) => clampedMessageText(m).length + 16;
+	let total = messages.reduce((n, m) => n + size(m), 0);
+	if (total <= budgetChars) return { messages, omitted: 0 };
+	const lastHuman = messages.map((m) => m.getType()).lastIndexOf("human");
+	const lastSystem = messages.map((m, i) => (isSystem(m) ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+	const kept = [...messages];
+	let omitted = 0;
+	for (let i = 0; i < messages.length && total > budgetChars; i++) {
+		if (i >= lastHuman) break;
+		const m = messages[i]!;
+		if (isSystem(m) && (i === lastSystem || i === 0)) continue;
+		const idx = kept.indexOf(m);
+		if (idx >= 0) {
+			kept.splice(idx, 1);
+			total -= size(m);
+			omitted += 1;
+		}
+	}
+	return { messages: kept, omitted };
+}
+
+/** Just this turn: the current project state, the current objective and its tool results. */
+export function compactMessages(messages: BaseMessage[]): BaseMessage[] {
+	const lastHuman = messages.map((m) => m.getType()).lastIndexOf("human");
+	const system = messages.filter(isSystem).at(-1);
+	const tail = lastHuman >= 0 ? messages.slice(lastHuman) : messages.slice(-1);
+	return system && !tail.includes(system) ? [system, ...tail] : tail;
+}
+
+export const PROMPT_TOO_LONG = /prompt is too long|context.?length|too many tokens|exceeds the (?:context|token) limit/i;
+
 function buildPrompt(
-	messages: BaseMessage[],
+	allMessages: BaseMessage[],
 	tools: BoundTool[],
 	options?: { framePaths?: string[] },
 ): string {
+	const { messages, omitted } = budgetMessages(allMessages);
 	const conversationHint = messages
 		.map((m) => messageText(m))
 		.join("\n")
 		.toLowerCase();
 	const lines: string[] = [
-		"You are the autonomous local execution agent behind OpenScreen — behave like Cursor Desktop's agent.",
+		"You are the autonomous local execution agent behind FlutterGo — behave like Cursor Desktop's agent.",
 		"The user message is a COMPLETE objective. Pass it through UNDERSTAND → EXPLORE → PLAN → ACT → OBSERVE → CORRECT → VERIFY → COMPLETE.",
 		"A successful tool call is NOT task completion — completion is the original user objective.",
 		"SPEED MATTERS: every reply you send costs 10–40 s of the user's time. Put ALL independent tool calls in ONE reply's tool_calls array — e.g. getTranscript + getCursorTrack + sampleFrames(from:'recording') together to inspect; all trims/cuts together; all zooms, overlays and motion clips together. A full edit should take about 5–8 replies: inspect (1) → batched edits (1–3) → sampleFrames check (1) → one fix-up batch if needed → export if asked → final message. Do not re-inspect things you already know, and do not tweak the same overlay or zoom repeatedly.",
 		"For non-trivial asks, inspect BEFORE major edits: project metadata, timeline clips, modifiers/annotations/graphics, representative frames, duration/resolution, media, transcript/speech if present, prior agent assets.",
-		"Do NOT collapse a broad ask into a fixed helper recipe (e.g. 'clean / improve / add motion graphics' ≠ immediately addBeatGraphics(5)). OpenScreen tools are capabilities, not the workflow.",
-		"Optional shortcuts (addBeatGraphics, createMotionGraphicPreview, addGraphic, …) exist — use only when they fit. Prefer Bash/FFmpeg/HTML/SVG/Remotion/Node/Python/custom assets when a professional custom result needs it, then import into OpenScreen.",
+		"Do NOT collapse a broad ask into a fixed helper recipe (e.g. 'clean / improve / add motion graphics' ≠ immediately addBeatGraphics(5)). FlutterGo tools are capabilities, not the workflow.",
+		"Optional shortcuts (addBeatGraphics, createMotionGraphicPreview, addGraphic, …) exist — use only when they fit. Prefer Bash/FFmpeg/HTML/SVG/Remotion/Node/Python/custom assets when a professional custom result needs it, then import into FlutterGo.",
 		"Motion graphics: createMotionClip renders a full-frame animated MP4 at the project size — use a template (listMotionTemplates: productIntro, titleCard, sectionCard, outroCta, kineticText, statHighlight, bulletList, logoReveal) — for a SaaS / product intro use productIntro (browser window showing the real app, feature pills, stat card, cursor click), never a plain titleCard or write your own HTML composition (CSS/Web Animations, rAF, or window.render(t)). It uses the project brand kit, which starts as the recording's own colours (listMotionTemplates shows it) — use those colours in custom HTML too; call setBrandKit only when the user names brand colours/fonts. Look at the returned previewFrames and fix any reported problems before placing; place with {atSec} so the cut lands in a pause in the speech.",
 		"Check your work ONCE: after your edit batches, call sampleFrames (from:'timeline', count 4–6, in its own reply — not in the same reply as edits) and Read the stills; fix real problems (cut off, unreadable, off-brand, blank) in one batch. Then finish.",
 		"No transcript yet? Call generateCaptions once (on-device speech-to-text) before speech-based cuts, then getTranscript.",
@@ -210,8 +288,8 @@ function buildPrompt(
 		"Screen recordings: the cursor is part of the picture. When polishing, set it with setEditorSettings (cursorSmoothing, cursorSize, cursorMotionBlur, cursorClickBounce, cursorTheme — listCursorThemes lists the installed themes) and use addCursorHighlight on the clicks that matter.",
 		"Animated overlays on top of the recording (lower thirds, callouts, badges, keyword pops): addMotionOverlay with a box in % of the recording and startSec — templates are listed under overlays in listMotionTemplates, or pass your own transparent-background HTML.",
 		"Loop: inspect → edit (batched) → check frames once → fix once → finish. Check clipping, overlays covering UI, timing, generic graphics, hierarchy.",
-		"The SYSTEM message is the live AxcutDocument. mediaCapabilities states evidence channels; mediaContext is textual outline; visibleMedia paths are inventory. visualFrames is true only when OPENSCREEN SAMPLED FRAMES are listed below.",
-		"OpenScreen JSON tools edit the timeline. Local CLI may also Read/Bash/Edit/Write/Glob/Grep in allowed dirs — use them to inspect, render, and verify. Do not put Read or Bash inside JSON tool_calls; use the CLI's own tools for that.",
+		"The SYSTEM message is the live AxcutDocument. mediaCapabilities states evidence channels; mediaContext is textual outline; visibleMedia paths are inventory. visualFrames is true only when FLUTTERGO SAMPLED FRAMES are listed below.",
+		"FlutterGo JSON tools edit the timeline. Local CLI may also Read/Bash/Edit/Write/Glob/Grep in allowed dirs — use them to inspect, render, and verify. Do not put Read or Bash inside JSON tool_calls; use the CLI's own tools for that.",
 		"Stay inside the assigned project/workspace unless the user explicitly authorizes otherwise. Keep confirmation rules for destructive actions.",
 		'Final {"message":"…"} must be short and outcome-oriented (what changed / what you verified). NEVER dump receipts, absolute paths, modifier IDs, or per-op remove lists into the user message — those stay in tool results / activity details.',
 		"When you create important media files, still return paths in tool results (exportedPaths/videoPath) so chat can register artifacts — but do not make filesystem paths the primary chat prose.",
@@ -234,28 +312,33 @@ function buildPrompt(
 	}
 	lines.push(
 		"Reply with ONE JSON object and nothing else.",
-		'If you need an OpenScreen edit tool: {"tool_calls":[{"name":"<tool>","args":{...}}]}',
+		'If you need a FlutterGo edit tool: {"tool_calls":[{"name":"<tool>","args":{...}}]}',
 		'If you are done talking to the user: {"message":"<plain text>"}',
 		'Live checklist: for asks that need 2+ steps, add "plan":[{"text":"Cut dead air","status":"in_progress"},{"text":"Add intro title","status":"pending"}] to your FIRST reply, and re-send it with updated statuses (pending|in_progress|done|skipped) whenever a step changes. 2–6 short plain-language steps; no tool names, ids or paths. It can ride along with tool_calls or message.',
 		"For greetings, reply briefly about what you can do — not a clinical 'no mutation' notice.",
 		"insertStartThumbnail only if no start cover exists (or replace:true when user asks to change it). Never stack a second opener.",
-		"The user can rewind a chat turn to undo OpenScreen timeline mutations.",
+		"The user can rewind a chat turn to undo FlutterGo timeline mutations.",
 	);
 	const frames = framePathSection(options?.framePaths ?? []);
 	if (frames) lines.push(frames.trimEnd());
 	if (tools.length > 0) {
-		lines.push("Available OpenScreen tools (optional primitives):");
+		lines.push("Available FlutterGo tools (optional primitives):");
 		lines.push(JSON.stringify(tools, null, 2));
 	}
 	lines.push("Conversation:");
+	let noted = false;
 	for (const message of messages) {
+		if (omitted > 0 && !noted && !isSystem(message)) {
+			lines.push(OMITTED_NOTE);
+			noted = true;
+		}
 		if (ToolMessage.isInstance(message) || message.getType() === "tool") {
-			lines.push(`TOOL RESULT: ${messageText(message)}`);
+			lines.push(`TOOL RESULT: ${clampedMessageText(message)}`);
 			continue;
 		}
 		const role =
 			message.getType() === "human" ? "USER" : message.getType() === "ai" ? "ASSISTANT" : "SYSTEM";
-		const text = messageText(message);
+		const text = clampedMessageText(message);
 		if (text) lines.push(`${role}: ${text}`);
 	}
 	return lines.join("\n");
@@ -305,13 +388,24 @@ function sameHuman(a: string, b: string): boolean {
 export function buildIncrementalPrompt(
 	messages: BaseMessage[],
 	tools: BoundTool[],
-	sent: { fingerprints: string[]; frameKey: string; toolsKey: string; humanKeys?: string[]; systemText?: string },
+	sent: {
+		fingerprints: string[];
+		frameKey: string;
+		toolsKey: string;
+		humanKeys?: string[];
+		systemText?: string;
+	},
 	options?: { framePaths?: string[] },
 ): IncrementalPrompt {
 	const fingerprints = messages.map(messageFingerprint);
 	const nowHumans = messages.filter((m) => m.getType() === "human").map(humanKey);
 	if (sent.fingerprints.length === 0) {
-		return { kind: "full", text: buildPrompt(messages, tools, options), fingerprints, humanKeys: nowHumans };
+		return {
+			kind: "full",
+			text: buildPrompt(messages, tools, options),
+			fingerprints,
+			humanKeys: nowHumans,
+		};
 	}
 	const sentHumans = sent.humanKeys ?? [];
 	if (sentHumans.length > nowHumans.length) return { kind: "diverged" };
@@ -324,7 +418,7 @@ export function buildIncrementalPrompt(
 	for (const m of changedSystem) lines.push(systemUpdate(sent.systemText, messageText(m)));
 	const toolsKey = JSON.stringify(tools.map((t) => t.name));
 	if (tools.length > 0 && toolsKey !== sent.toolsKey) {
-		lines.push("Available OpenScreen tools (updated):");
+		lines.push("Available FlutterGo tools (updated):");
 		lines.push(JSON.stringify(tools, null, 2));
 	}
 	const frameKey = (options?.framePaths ?? []).join("\n");
@@ -337,11 +431,14 @@ export function buildIncrementalPrompt(
 		if (m.getType() === "human") {
 			const isNew = humanIndex >= sentHumans.length;
 			humanIndex += 1;
-			const t = messageText(m);
+			const t = clampedMessageText(m);
 			if (isNew && t) lines.push(`USER: ${t}`);
-		} else if ((ToolMessage.isInstance(m) || m.getType() === "tool") && !sentSet.has(fingerprints[i]!)) {
+		} else if (
+			(ToolMessage.isInstance(m) || m.getType() === "tool") &&
+			!sentSet.has(fingerprints[i]!)
+		) {
 			sawToolResult = true;
-			lines.push(`TOOL RESULT: ${messageText(m)}`);
+			lines.push(`TOOL RESULT: ${clampedMessageText(m)}`);
 		}
 		// AI messages are Claude's own earlier replies — already in its context.
 	}
@@ -370,7 +467,9 @@ export function systemUpdate(before: string | undefined, after: string): string 
 		if (at < 0) return null;
 		try {
 			const json = JSON.parse(text.slice(at + 1)) as Record<string, unknown>;
-			return json && typeof json === "object" && !Array.isArray(json) ? { policy: text.slice(0, at), json } : null;
+			return json && typeof json === "object" && !Array.isArray(json)
+				? { policy: text.slice(0, at), json }
+				: null;
 		} catch {
 			return null;
 		}
@@ -378,7 +477,7 @@ export function systemUpdate(before: string | undefined, after: string): string 
 	const a = before ? split(before) : null;
 	const b = split(after);
 	if (!a || !b || a.policy !== b.policy) {
-		return `UPDATED OPENSCREEN PROJECT STATE (replaces the earlier SYSTEM message):\n${after}`;
+		return `UPDATED FLUTTERGO PROJECT STATE (replaces the earlier SYSTEM message):\n${after}`;
 	}
 	const changed: Record<string, unknown> = {};
 	for (const [k, v] of Object.entries(b.json)) {
@@ -394,7 +493,13 @@ export function systemUpdate(before: string | undefined, after: string): string 
 }
 
 /** How the long-lived sessions are doing — logged per turn, so a slow turn says why. */
-export const liveCliStats = { liveSteps: 0, oneShotSteps: 0, liveFailures: 0, freshRestarts: 0, lastLiveError: null as string | null };
+export const liveCliStats = {
+	liveSteps: 0,
+	oneShotSteps: 0,
+	liveFailures: 0,
+	freshRestarts: 0,
+	lastLiveError: null as string | null,
+};
 /** Consecutive live failures before this app run gives up on live sessions. */
 const LIVE_FAILURES_BEFORE_DISABLE = 3;
 let liveFailureStreak = 0;
@@ -417,9 +522,9 @@ export function resetLiveClaudeSessionsForTests(): void {
 	liveFailureStreak = 0;
 }
 
-/** Live (long-lived) Claude sessions are on unless OPENSCREEN_CLI_PERSISTENT=0 or one failed. */
+/** Live (long-lived) Claude sessions are on unless FLUTTERGO_CLI_PERSISTENT=0 or one failed. */
 export function liveClaudeSessionsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	return env.OPENSCREEN_CLI_PERSISTENT !== "0" && liveDisabledReason === null;
+	return env.FLUTTERGO_CLI_PERSISTENT !== "0" && liveDisabledReason === null;
 }
 
 function parseModelJson(raw: string): {
@@ -693,6 +798,9 @@ export class LocalCliChatModel extends BaseChatModel {
 	readonly onCliSpawnComplete?: () => void;
 	readonly onPlan?: (items: PlanItem[]) => void;
 	readonly isCliSessionStarted?: () => boolean;
+	/** Set once the CLI reported its context full: this chat's session is abandoned and every later step is one-shot. */
+	private sessionOverflowed = false;
+	private overflowRetried = false;
 	readonly watchGranted: boolean;
 	/** Replies used in this chat turn — shared across bindTools copies. */
 	readonly turnBudget: TurnBudget;
@@ -720,7 +828,7 @@ export class LocalCliChatModel extends BaseChatModel {
 	}
 
 	_llmType(): string {
-		return "openscreen-local-cli";
+		return "fluttergo-local-cli";
 	}
 
 	bindTools(tools: BindToolsInput[]): LocalCliChatModel {
@@ -750,9 +858,11 @@ export class LocalCliChatModel extends BaseChatModel {
 		onEvent?: (event: LocalCliProgressEvent) => void,
 	): Promise<ChatResult> {
 		this.turnBudget.steps += 1;
+		this.overflowRetried = false;
 		const budget = turnBudgetNote(this.turnBudget, Date.now(), this.budgetLimits);
 		const budgetLine = budget ? `\n${budget.note}` : "";
-		const prompt = buildPrompt(messages, this.boundTools, { framePaths: this.framePaths }) + budgetLine;
+		const prompt =
+			buildPrompt(messages, this.boundTools, { framePaths: this.framePaths }) + budgetLine;
 		const streamJson = this.agentId === "claude";
 		const workDir =
 			this.workspaceRoot ??
@@ -799,13 +909,20 @@ export class LocalCliChatModel extends BaseChatModel {
 		};
 		const cwd = workDir && workDir.length > 0 ? workDir : os.tmpdir();
 		let raw: string | null = null;
-		if (this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled()) {
+		if (this.agentId === "claude" && this.cliSessionId && liveClaudeSessionsEnabled() && !this.sessionOverflowed) {
 			// One failure (a rate limit, a bad reply, a crashed process) must not cost
 			// every later step its live session: retry once on a fresh process, and
 			// only give up on live mode for this app run after repeated failures.
 			for (const fresh of [false, true]) {
 				try {
-					raw = await this.runLiveTurn(messages, { addDirs, resumeCliSession, cwd, forward, budgetLine, fresh });
+					raw = await this.runLiveTurn(messages, {
+						addDirs,
+						resumeCliSession,
+						cwd,
+						forward,
+						budgetLine,
+						fresh,
+					});
 					liveFailureStreak = 0;
 					liveCliStats.liveSteps += 1;
 					break;
@@ -819,7 +936,10 @@ export class LocalCliChatModel extends BaseChatModel {
 					if (!fresh) continue;
 					liveFailureStreak += 1;
 					if (liveFailureStreak >= LIVE_FAILURES_BEFORE_DISABLE) disableLiveClaudeSessions(reason);
-					forward({ kind: "progress", delta: "Live session failed — continuing in one-shot mode…\n" });
+					forward({
+						kind: "progress",
+						delta: "Live session failed — continuing in one-shot mode…\n",
+					});
 					raw = null;
 				}
 			}
@@ -827,27 +947,56 @@ export class LocalCliChatModel extends BaseChatModel {
 		if (raw === null) liveCliStats.oneShotSteps += 1;
 		if (raw === null)
 			raw = await runCliStreaming(
-			this.binPath,
-			printArgvForAgent(this.agentId, prompt, {
-				addDirs,
-				outputFormat: streamJson ? "stream-json" : undefined,
-				model: this.cliModel,
-				// After a live-session failure the Claude session on disk may be in an
-				// unknown state ("session id already in use"); run without session
-				// flags — the prompt carries the whole conversation anyway.
-				cliSessionId: liveClaudeSessionsDisabledReason() ? undefined : this.cliSessionId,
-				resumeCliSession,
-			}),
-			{
-				stdinText: localCliPromptOnStdin(this.agentId) ? prompt : undefined,
-				streamJson,
-				agentId: this.agentId,
-				// Prefer project workspace; Claude also gets --add-dir. Cursor/Codex need cwd.
-				cwd: workDir && workDir.length > 0 ? workDir : os.tmpdir(),
-				onEvent: forward,
-				abortSignal: this.abortSignal,
-			},
-		);
+				this.binPath,
+				printArgvForAgent(this.agentId, prompt, {
+					addDirs,
+					outputFormat: streamJson ? "stream-json" : undefined,
+					model: this.cliModel,
+					// After a live-session failure the Claude session on disk may be in an
+					// unknown state ("session id already in use"); run without session
+					// flags — the prompt carries the whole conversation anyway.
+					cliSessionId: liveClaudeSessionsDisabledReason() || this.sessionOverflowed ? undefined : this.cliSessionId,
+					resumeCliSession: this.sessionOverflowed ? false : resumeCliSession,
+				}),
+				{
+					stdinText: localCliPromptOnStdin(this.agentId) ? prompt : undefined,
+					streamJson,
+					agentId: this.agentId,
+					// Prefer project workspace; Claude also gets --add-dir. Cursor/Codex need cwd.
+					cwd: workDir && workDir.length > 0 ? workDir : os.tmpdir(),
+					onEvent: forward,
+					abortSignal: this.abortSignal,
+				},
+			);
+		if (PROMPT_TOO_LONG.test(raw) && !this.overflowRetried) {
+			// The CLI's context overflowed (its session carries every earlier turn).
+			// Drop the session, send only this turn on a fresh one-shot process, and
+			// keep later turns off that session too.
+			this.overflowRetried = true;
+			this.sessionOverflowed = true;
+			liveCliStats.freshRestarts += 1;
+			if (this.cliSessionId) closeLiveSession(this.cliSessionId);
+			forward({ kind: "progress", delta: "The model's context overflowed — retrying with a compact conversation…\n" });
+			const compactPrompt = buildPrompt(compactMessages(messages), this.boundTools, { framePaths: this.framePaths }) + budgetLine;
+			raw = await runCliStreaming(
+				this.binPath,
+				printArgvForAgent(this.agentId, compactPrompt, {
+					addDirs,
+					outputFormat: streamJson ? "stream-json" : undefined,
+					model: this.cliModel,
+					cliSessionId: undefined,
+					resumeCliSession: false,
+				}),
+				{
+					stdinText: localCliPromptOnStdin(this.agentId) ? compactPrompt : undefined,
+					streamJson,
+					agentId: this.agentId,
+					cwd: workDir && workDir.length > 0 ? workDir : os.tmpdir(),
+					onEvent: forward,
+					abortSignal: this.abortSignal,
+				},
+			);
+		}
 		this.onCliSpawnComplete?.();
 		const parsed = parseModelJson(raw);
 		const plan = normalizePlan(parsed.plan);
@@ -908,7 +1057,12 @@ export class LocalCliChatModel extends BaseChatModel {
 				cliSessionId: sessionId,
 				resumeCliSession: resume,
 			});
-		let live = acquireLiveSession(key, this.binPath, argvFor(key, Boolean(ctx.resumeCliSession)), ctx.cwd);
+		let live = acquireLiveSession(
+			key,
+			this.binPath,
+			argvFor(key, Boolean(ctx.resumeCliSession)),
+			ctx.cwd,
+		);
 		let prompt = ctx.fresh
 			? ({ kind: "diverged" } as const)
 			: buildIncrementalPrompt(
@@ -1041,7 +1195,6 @@ export class LocalCliChatModel extends BaseChatModel {
 	}
 }
 
-export { buildPrompt, framePathSection, parseModelJson };
 export {
 	consumeClaudeStreamJsonLine,
 	killProcessTree,
@@ -1050,3 +1203,4 @@ export {
 	type LocalCliProgressEvent,
 	type LocalCliStreamEvent,
 } from "./claudeStream";
+export { buildPrompt, framePathSection, parseModelJson };
